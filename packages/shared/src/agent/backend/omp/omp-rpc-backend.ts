@@ -13,6 +13,11 @@ import { OmpRpcEventAdapter } from './omp-rpc-adapter.ts';
 
 export const DEFAULT_OMP_MODEL = 'omp/default';
 
+export interface OmpModelSelection {
+  provider: string;
+  modelId: string;
+}
+
 interface PendingRequest {
   resolve(value: unknown): void;
   reject(error: Error): void;
@@ -63,6 +68,21 @@ function formatPrompt(message: string, attachments?: FileAttachment[]): string {
   return [attachmentsBlock, message].filter(Boolean).join('\n\n');
 }
 
+export function resolveOmpModelSelection(model: string | undefined): OmpModelSelection | null {
+  const trimmed = model?.trim();
+  if (!trimmed || trimmed === DEFAULT_OMP_MODEL) return null;
+
+  const separator = trimmed.includes('/') ? '/' : trimmed.includes(':') ? ':' : null;
+  if (!separator) return null;
+
+  const [provider, ...modelParts] = trimmed.split(separator);
+  const modelId = modelParts.join(separator);
+  if (!provider || !modelId) return null;
+  if (provider === 'omp' && modelId === 'default') return null;
+
+  return { provider, modelId };
+}
+
 export class OmpRpcBackend extends BaseAgent {
   protected backendName = 'OMP';
 
@@ -79,6 +99,7 @@ export class OmpRpcBackend extends BaseAgent {
   private _isProcessing = false;
   private abortReason: AbortReason | undefined;
   private recentStderr = '';
+  private selectedModelKey: string | null = null;
 
   constructor(config: BackendConfig) {
     super(config, DEFAULT_OMP_MODEL);
@@ -106,6 +127,7 @@ export class OmpRpcBackend extends BaseAgent {
 
     try {
       await this.ensureSubprocess();
+      await this.ensureModelSelected();
 
       this.send({
         type: 'prompt',
@@ -243,6 +265,22 @@ export class OmpRpcBackend extends BaseAgent {
 
     this.spawnSubprocess();
     return this.readyPromise!;
+  }
+
+  private async ensureModelSelected(): Promise<void> {
+    const selection = resolveOmpModelSelection(this._model);
+    if (!selection) return;
+
+    const key = `${selection.provider}/${selection.modelId}`;
+    if (this.selectedModelKey === key) return;
+
+    await this.send({
+      type: 'set_model',
+      provider: selection.provider,
+      modelId: selection.modelId,
+    });
+    this.selectedModelKey = key;
+    this.debug(`Selected OMP model: ${key}`);
   }
 
   private spawnSubprocess(): void {
@@ -388,6 +426,7 @@ export class OmpRpcBackend extends BaseAgent {
       pending.reject(error);
     }
     this.pending.clear();
+    this.selectedModelKey = null;
   }
 
   private killSubprocess(): void {

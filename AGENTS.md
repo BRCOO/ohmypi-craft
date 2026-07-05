@@ -48,6 +48,7 @@ Use CodeGraph before broad grep/find/manual source reading when locating or unde
 - Added a minimal `OmpRpcBackend` that extends Craft `BaseAgent`, starts `omp --mode rpc`, sends JSONL commands, and drains OMP events through Craft's `EventQueue`.
 - Registered `omp` as a separate backend/provider slug in shared model/provider/factory code.
 - Registered placeholder model `omp/default`; real OMP model discovery remains a follow-up via RPC `get_available_models`.
+- Explicit OMP model strings such as `deepseek/deepseek-v4-flash` are translated into an RPC `set_model` call before the next prompt; a real DeepSeek smoke test completed successfully.
 - Current unsupported surface: rich `extension_ui_request` handling is surfaced as an info event rather than interactive UI.
 
 ## Verification expectations
