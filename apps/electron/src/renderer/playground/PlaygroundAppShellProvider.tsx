@@ -37,6 +37,8 @@ const playgroundValue: AppShellContextType = {
   refreshLlmConnections: async () => {},
   pendingPermissions: new Map(),
   pendingCredentials: new Map(),
+  pendingExtensionUiRequests: new Map(),
+  extensionUiHostStates: new Map(),
   getDraft: () => '',
   getDraftAttachmentRefs: () => [],
   hydrateDraftAttachments: async () => [],

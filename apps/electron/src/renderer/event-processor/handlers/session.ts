@@ -21,6 +21,8 @@ import type {
   NameChangedEvent,
   PermissionRequestEvent,
   CredentialRequestEvent,
+  ExtensionUiRequestEvent,
+  ExtensionUiCancelEvent,
   PlanSubmittedEvent,
   StatusEvent,
   InfoEvent,
@@ -783,6 +785,39 @@ export function handleCredentialRequest(
     effects: [{
       type: 'credential_request',
       request: event.request,
+    }]
+  }
+}
+
+/**
+ * Handle extension_ui_request - return effect for parent to handle
+ */
+export function handleExtensionUiRequest(
+  state: SessionState,
+  event: ExtensionUiRequestEvent
+): ProcessResult {
+  return {
+    state,
+    effects: [{
+      type: 'extension_ui_request',
+      request: event.request,
+    }]
+  }
+}
+
+/**
+ * Handle extension_ui_cancel - return effect for parent to handle
+ */
+export function handleExtensionUiCancel(
+  state: SessionState,
+  event: ExtensionUiCancelEvent
+): ProcessResult {
+  return {
+    state,
+    effects: [{
+      type: 'extension_ui_cancel',
+      requestId: event.requestId,
+      targetId: event.targetId,
     }]
   }
 }

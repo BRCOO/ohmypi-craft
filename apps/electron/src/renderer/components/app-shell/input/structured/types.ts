@@ -1,4 +1,10 @@
-import type { PermissionRequest, CredentialRequest, CredentialResponse } from '../../../../../shared/types'
+import type {
+  PermissionRequest,
+  CredentialRequest,
+  CredentialResponse,
+  ExtensionUiRequest,
+  ExtensionUiResponse,
+} from '../../../../../shared/types'
 import type { AdminApprovalRequestData } from './AdminApprovalRequest'
 
 /**
@@ -9,7 +15,7 @@ export type InputMode = 'freeform' | 'structured'
 /**
  * Types of structured input UIs
  */
-export type StructuredInputType = 'permission' | 'credential' | 'admin_approval'
+export type StructuredInputType = 'permission' | 'credential' | 'admin_approval' | 'extension_ui'
 
 /**
  * Union type for structured input data
@@ -18,13 +24,14 @@ export type StructuredInputData =
   | { type: 'permission'; data: PermissionRequest }
   | { type: 'credential'; data: CredentialRequest }
   | { type: 'admin_approval'; data: AdminApprovalRequestData }
+  | { type: 'extension_ui'; data: ExtensionUiRequest }
 
 /**
  * State for structured input
  */
 export interface StructuredInputState {
   type: StructuredInputType
-  data: PermissionRequest | CredentialRequest | AdminApprovalRequestData
+  data: PermissionRequest | CredentialRequest | AdminApprovalRequestData | ExtensionUiRequest
 }
 
 /**
@@ -46,9 +53,21 @@ export interface AdminApprovalResponse {
 }
 
 /**
+ * Response from an OMP extension UI request
+ */
+export interface ExtensionUiStructuredResponse {
+  type: 'extension_ui'
+  response: ExtensionUiResponse
+}
+
+/**
  * Union type for all structured responses
  */
-export type StructuredResponse = PermissionResponse | CredentialResponse | AdminApprovalResponse
+export type StructuredResponse =
+  | PermissionResponse
+  | CredentialResponse
+  | AdminApprovalResponse
+  | ExtensionUiStructuredResponse
 
 // Re-export CredentialResponse for convenience
 export type { CredentialResponse }

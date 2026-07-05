@@ -42,6 +42,10 @@ function asBoolean(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined;
 }
 
+function asNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 function asStringArray(value: unknown): string[] | undefined {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string')
@@ -146,6 +150,32 @@ function permissionTypeFor(raw: Record<string, unknown>): PermissionRequestType 
   if (typeof raw.command === 'string') return 'bash';
   if (typeof raw.path === 'string' || typeof raw.filePath === 'string') return 'file_write';
   return undefined;
+}
+
+function buildExtensionUiRequest(raw: Record<string, unknown>) {
+  return {
+    requestId: asString(raw.id) ?? asString(raw.requestId) ?? asString(raw.request_id) ?? 'omp-extension-ui',
+    method: asString(raw.method) ?? 'unknown',
+    title: asString(raw.title),
+    message: asString(raw.message),
+    options: asStringArray(raw.options),
+    placeholder: asString(raw.placeholder),
+    prefill: asString(raw.prefill),
+    promptStyle: asBoolean(raw.promptStyle) ?? asBoolean(raw.prompt_style),
+    timeoutMs: asNumber(raw.timeout) ?? asNumber(raw.timeoutMs) ?? asNumber(raw.timeout_ms),
+    targetId: asString(raw.targetId) ?? asString(raw.target_id),
+    notifyType: asString(raw.notifyType) ?? asString(raw.notify_type),
+    statusKey: asString(raw.statusKey) ?? asString(raw.status_key),
+    statusText: asString(raw.statusText) ?? asString(raw.status_text),
+    widgetKey: asString(raw.widgetKey) ?? asString(raw.widget_key),
+    widgetLines: asStringArray(raw.widgetLines) ?? asStringArray(raw.widget_lines),
+    widgetPlacement: asString(raw.widgetPlacement) ?? asString(raw.widget_placement),
+    text: asString(raw.text),
+    url: asString(raw.url),
+    launchUrl: asString(raw.launchUrl) ?? asString(raw.launch_url),
+    instructions: asString(raw.instructions),
+    raw: { ...raw },
+  };
 }
 
 /**
@@ -352,12 +382,21 @@ export class OmpRpcEventAdapter {
         };
 
       case 'extension_ui_request': {
-        const method = asString(raw.method) ?? 'unknown';
-        const title = asString(raw.title) ?? asString(raw.message) ?? asString(raw.widgetKey) ?? '';
+        const request = buildExtensionUiRequest(raw);
+        if (request.method === 'cancel') {
+          return {
+            events: [{
+              type: 'extension_ui_cancel',
+              requestId: request.requestId,
+              targetId: request.targetId ?? request.requestId,
+            }],
+          };
+        }
+
         return {
           events: [{
-            type: 'info',
-            message: `OMP extension UI request is not supported yet: ${method}${title ? ` (${title})` : ''}`,
+            type: 'extension_ui_request',
+            request,
           }],
         };
       }

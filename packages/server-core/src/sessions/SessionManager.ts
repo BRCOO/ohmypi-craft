@@ -1117,6 +1117,11 @@ export class SessionManager implements ISessionManager {
     type?: 'bash' | 'file_write' | 'mcp_mutation' | 'api_mutation' | 'admin_approval'
     commandHash?: string
   }> = new Map()
+  // Backend extension UI request metadata tracking (keyed by requestId)
+  private pendingExtensionUiRequests: Map<string, {
+    sessionId: string
+    method: string
+  }> = new Map()
   // Privileged approval binding + audit logger
   private privilegedExecutionBroker = new PrivilegedExecutionBroker(sessionLog)
   // Session-local admin remember windows (exact command hash binding)
@@ -1373,6 +1378,18 @@ export class SessionManager implements ISessionManager {
         this.pendingPermissionRequests.delete(requestId)
       }
     }
+  }
+
+  private clearPendingExtensionUiRequestsForSession(sessionId: string): void {
+    for (const [requestId, metadata] of this.pendingExtensionUiRequests.entries()) {
+      if (metadata.sessionId === sessionId) {
+        this.pendingExtensionUiRequests.delete(requestId)
+      }
+    }
+  }
+
+  private extensionUiRequestKey(sessionId: string, requestId: string): string {
+    return `${sessionId}:${requestId}`
   }
 
   /**
@@ -5365,6 +5382,7 @@ export class SessionManager implements ISessionManager {
     this.pendingDeltas.delete(sessionId)
     this.clearAdminRememberApprovalsForSession(sessionId)
     this.clearPendingPermissionRequestsForSession(sessionId)
+    this.clearPendingExtensionUiRequestsForSession(sessionId)
 
     // Cancel any pending persistence write (session is being deleted, no need to save)
     sessionPersistenceQueue.cancel(sessionId)
@@ -6542,6 +6560,28 @@ export class SessionManager implements ISessionManager {
   }
 
   /**
+   * Respond to a pending backend extension UI request.
+   * Returns true if the response was delivered, false if agent/session is gone.
+   */
+  respondToExtensionUiRequest(
+    sessionId: string,
+    requestId: string,
+    response: import('@craft-agent/shared/protocol').ExtensionUiResponse,
+  ): boolean {
+    const managed = this.sessions.get(sessionId)
+    const responder = managed?.agent?.respondToExtensionUiRequest
+    if (managed?.agent && typeof responder === 'function') {
+      this.pendingExtensionUiRequests.delete(this.extensionUiRequestKey(sessionId, requestId))
+      sessionLog.info(`Delivering extension UI response for ${requestId}`)
+      responder.call(managed.agent, requestId, response)
+      return true
+    }
+
+    sessionLog.warn(`Cannot respond to extension UI - no capable agent for session ${sessionId}`)
+    return false
+  }
+
+  /**
    * Set the permission mode for a session ('safe', 'ask', 'allow-all')
    */
   setSessionPermissionMode(sessionId: string, mode: PermissionMode): void {
@@ -7197,6 +7237,31 @@ export class SessionManager implements ISessionManager {
         break
       }
 
+      case 'extension_ui_request': {
+        this.pendingExtensionUiRequests.set(this.extensionUiRequestKey(sessionId, event.request.requestId), {
+          sessionId,
+          method: event.request.method,
+        })
+
+        this.sendEvent({
+          type: 'extension_ui_request',
+          sessionId,
+          request: event.request,
+        }, workspaceId)
+        break
+      }
+
+      case 'extension_ui_cancel': {
+        this.pendingExtensionUiRequests.delete(this.extensionUiRequestKey(sessionId, event.targetId))
+        this.sendEvent({
+          type: 'extension_ui_cancel',
+          sessionId,
+          requestId: event.requestId,
+          targetId: event.targetId,
+        }, workspaceId)
+        break
+      }
+
       case 'error': {
         // Skip errors after handoff (plan submission, auth request) — the SDK may emit
         // an error from the interrupted query after we've already stopped processing.
@@ -7412,6 +7477,7 @@ export class SessionManager implements ISessionManager {
       case 'complete':
         // Complete event from CraftAgent - accumulate usage from this turn
         // Actual 'complete' sent to renderer comes from the finally block in sendMessage
+        this.clearPendingExtensionUiRequestsForSession(sessionId)
         if (event.usage) {
           // Initialize tokenUsage if not set
           if (!managed.tokenUsage) {
@@ -8079,6 +8145,7 @@ export class SessionManager implements ISessionManager {
     // Clear pending credential resolvers (they won't be resolved, but prevents memory leak)
     this.pendingCredentialResolvers.clear()
     this.pendingPermissionRequests.clear()
+    this.pendingExtensionUiRequests.clear()
     this.adminRememberApprovals.clear()
 
     // Clean up session-scoped tool callbacks for all sessions

@@ -6,6 +6,7 @@ export { StructuredInput } from './StructuredInput'
 
 // Structured input components
 export { PermissionRequest } from './structured/PermissionRequest'
+export { ExtensionUiRequest } from './structured/ExtensionUiRequest'
 
 // Hooks
 export { useAutoGrow } from './useAutoGrow'
@@ -18,5 +19,6 @@ export type {
   StructuredInputData,
   StructuredResponse,
   PermissionResponse,
-  AdminApprovalResponse,
+    AdminApprovalResponse,
+    ExtensionUiStructuredResponse,
 } from './structured/types'

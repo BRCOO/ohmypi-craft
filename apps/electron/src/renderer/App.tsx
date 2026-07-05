@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useTheme } from '@/hooks/useTheme'
 import type { ThemeOverrides } from '@config/theme'
 import { useSetAtom, useStore, useAtomValue, useAtom } from 'jotai'
-import type { Session, Workspace, SessionEvent, Message, FileAttachment, StoredAttachment, PermissionRequest, CredentialRequest, CredentialResponse, SetupNeeds, SessionStatus, NewChatActionParams, ContentBadge, LlmConnectionWithStatus, PermissionModeState } from '../shared/types'
+import type { Session, Workspace, SessionEvent, Message, FileAttachment, StoredAttachment, PermissionRequest, CredentialRequest, CredentialResponse, ExtensionUiRequest, ExtensionUiResponse, SetupNeeds, SessionStatus, NewChatActionParams, ContentBadge, LlmConnectionWithStatus, PermissionModeState } from '../shared/types'
 import type { SessionDraft, DraftAttachmentRef } from '@craft-agent/shared/config'
 import type { SessionOptions, SessionOptionUpdates } from './hooks/useSessionOptions'
 import { defaultSessionOptions, mergeSessionOptions } from './hooks/useSessionOptions'
@@ -11,7 +11,7 @@ import { generateMessageId } from '../shared/types'
 import { useEventProcessor } from './event-processor'
 import type { AgentEvent, Effect } from './event-processor'
 import { AppShell } from '@/components/app-shell/AppShell'
-import type { AppShellContextType } from '@/context/AppShellContext'
+import type { AppShellContextType, ExtensionUiHostState } from '@/context/AppShellContext'
 import { OnboardingWizard, ReauthScreen } from '@/components/onboarding'
 import { WorkspacePicker } from '@/components/workspace'
 import { ResetConfirmationDialog } from '@/components/ResetConfirmationDialog'
@@ -75,6 +75,13 @@ import { ActionRegistryProvider } from '@/actions'
 import { toast } from 'sonner'
 
 type AppState = 'loading' | 'onboarding' | 'reauth' | 'workspace-picker' | 'ready'
+
+const QUEUED_EXTENSION_UI_METHODS = new Set(['select', 'confirm', 'input', 'editor', 'open_url'])
+
+function shouldQueueExtensionUiRequest(request: ExtensionUiRequest): boolean {
+  return QUEUED_EXTENSION_UI_METHODS.has(request.method)
+    || !['notify', 'setStatus', 'setTitle', 'set_editor_text'].includes(request.method)
+}
 
 /** Type for the Jotai store returned by useStore() */
 type JotaiStore = ReturnType<typeof getDefaultStore>
@@ -305,6 +312,10 @@ export default function App() {
   const [pendingPermissions, setPendingPermissions] = useState<Map<string, PermissionRequest[]>>(new Map())
   // Credential requests per session (queue to handle multiple concurrent requests)
   const [pendingCredentials, setPendingCredentials] = useState<Map<string, CredentialRequest[]>>(new Map())
+  // Backend extension UI requests per session (OMP RPC bridge)
+  const [pendingExtensionUiRequests, setPendingExtensionUiRequests] = useState<Map<string, ExtensionUiRequest[]>>(new Map())
+  // Non-blocking OMP extension status/widget state, scoped per session
+  const [extensionUiHostStates, setExtensionUiHostStates] = useState<Map<string, ExtensionUiHostState>>(new Map())
   // Draft composer state per session (text + attachment refs), preserved across mode
   // switches, conversation changes, and app restarts. Using a ref avoids re-renders
   // during typing; attachments are stored as lightweight refs (path + name) and
@@ -833,6 +844,102 @@ export default function App() {
             })
             break
           }
+          case 'extension_ui_request': {
+            const request = effect.request
+            if (request.method === 'notify') {
+              const message = request.message || request.title || 'OMP extension notification'
+              if (request.notifyType === 'error') {
+                toast.error(message)
+              } else if (request.notifyType === 'warning') {
+                toast.warning(message)
+              } else {
+                toast.info(message)
+              }
+              break
+            }
+
+            if (request.method === 'set_editor_text') {
+              const text = coerceInputText(request.text)
+              handleInputChange(sessionId, text)
+              window.dispatchEvent(new CustomEvent('craft:restore-input', {
+                detail: { sessionId, text },
+              }))
+              break
+            }
+
+            if (request.method === 'setStatus') {
+              const key = request.statusKey || 'status'
+              setExtensionUiHostStates(prevStates => {
+                const next = new Map(prevStates)
+                const current = next.get(sessionId) ?? { statuses: {}, widgets: {} }
+                const statuses = { ...current.statuses }
+                if (request.statusText === undefined) {
+                  delete statuses[key]
+                } else {
+                  statuses[key] = request.statusText
+                }
+                if (Object.keys(statuses).length === 0 && Object.keys(current.widgets).length === 0) {
+                  next.delete(sessionId)
+                } else {
+                  next.set(sessionId, { ...current, statuses })
+                }
+                return next
+              })
+              break
+            }
+
+            if (request.method === 'setWidget') {
+              const key = request.widgetKey || 'widget'
+              setExtensionUiHostStates(prevStates => {
+                const next = new Map(prevStates)
+                const current = next.get(sessionId) ?? { statuses: {}, widgets: {} }
+                const widgets = { ...current.widgets }
+                if (request.widgetLines === undefined) {
+                  delete widgets[key]
+                } else {
+                  widgets[key] = {
+                    lines: request.widgetLines,
+                    placement: request.widgetPlacement,
+                  }
+                }
+                if (Object.keys(current.statuses).length === 0 && Object.keys(widgets).length === 0) {
+                  next.delete(sessionId)
+                } else {
+                  next.set(sessionId, { ...current, widgets })
+                }
+                return next
+              })
+              break
+            }
+
+            if (request.method === 'setTitle') {
+              break
+            }
+
+            if (shouldQueueExtensionUiRequest(request)) {
+              setPendingExtensionUiRequests(prevRequests => {
+                const next = new Map(prevRequests)
+                const existingQueue = next.get(sessionId) || []
+                next.set(sessionId, [...existingQueue, request])
+                return next
+              })
+            }
+            break
+          }
+          case 'extension_ui_cancel': {
+            setPendingExtensionUiRequests(prevRequests => {
+              const next = new Map(prevRequests)
+              const queue = next.get(sessionId) || []
+              const remainingQueue = queue.filter(request => request.requestId !== effect.targetId)
+              if (remainingQueue.length === 0) {
+                next.delete(sessionId)
+              } else {
+                next.set(sessionId, remainingQueue)
+              }
+              return next
+            })
+            break
+          }
           case 'restore_input': {
             // Queued messages were removed from chat on abort — restore their text to the input field.
             // Append to existing draft (user may have started typing) rather than overwrite.
@@ -874,6 +981,20 @@ export default function App() {
             return next
           }
           return prevCreds
+        })
+        setPendingExtensionUiRequests(prevRequests => {
+          if (prevRequests.has(sessionId)) {
+            const next = new Map(prevRequests)
+            next.delete(sessionId)
+            return next
+          }
+          return prevRequests
+        })
+        setExtensionUiHostStates(prevStates => {
+          if (!prevStates.has(sessionId)) return prevStates
+          const next = new Map(prevStates)
+          next.delete(sessionId)
+          return next
         })
       }
     }
@@ -1594,6 +1715,37 @@ export default function App() {
     }
   }, [])
 
+  const handleRespondToExtensionUiRequest = useCallback(async (
+    sessionId: string,
+    requestId: string,
+    response: ExtensionUiResponse,
+  ) => {
+    const request = pendingExtensionUiRequests.get(sessionId)?.find(item => item.requestId === requestId)
+    const requiresBackendResponse = request
+      ? !['open_url', 'setWidget'].includes(request.method)
+      : true
+
+    const success = requiresBackendResponse
+      ? await window.electronAPI.respondToExtensionUiRequest(sessionId, requestId, response)
+      : true
+
+    if (!success && requiresBackendResponse) {
+      toast.error('Could not deliver OMP extension UI response; the session may have stopped.')
+    }
+
+    setPendingExtensionUiRequests(prev => {
+      const next = new Map(prev)
+      const queue = next.get(sessionId) || []
+      const remainingQueue = queue.filter(item => item.requestId !== requestId)
+      if (remainingQueue.length === 0) {
+        next.delete(sessionId)
+      } else {
+        next.set(sessionId, remainingQueue)
+      }
+      return next
+    })
+  }, [pendingExtensionUiRequests])
+
   // Centralized link interceptor: classifies file types and decides whether to
   // show an in-app preview overlay or open externally. Replaces the old
   // handleOpenFile/handleOpenUrl that always opened in external apps.
@@ -1723,6 +1875,8 @@ export default function App() {
       // 4. Clear pending permissions/credentials (not relevant to new workspace)
       setPendingPermissions(new Map())
       setPendingCredentials(new Map())
+      setPendingExtensionUiRequests(new Map())
+      setExtensionUiHostStates(new Map())
 
       // 5. Clear session options from previous workspace
       // (session IDs are unique UUIDs, but clearing prevents unbounded memory growth
@@ -1783,6 +1937,8 @@ export default function App() {
     refreshLlmConnections,
     pendingPermissions,
     pendingCredentials,
+    pendingExtensionUiRequests,
+    extensionUiHostStates,
     getDraft,
     getDraftAttachmentRefs,
     hydrateDraftAttachments,
@@ -1802,6 +1958,7 @@ export default function App() {
     onDeleteSession: handleDeleteSession,
     onRespondToPermission: handleRespondToPermission,
     onRespondToCredential: handleRespondToCredential,
+    onRespondToExtensionUiRequest: handleRespondToExtensionUiRequest,
     // File/URL handlers
     onOpenFile: handleOpenFile,
     onOpenUrl: handleOpenUrl,
@@ -1829,6 +1986,8 @@ export default function App() {
     refreshLlmConnections,
     pendingPermissions,
     pendingCredentials,
+    pendingExtensionUiRequests,
+    extensionUiHostStates,
     getDraft,
     getDraftAttachmentRefs,
     hydrateDraftAttachments,
@@ -1847,6 +2006,7 @@ export default function App() {
     handleDeleteSession,
     handleRespondToPermission,
     handleRespondToCredential,
+    handleRespondToExtensionUiRequest,
     handleOpenFile,
     handleOpenUrl,
     handleSelectWorkspace,

@@ -29,6 +29,8 @@ import {
   handleNameChanged,
   handlePermissionRequest,
   handleCredentialRequest,
+  handleExtensionUiRequest,
+  handleExtensionUiCancel,
   handlePlanSubmitted,
   handleStatus,
   handleInfo,
@@ -179,6 +181,12 @@ export function processEvent(
 
     case 'credential_request':
       return handleCredentialRequest(state, event)
+
+    case 'extension_ui_request':
+      return handleExtensionUiRequest(state, event)
+
+    case 'extension_ui_cancel':
+      return handleExtensionUiCancel(state, event)
 
     case 'plan_submitted':
       return handlePlanSubmitted(state, event)

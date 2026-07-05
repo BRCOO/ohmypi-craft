@@ -524,6 +524,55 @@ export interface PermissionRequest {
 }
 
 /**
+ * OMP/extension host UI request method.
+ *
+ * These are runtime controls emitted by a backend when it needs host UI help.
+ * They are intentionally not persisted as normal chat messages.
+ */
+export type ExtensionUiMethod =
+  | 'select'
+  | 'confirm'
+  | 'input'
+  | 'editor'
+  | 'cancel'
+  | 'notify'
+  | 'setStatus'
+  | 'setWidget'
+  | 'setTitle'
+  | 'set_editor_text'
+  | 'open_url'
+  | string;
+
+export interface ExtensionUiRequest {
+  requestId: string;
+  method: ExtensionUiMethod;
+  title?: string;
+  message?: string;
+  options?: string[];
+  placeholder?: string;
+  prefill?: string;
+  promptStyle?: boolean;
+  timeoutMs?: number;
+  targetId?: string;
+  notifyType?: 'info' | 'warning' | 'error' | string;
+  statusKey?: string;
+  statusText?: string;
+  widgetKey?: string;
+  widgetLines?: string[];
+  widgetPlacement?: 'aboveEditor' | 'belowEditor' | string;
+  text?: string;
+  url?: string;
+  launchUrl?: string;
+  instructions?: string;
+  raw: Record<string, unknown>;
+}
+
+export type ExtensionUiResponse =
+  | { value: string }
+  | { confirmed: boolean }
+  | { cancelled: true; timedOut?: boolean };
+
+/**
  * Usage data emitted by CraftAgent in 'complete' events
  * Note: This is a subset of TokenUsage - totalTokens/contextTokens are computed by consumers
  */
@@ -564,6 +613,8 @@ export type AgentEvent =
       commandHash?: string;
       approvalTtlSeconds?: number;
     }
+  | { type: 'extension_ui_request'; request: ExtensionUiRequest }
+  | { type: 'extension_ui_cancel'; requestId: string; targetId: string }
   | { type: 'error'; message: string }
   | { type: 'typed_error'; error: TypedError }
   | { type: 'complete'; usage?: AgentEventUsage }

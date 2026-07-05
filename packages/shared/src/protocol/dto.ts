@@ -13,6 +13,8 @@ import type {
   ToolDisplayMeta,
   AnnotationV1,
   PermissionRequest as BasePermissionRequest,
+  ExtensionUiRequest,
+  ExtensionUiResponse,
 } from '@craft-agent/core/types'
 import type { PermissionMode } from '../agent/mode-types'
 import type { ThinkingLevel } from '../agent/thinking-levels'
@@ -181,6 +183,8 @@ export type SessionEvent =
   | { type: 'working_directory_changed'; sessionId: string; workingDirectory: string }
   | { type: 'permission_request'; sessionId: string; request: PermissionRequest }
   | { type: 'credential_request'; sessionId: string; request: CredentialRequest }
+  | { type: 'extension_ui_request'; sessionId: string; request: ExtensionUiRequest }
+  | { type: 'extension_ui_cancel'; sessionId: string; requestId: string; targetId: string }
   | { type: 'permission_mode_changed'; sessionId: string; permissionMode: PermissionMode; previousPermissionMode?: PermissionMode; transitionDisplay?: string; modeVersion?: number; changedAt?: string; changedBy?: PermissionModeState['changedBy'] }
   | { type: 'plan_submitted'; sessionId: string; message: Message }
   | { type: 'sources_changed'; sessionId: string; enabledSourceSlugs: string[] }
@@ -285,6 +289,12 @@ export interface CredentialResponse {
   headers?: Record<string, string>
   cancelled: boolean
 }
+
+export type {
+  ExtensionUiMethod,
+  ExtensionUiRequest,
+  ExtensionUiResponse,
+} from '@craft-agent/core/types'
 
 // ---------------------------------------------------------------------------
 // Directory browsing types (remote mode)

@@ -19,7 +19,7 @@ import { toast } from 'sonner'
 import { PanelHeaderCenterButton } from '@/components/ui/PanelHeaderCenterButton'
 import { DropdownMenu, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { StyledDropdownMenuContent, StyledDropdownMenuItem, StyledDropdownMenuSeparator } from '@/components/ui/styled-dropdown'
-import { useAppShellContext, usePendingPermission, usePendingCredential, useSessionOptionsFor, useSession as useSessionData } from '@/context/AppShellContext'
+import { useAppShellContext, usePendingPermission, usePendingCredential, usePendingExtensionUiRequest, useExtensionUiHostState, useSessionOptionsFor, useSession as useSessionData } from '@/context/AppShellContext'
 import { rendererPerf } from '@/lib/perf'
 import { routes } from '@/lib/navigate'
 import { coerceInputText } from '@/lib/input-text'
@@ -50,6 +50,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     workspaces,
     onRespondToPermission,
     onRespondToCredential,
+    onRespondToExtensionUiRequest,
     onMarkSessionRead,
     onMarkSessionUnread,
     onSetActiveViewingSession,
@@ -206,6 +207,8 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   // Get pending permission and credential for this session
   const pendingPermission = usePendingPermission(sessionId)
   const pendingCredential = usePendingCredential(sessionId)
+  const pendingExtensionUiRequest = usePendingExtensionUiRequest(sessionId)
+  const extensionUiHostState = useExtensionUiHostState(sessionId)
 
   // Track draft value for this session
   const [inputValue, setInputValue] = React.useState(() => coerceInputText(getDraft(sessionId)))
@@ -712,6 +715,9 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
                 onRespondToPermission={onRespondToPermission}
                 pendingCredential={undefined}
                 onRespondToCredential={onRespondToCredential}
+                pendingExtensionUiRequest={undefined}
+                extensionUiHostState={undefined}
+                onRespondToExtensionUiRequest={onRespondToExtensionUiRequest}
                 thinkingLevel={sessionOpts.thinkingLevel}
                 onThinkingLevelChange={(level) => setOption('thinkingLevel', level)}
                 permissionMode={sessionOpts.permissionMode}
@@ -789,6 +795,9 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
             onRespondToPermission={onRespondToPermission}
             pendingCredential={pendingCredential}
             onRespondToCredential={onRespondToCredential}
+            pendingExtensionUiRequest={pendingExtensionUiRequest}
+            extensionUiHostState={extensionUiHostState}
+            onRespondToExtensionUiRequest={onRespondToExtensionUiRequest}
             thinkingLevel={sessionOpts.thinkingLevel}
             onThinkingLevelChange={(level) => setOption('thinkingLevel', level)}
             permissionMode={sessionOpts.permissionMode}

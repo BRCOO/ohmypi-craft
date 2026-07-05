@@ -42,7 +42,19 @@ import {
 } from "@craft-agent/ui"
 import { useFocusZone } from "@/hooks/keyboard"
 import { useTheme } from "@/hooks/useTheme"
-import type { Session, Message, FileAttachment, StoredAttachment, PermissionRequest, CredentialRequest, CredentialResponse, LoadedSource, LoadedSkill } from "../../../shared/types"
+import type {
+  Session,
+  Message,
+  FileAttachment,
+  StoredAttachment,
+  PermissionRequest,
+  CredentialRequest,
+  CredentialResponse,
+  ExtensionUiRequest,
+  ExtensionUiResponse,
+  LoadedSource,
+  LoadedSkill,
+} from "../../../shared/types"
 import type { PermissionMode } from "@craft-agent/shared/agent/modes"
 import type { ThinkingLevel } from "@craft-agent/shared/agent/thinking-levels"
 import {
@@ -64,12 +76,20 @@ import {
   type AuthRequestTurn,
 } from "@craft-agent/ui"
 import { MemoizedAuthRequestCard } from "@/components/chat/AuthRequestCard"
-import { ChatInputZone, type StructuredInputState, type StructuredResponse, type PermissionResponse, type AdminApprovalResponse } from "./input"
+import {
+  ChatInputZone,
+  type StructuredInputState,
+  type StructuredResponse,
+  type PermissionResponse,
+  type AdminApprovalResponse,
+  type ExtensionUiStructuredResponse,
+} from "./input"
 import type { RichTextInputHandle } from "@/components/ui/rich-text-input"
 import { useBackgroundTasks } from "@/hooks/useBackgroundTasks"
 import { useTurnCardExpansion } from "@/hooks/useTurnCardExpansion"
 import { useNavigation } from "@/contexts/NavigationContext"
 import { useAppShellContext } from "@/context/AppShellContext"
+import type { ExtensionUiHostState } from "@/context/AppShellContext"
 import { navigate, routes } from "@/lib/navigate"
 import { CHAT_LAYOUT } from "@/config/layout"
 import { collectFileChangesFromActivities, getFirstFileChangeIdForActivity } from "@/lib/file-changes"
@@ -158,6 +178,16 @@ interface ChatDisplayProps {
   pendingCredential?: CredentialRequest
   /** Callback to respond to credential request */
   onRespondToCredential?: (sessionId: string, requestId: string, response: CredentialResponse) => void
+  /** Pending backend extension UI request for this session */
+  pendingExtensionUiRequest?: ExtensionUiRequest
+  /** Non-blocking OMP status and widget state for this session */
+  extensionUiHostState?: ExtensionUiHostState
+  /** Callback to respond to a backend extension UI request */
+  onRespondToExtensionUiRequest?: (
+    sessionId: string,
+    requestId: string,
+    response: ExtensionUiResponse,
+  ) => void
   // Thinking level (session-level setting)
   /** Current thinking level ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel
@@ -449,6 +479,9 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   onRespondToPermission,
   pendingCredential,
   onRespondToCredential,
+  pendingExtensionUiRequest,
+  extensionUiHostState,
+  onRespondToExtensionUiRequest,
   // Thinking level
   thinkingLevel = 'medium',
   onThinkingLevelChange,
@@ -1327,7 +1360,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     viewport.scrollTop += delta
   }, [])
 
-  // Handle structured input responses (permissions and credentials)
+  // Handle structured input responses (permissions, extensions, and credentials)
   const handleStructuredResponse = (response: StructuredResponse) => {
     if ((response.type === 'permission' || response.type === 'admin_approval') && pendingPermission && onRespondToPermission) {
       if (response.type === 'permission') {
@@ -1349,6 +1382,18 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
         false,
         { rememberForMinutes: adminResponse.rememberForMinutes }
       )
+    } else if (
+      response.type === 'extension_ui'
+      && session
+      && pendingExtensionUiRequest
+      && onRespondToExtensionUiRequest
+    ) {
+      const extensionResponse = (response as ExtensionUiStructuredResponse).response
+      onRespondToExtensionUiRequest(
+        session.id,
+        pendingExtensionUiRequest.requestId,
+        extensionResponse,
+      )
     } else if (response.type === 'credential' && pendingCredential && onRespondToCredential) {
       const credResponse = response as CredentialResponse
       onRespondToCredential(
@@ -1359,7 +1404,8 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     }
   }
 
-  // Build structured input state from pending requests (permissions take priority)
+  // Build structured input state from pending requests.
+  // Permissions take priority, then extension UI, then credentials.
   const structuredInput: StructuredInputState | undefined = React.useMemo(() => {
     if (pendingPermission) {
       if (pendingPermission.type === 'admin_approval') {
@@ -1377,11 +1423,14 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
       }
       return { type: 'permission', data: pendingPermission }
     }
+    if (pendingExtensionUiRequest) {
+      return { type: 'extension_ui', data: pendingExtensionUiRequest }
+    }
     if (pendingCredential) {
       return { type: 'credential', data: pendingCredential }
     }
     return undefined
-  }, [pendingPermission, pendingCredential])
+  }, [pendingPermission, pendingExtensionUiRequest, pendingCredential])
 
   // Memoize turn grouping - avoids O(n) iteration on every render/keystroke
   const allTurns = React.useMemo(() => {
@@ -1911,6 +1960,32 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
               </ScrollArea>
             </div>
           </div>
+
+          {extensionUiHostState && (
+            <div className="shrink-0 px-4 pb-2 space-y-2">
+              {Object.keys(extensionUiHostState.statuses).length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {Object.entries(extensionUiHostState.statuses).map(([key, text]) => (
+                    <div
+                      key={key}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-info/20 bg-info/5 px-2.5 py-1 text-[11px] text-muted-foreground"
+                    >
+                      <span className="font-medium text-foreground/80">{key}</span>
+                      <span>{text}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {Object.entries(extensionUiHostState.widgets).map(([key, widget]) => (
+                <div
+                  key={key}
+                  className="rounded-md border border-border/60 bg-foreground/[0.025] px-3 py-2 font-mono text-[11px] leading-4 text-muted-foreground whitespace-pre-wrap"
+                >
+                  {widget.lines.join('\n')}
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* === INPUT CONTAINER: FreeForm or Structured Input === */}
           <ChatInputZone

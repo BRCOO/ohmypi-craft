@@ -5,7 +5,7 @@
  * All agent events flow through a single pure function for consistent state transitions.
  */
 
-import type { Session, Message, PermissionRequest, CredentialRequest, TypedError, PermissionMode, SessionStatus, AuthRequest, ToolDisplayMeta } from '../../shared/types'
+import type { Session, Message, PermissionRequest, CredentialRequest, ExtensionUiRequest, TypedError, PermissionMode, SessionStatus, AuthRequest, ToolDisplayMeta } from '../../shared/types'
 
 /**
  * Streaming state for a session - replaces streamingTextRef
@@ -332,6 +332,25 @@ export interface CredentialRequestEvent {
 }
 
 /**
+ * Backend extension UI request event.
+ */
+export interface ExtensionUiRequestEvent {
+  type: 'extension_ui_request'
+  sessionId: string
+  request: ExtensionUiRequest
+}
+
+/**
+ * Backend extension UI cancel event.
+ */
+export interface ExtensionUiCancelEvent {
+  type: 'extension_ui_cancel'
+  sessionId: string
+  requestId: string
+  targetId: string
+}
+
+/**
  * Task backgrounded event - background agent started
  */
 export interface TaskBackgroundedEvent {
@@ -482,6 +501,8 @@ export type AgentEvent =
   | TypedErrorEvent
   | PermissionRequestEvent
   | CredentialRequestEvent
+  | ExtensionUiRequestEvent
+  | ExtensionUiCancelEvent
   | SourcesChangedEvent
   | LabelsChangedEvent
   | SessionStatusChangedEvent
@@ -521,6 +542,8 @@ export type AgentEvent =
 export type Effect =
   | { type: 'permission_request'; request: PermissionRequest }
   | { type: 'credential_request'; request: CredentialRequest }
+  | { type: 'extension_ui_request'; request: ExtensionUiRequest }
+  | { type: 'extension_ui_cancel'; requestId: string; targetId: string }
   | { type: 'generate_title'; sessionId: string; userMessage: string }
   | { type: 'permission_mode_changed'; sessionId: string; permissionMode: PermissionMode; previousPermissionMode?: PermissionMode; transitionDisplay?: string; modeVersion?: number; changedAt?: string; changedBy?: 'user' | 'system' | 'restore' | 'automation' | 'unknown' }
   | { type: 'restore_input'; text: string }

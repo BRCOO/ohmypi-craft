@@ -1,7 +1,12 @@
-import type { PermissionRequest as PermissionRequestType, CredentialRequest as CredentialRequestType } from '../../../../shared/types'
+import type {
+  PermissionRequest as PermissionRequestType,
+  CredentialRequest as CredentialRequestType,
+  ExtensionUiRequest as ExtensionUiRequestType,
+} from '../../../../shared/types'
 import { PermissionRequest } from './structured/PermissionRequest'
 import { CredentialRequest } from './structured/CredentialRequest'
 import { AdminApprovalRequest } from './structured/AdminApprovalRequest'
+import { ExtensionUiRequest } from './structured/ExtensionUiRequest'
 import type { StructuredInputState, StructuredResponse } from './structured/types'
 
 interface StructuredInputProps {
@@ -42,6 +47,14 @@ export function StructuredInput({ state, onResponse, unstyled = false }: Structu
           request={state.data as import('./structured/AdminApprovalRequest').AdminApprovalRequestData}
           onApprove={({ rememberForMinutes }) => onResponse({ type: 'admin_approval', approved: true, rememberForMinutes })}
           onCancel={() => onResponse({ type: 'admin_approval', approved: false })}
+          unstyled={unstyled}
+        />
+      )
+    case 'extension_ui':
+      return (
+        <ExtensionUiRequest
+          request={state.data as ExtensionUiRequestType}
+          onResponse={(response) => onResponse({ type: 'extension_ui', response })}
           unstyled={unstyled}
         />
       )

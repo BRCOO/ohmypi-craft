@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import readline from 'node:readline';
 
-import type { AgentEvent } from '@craft-agent/core/types';
+import type { AgentEvent, ExtensionUiResponse } from '@craft-agent/core/types';
 
 import { BaseAgent } from '../../base-agent.ts';
 import type { LLMQueryRequest, LLMQueryResult } from '../../llm-tool.ts';
@@ -64,6 +64,34 @@ export function resolveOmpModelSelection(model: string | undefined): OmpModelSel
   if (provider === 'omp' && modelId === 'default') return null;
 
   return { provider, modelId };
+}
+
+export function buildOmpExtensionUiResponseFrame(
+  requestId: string,
+  response: ExtensionUiResponse,
+): Record<string, unknown> {
+  if ('value' in response) {
+    return {
+      type: 'extension_ui_response',
+      id: requestId,
+      value: response.value,
+    };
+  }
+
+  if ('cancelled' in response) {
+    return {
+      type: 'extension_ui_response',
+      id: requestId,
+      cancelled: true,
+      ...(response.timedOut ? { timedOut: true } : {}),
+    };
+  }
+
+  return {
+    type: 'extension_ui_response',
+    id: requestId,
+    confirmed: response.confirmed,
+  };
 }
 
 export class OmpRpcBackend extends BaseAgent {
@@ -196,6 +224,12 @@ export class OmpRpcBackend extends BaseAgent {
       decision: allowed ? 'approved' : 'denied',
     }).catch((error) => {
       this.debug(`Permission response failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
+
+  respondToExtensionUiRequest(requestId: string, response: ExtensionUiResponse): void {
+    this.writeSideChannel(buildOmpExtensionUiResponseFrame(requestId, response)).catch((error) => {
+      this.debug(`Extension UI response failed: ${error instanceof Error ? error.message : String(error)}`);
     });
   }
 
@@ -366,6 +400,23 @@ export class OmpRpcBackend extends BaseAgent {
         if (error) {
           this.pending.delete(id);
           reject(error);
+        }
+      });
+    });
+  }
+
+  private writeSideChannel(frame: Record<string, unknown>): Promise<void> {
+    const stdin = this.child?.stdin;
+    if (!stdin?.writable) {
+      return Promise.reject(new Error('OMP RPC is not connected'));
+    }
+
+    return new Promise((resolve, reject) => {
+      stdin.write(`${JSON.stringify(frame)}\n`, (error) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
         }
       });
     });

@@ -39,8 +39,8 @@ Use CodeGraph before broad grep/find/manual source reading when locating or unde
 ## Current branch
 
 - Branch: `codex/omp-rpc-backend`
-- Phase: OMP RPC backend phase 1 and dynamic model discovery implemented
-- Spec: `docs/superpowers/specs/2026-07-05-omp-rpc-backend-design.md`
+- Phase: OMP RPC backend, dynamic model discovery, runtime hardening, and extension UI bridge implemented
+- Specs: `docs/superpowers/specs/2026-07-05-omp-rpc-backend-design.md` and `docs/superpowers/specs/2026-07-05-omp-extension-ui-bridge-design.md`
 
 ## Implementation status
 
@@ -50,7 +50,8 @@ Use CodeGraph before broad grep/find/manual source reading when locating or unde
 - Kept `omp/default` as a startup fallback and added dynamic model discovery through RPC `get_available_models` plus `get_state`; Craft receives provider-qualified model IDs such as `deepseek/deepseek-v4-flash`.
 - Explicit OMP model strings such as `deepseek/deepseek-v4-flash` are translated into an RPC `set_model` call before the next prompt; a real DeepSeek smoke test completed successfully.
 - Added an onboarding/provider-select entry for Oh My Pi / OMP. It creates a keyless `omp-local` connection through the normal setup handler, refreshes OMP models immediately, and lets Craft's existing model selector display the full OMP model list.
-- Current unsupported surface: rich `extension_ui_request` handling is surfaced as an info event rather than interactive UI.
+- Added a typed OMP extension UI bridge across backend, session manager, transport, and renderer. Blocking `select`/`confirm`/`input`/`editor` requests now render inline controls with cancel/timeout responses; host actions cover notifications, status chips, widgets, composer text, and external links.
+- Remaining verification item: complete a manual end-to-end OMP extension flow in the packaged/dev Electron app.
 
 ## Verification expectations
 

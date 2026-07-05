@@ -46,6 +46,9 @@ export type {
   ErrorCode,
   TypedError,
   PermissionRequest,
+  ExtensionUiMethod,
+  ExtensionUiRequest,
+  ExtensionUiResponse,
   AgentEvent,
   // Auth-related types
   CredentialInputMode,

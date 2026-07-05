@@ -30,6 +30,7 @@ export const CHANNEL_MAP = {
   getTaskOutput: invoke(RPC_CHANNELS.tasks.GET_OUTPUT),
   respondToPermission: invoke(RPC_CHANNELS.sessions.RESPOND_TO_PERMISSION),
   respondToCredential: invoke(RPC_CHANNELS.sessions.RESPOND_TO_CREDENTIAL),
+  respondToExtensionUiRequest: invoke(RPC_CHANNELS.sessions.RESPOND_TO_EXTENSION_UI),
   sessionCommand: invoke(RPC_CHANNELS.sessions.COMMAND),
   exportSession: invoke(RPC_CHANNELS.sessions.EXPORT),
   importSession: invoke(RPC_CHANNELS.sessions.IMPORT),

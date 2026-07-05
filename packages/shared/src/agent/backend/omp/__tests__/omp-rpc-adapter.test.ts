@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { OmpRpcEventAdapter } from '../omp-rpc-adapter.ts';
+import { buildOmpExtensionUiResponseFrame } from '../omp-rpc-backend.ts';
 
 describe('OmpRpcEventAdapter', () => {
   it('maps ready and response frames as control data', () => {
@@ -127,19 +128,86 @@ describe('OmpRpcEventAdapter', () => {
     });
   });
 
-  it('surfaces unsupported extension UI requests as info', () => {
+  it('maps extension UI request frames', () => {
     const adapter = new OmpRpcEventAdapter();
 
     expect(adapter.adaptFrame({
       type: 'extension_ui_request',
+      id: 'ui-1',
       method: 'select',
       title: 'Pick one',
+      options: ['A', 'B'],
+      timeout: 1000,
     }).events).toEqual([
       {
-        type: 'info',
-        message: 'OMP extension UI request is not supported yet: select (Pick one)',
+        type: 'extension_ui_request',
+        request: {
+          requestId: 'ui-1',
+          method: 'select',
+          title: 'Pick one',
+          message: undefined,
+          options: ['A', 'B'],
+          placeholder: undefined,
+          prefill: undefined,
+          promptStyle: undefined,
+          timeoutMs: 1000,
+          targetId: undefined,
+          notifyType: undefined,
+          statusKey: undefined,
+          statusText: undefined,
+          widgetKey: undefined,
+          widgetLines: undefined,
+          widgetPlacement: undefined,
+          text: undefined,
+          url: undefined,
+          launchUrl: undefined,
+          instructions: undefined,
+          raw: {
+            type: 'extension_ui_request',
+            id: 'ui-1',
+            method: 'select',
+            title: 'Pick one',
+            options: ['A', 'B'],
+            timeout: 1000,
+          },
+        },
       },
     ]);
   });
-});
 
+  it('maps extension UI cancel frames', () => {
+    const adapter = new OmpRpcEventAdapter();
+
+    expect(adapter.adaptFrame({
+      type: 'extension_ui_request',
+      id: 'cancel-1',
+      method: 'cancel',
+      targetId: 'ui-1',
+    }).events).toEqual([
+      {
+        type: 'extension_ui_cancel',
+        requestId: 'cancel-1',
+        targetId: 'ui-1',
+      },
+    ]);
+  });
+
+  it('builds OMP extension UI response frames without host correlation ids', () => {
+    expect(buildOmpExtensionUiResponseFrame('ui-1', { value: 'choice' })).toEqual({
+      type: 'extension_ui_response',
+      id: 'ui-1',
+      value: 'choice',
+    });
+    expect(buildOmpExtensionUiResponseFrame('ui-2', { confirmed: true })).toEqual({
+      type: 'extension_ui_response',
+      id: 'ui-2',
+      confirmed: true,
+    });
+    expect(buildOmpExtensionUiResponseFrame('ui-3', { cancelled: true, timedOut: true })).toEqual({
+      type: 'extension_ui_response',
+      id: 'ui-3',
+      cancelled: true,
+      timedOut: true,
+    });
+  });
+});

@@ -17,6 +17,8 @@ import type {
   PermissionRequest,
   CredentialRequest,
   CredentialResponse,
+  ExtensionUiRequest,
+  ExtensionUiResponse,
   PermissionMode,
   SessionStatus,
   LoadedSource,
@@ -29,6 +31,14 @@ import type { SessionStatus as SessionStatusConfig } from '@/config/session-stat
 import type { SessionOptions, SessionOptionUpdates } from '../hooks/useSessionOptions'
 import { defaultSessionOptions } from '../hooks/useSessionOptions'
 import { sessionAtomFamily } from '../atoms/sessions'
+
+export interface ExtensionUiHostState {
+  statuses: Record<string, string>
+  widgets: Record<string, {
+    lines: string[]
+    placement?: string
+  }>
+}
 
 export interface AppShellContextType {
   // Data
@@ -47,6 +57,8 @@ export interface AppShellContextType {
   refreshLlmConnections: () => Promise<void>
   pendingPermissions: Map<string, PermissionRequest[]>
   pendingCredentials: Map<string, CredentialRequest[]>
+  pendingExtensionUiRequests: Map<string, ExtensionUiRequest[]>
+  extensionUiHostStates: Map<string, ExtensionUiHostState>
   /** Get draft input text for a session - reads from ref without triggering re-renders */
   getDraft: (sessionId: string) => string
   /** Get persisted attachment refs (path + name) for a session's draft - no file IO */
@@ -101,6 +113,13 @@ export interface AppShellContextType {
     sessionId: string,
     requestId: string,
     response: CredentialResponse
+  ) => void
+
+  // Backend extension UI handling
+  onRespondToExtensionUiRequest?: (
+    sessionId: string,
+    requestId: string,
+    response: ExtensionUiResponse
   ) => void
 
   // File/URL handlers - these can open in tabs or external apps
@@ -231,6 +250,20 @@ export function usePendingPermission(sessionId: string): PermissionRequest | und
 export function usePendingCredential(sessionId: string): CredentialRequest | undefined {
   const { pendingCredentials } = useAppShellContext()
   return pendingCredentials.get(sessionId)?.[0]
+}
+
+/**
+ * Get pending backend extension UI request for a session (first in queue)
+ */
+export function usePendingExtensionUiRequest(sessionId: string): ExtensionUiRequest | undefined {
+  const { pendingExtensionUiRequests } = useAppShellContext()
+  return pendingExtensionUiRequests.get(sessionId)?.[0]
+}
+
+/** Get the current non-blocking OMP status/widget state for a session. */
+export function useExtensionUiHostState(sessionId: string): ExtensionUiHostState | undefined {
+  const { extensionUiHostStates } = useAppShellContext()
+  return extensionUiHostStates.get(sessionId)
 }
 
 /**

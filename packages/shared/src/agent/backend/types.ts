@@ -12,7 +12,7 @@
  * - AsyncGenerator for streaming: Consistent with existing CraftAgent API
  */
 
-import type { AgentEvent } from '@craft-agent/core/types';
+import type { AgentEvent, ExtensionUiResponse } from '@craft-agent/core/types';
 import type { FileAttachment } from '../../utils/files.ts';
 import type { ThinkingLevel } from '../thinking-levels.ts';
 import type { PermissionMode } from '../mode-manager.ts';
@@ -593,6 +593,14 @@ export interface AgentBackend {
    * @param alwaysAllow - Whether to remember this permission for session
    */
   respondToPermission(requestId: string, allowed: boolean, alwaysAllow?: boolean): void;
+
+  /**
+   * Respond to a pending backend-provided extension UI request.
+   *
+   * Optional because most providers do not expose this side channel. Backends
+   * that emit `extension_ui_request` events should implement it.
+   */
+  respondToExtensionUiRequest?(requestId: string, response: ExtensionUiResponse): void;
 
   // ============================================================
   // Callbacks (set by facade after construction)
