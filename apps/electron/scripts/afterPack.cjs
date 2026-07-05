@@ -1,9 +1,10 @@
 /**
  * electron-builder afterPack hook
  *
- * Copies the pre-compiled macOS 26+ Liquid Glass icon (Assets.car) into the
- * app bundle. The Assets.car file is compiled locally using actool with the
- * macOS 26 SDK (not available in CI), then committed to the repo.
+ * Copies the optional macOS 26+ Liquid Glass icon (Assets.car) into the
+ * app bundle. The Assets.car file can be compiled locally using actool with
+ * the macOS 26 SDK (not available in CI). If it is absent, the app falls back
+ * to icon.icns.
  *
  * To regenerate Assets.car after icon changes:
  *   cd apps/electron
@@ -26,7 +27,8 @@ module.exports = async function afterPack(context) {
   }
 
   const appPath = context.appOutDir;
-  const resourcesDir = path.join(appPath, 'Craft Agents.app', 'Contents', 'Resources');
+  const productFilename = context.packager.appInfo.productFilename || context.packager.appInfo.productName || 'Oh My Pi';
+  const resourcesDir = path.join(appPath, `${productFilename}.app`, 'Contents', 'Resources');
   const precompiledAssets = path.join(context.packager.projectDir, 'resources', 'Assets.car');
 
   console.log(`afterPack: projectDir=${context.packager.projectDir}`);

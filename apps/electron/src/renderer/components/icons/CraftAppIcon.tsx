@@ -1,4 +1,4 @@
-import craftLogo from "@/assets/craft_logo_c.svg"
+import ohMyPiLogo from "@/assets/ohmypi_logo.svg"
 
 interface CraftAppIconProps {
   className?: string
@@ -6,13 +6,13 @@ interface CraftAppIconProps {
 }
 
 /**
- * CraftAppIcon - Displays the Craft logo (colorful "C" icon)
+ * CraftAppIcon - Displays the Oh My Pi app logo.
  */
 export function CraftAppIcon({ className, size = 64 }: CraftAppIconProps) {
   return (
     <img
-      src={craftLogo}
-      alt="Craft"
+      src={ohMyPiLogo}
+      alt="Oh My Pi"
       width={size}
       height={size}
       className={className}

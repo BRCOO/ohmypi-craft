@@ -1,12 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg width="24px" height="24px" viewBox="0 0 24 24" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-    <title>favicon</title>
-    <defs>
-        <path d="M0,0 L24,0 L24,24 L0,24 L0,0 Z" id="path-1"></path>
-    </defs>
-    <g id="favicon" stroke="none" fill="none" xlink:href="#path-1" fill-rule="evenodd" stroke-width="1">
-        <g id="Group" transform="translate(3.4502, 3)" fill="#9570BE">
-            <path d="M3.17890888,3.6 L3.17890888,0 L16,0 L16,3.6 L3.17890888,3.6 Z M9.642,7.2 L9.64218223,10.8 L0,10.8 L0,3.6 L16,3.6 L16,7.2 L9.642,7.2 Z M3.17890888,18 L3.178,14.4 L0,14.4 L0,10.8 L16,10.8 L16,18 L3.17890888,18 Z" id="Combined-Shape" fill-rule="nonzero"></path>
-        </g>
-    </g>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Oh My Pi</title>
+  <rect width="1024" height="1024" rx="240" fill="url(#paint0_linear_omp_icon)"/>
+  <circle cx="312" cy="304" r="64" fill="white" fill-opacity="0.92"/>
+  <circle cx="728" cy="720" r="64" fill="white" fill-opacity="0.92"/>
+  <path d="M360 312C454.4 249.6 608 250.4 676 350.4C747.2 455.2 718.4 616.8 624 708.8C538.4 792.8 400.8 809.6 316 730.4C236.8 656.8 246.4 526.4 332.8 471.2C408 423.2 520.8 446.4 567.2 531.2" stroke="white" stroke-width="64" stroke-linecap="round"/>
+  <text x="512" y="642" text-anchor="middle" font-family="Inter, Segoe UI Symbol, Arial, sans-serif" font-size="464" font-weight="700" fill="white">π</text>
+  <defs>
+    <linearGradient id="paint0_linear_omp_icon" x1="144" y1="112" x2="928" y2="928" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9B7CFF"/>
+      <stop offset="0.48" stop-color="#7C3AED"/>
+      <stop offset="1" stop-color="#24135F"/>
+    </linearGradient>
+  </defs>
 </svg>

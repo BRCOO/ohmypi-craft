@@ -34,7 +34,6 @@ async function resolveUniqueSlug(baseName: string): Promise<{ slug: string; path
   let slug = baseSlug
   let attempt = 0
 
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const result = await window.electronAPI.checkWorkspaceSlug(slug)
     if (!result.exists) {
@@ -50,7 +49,7 @@ async function resolveUniqueSlug(baseName: string): Promise<{ slug: string; path
 }
 
 /**
- * AddWorkspaceStep_ConnectRemote - Connect to a remote Craft Agent Server
+ * AddWorkspaceStep_ConnectRemote - Connect to a remote Oh My Pi Server
  *
  * Two paths:
  * 1. Connect to existing workspace — select from dropdown, no name needed, auto-resolve local slug
@@ -204,7 +203,7 @@ export function AddWorkspaceStep_ConnectRemote({
         title={isReconnectMode ? t("workspace.reconnect", { name: reconnectWorkspace!.name }) : "Connect to remote server"}
         description={isReconnectMode
           ? "Update the server URL or token to restore the connection."
-          : "Connect to a remote Craft Agent Server for this workspace."}
+          : "Connect to a remote Oh My Pi Server for this workspace."}
       />
 
       <div className="mt-6 w-full space-y-5">
