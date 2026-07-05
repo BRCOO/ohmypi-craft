@@ -67,7 +67,7 @@ const WorkspaceSchema = z.object({
 // --- LLM Connection schema for config validation ---
 
 const LlmProviderTypeSchema = z.enum([
-  'anthropic', 'openai', 'openai_compat', 'pi', 'pi_compat', 'copilot',
+  'anthropic', 'openai', 'openai_compat', 'pi', 'pi_compat', 'omp', 'copilot',
   // Legacy values kept for config parsing tolerance (migrated at runtime):
   'anthropic_compat', 'bedrock', 'vertex',
 ]);
@@ -143,12 +143,89 @@ function zodErrorToIssues(error: z.ZodError, file: string): ValidationIssue[] {
 }
 
 /**
- * Validate config.json
+ * Validate parsed config.json content.
  */
-export function validateConfig(): ValidationResult {
+export function validateConfigObject(content: unknown, file = 'config.json'): ValidationResult {
   const errors: ValidationIssue[] = [];
   const warnings: ValidationIssue[] = [];
 
+  // Validate schema
+  const result = StoredConfigSchema.safeParse(content);
+  if (!result.success) {
+    errors.push(...zodErrorToIssues(result.error, file));
+  } else {
+    const config = result.data;
+
+    // Semantic validations
+    if (config.activeWorkspaceId && config.workspaces.length > 0) {
+      const activeExists = config.workspaces.some(w => w.id === config.activeWorkspaceId);
+      if (!activeExists) {
+        errors.push({
+          file,
+          path: 'activeWorkspaceId',
+          message: `Active workspace ID '${config.activeWorkspaceId}' does not exist in workspaces array`,
+          severity: 'error',
+          suggestion: 'Set activeWorkspaceId to an existing workspace ID or null',
+        });
+      }
+    }
+
+    // Validate LLM connections
+    if (config.llmConnections) {
+      const seenSlugs = new Set<string>();
+      for (const [i, conn] of config.llmConnections.entries()) {
+        // Check for duplicate slugs
+        if (seenSlugs.has(conn.slug)) {
+          errors.push({
+            file,
+            path: `llmConnections[${i}].slug`,
+            message: `Duplicate connection slug '${conn.slug}'`,
+            severity: 'error',
+            suggestion: 'Each connection must have a unique slug',
+          });
+        }
+        seenSlugs.add(conn.slug);
+
+        // Validate provider/auth combination
+        if (!isValidProviderAuthCombination(conn.providerType as any, conn.authType as any)) {
+          warnings.push({
+            file,
+            path: `llmConnections[${i}]`,
+            message: `Invalid provider/auth combination: providerType='${conn.providerType}' with authType='${conn.authType}'`,
+            severity: 'warning',
+            suggestion: 'Check supported auth types for this provider',
+          });
+        }
+      }
+
+      // Validate defaultLlmConnection references an existing connection
+      if (config.defaultLlmConnection) {
+        const exists = config.llmConnections.some(c => c.slug === config.defaultLlmConnection);
+        if (!exists) {
+          warnings.push({
+            file,
+            path: 'defaultLlmConnection',
+            message: `Default LLM connection '${config.defaultLlmConnection}' does not exist in llmConnections array`,
+            severity: 'warning',
+            suggestion: 'Set defaultLlmConnection to an existing connection slug',
+          });
+        }
+      }
+    }
+
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings,
+  };
+}
+
+/**
+ * Validate config.json
+ */
+export function validateConfig(): ValidationResult {
   // Check if file exists
   if (!existsSync(CONFIG_FILE)) {
     return {
@@ -182,77 +259,7 @@ export function validateConfig(): ValidationResult {
     };
   }
 
-  // Validate schema
-  const result = StoredConfigSchema.safeParse(content);
-  if (!result.success) {
-    errors.push(...zodErrorToIssues(result.error, 'config.json'));
-  } else {
-    const config = result.data;
-
-    // Semantic validations
-    if (config.activeWorkspaceId && config.workspaces.length > 0) {
-      const activeExists = config.workspaces.some(w => w.id === config.activeWorkspaceId);
-      if (!activeExists) {
-        errors.push({
-          file: 'config.json',
-          path: 'activeWorkspaceId',
-          message: `Active workspace ID '${config.activeWorkspaceId}' does not exist in workspaces array`,
-          severity: 'error',
-          suggestion: 'Set activeWorkspaceId to an existing workspace ID or null',
-        });
-      }
-    }
-
-    // Validate LLM connections
-    if (config.llmConnections) {
-      const seenSlugs = new Set<string>();
-      for (const [i, conn] of config.llmConnections.entries()) {
-        // Check for duplicate slugs
-        if (seenSlugs.has(conn.slug)) {
-          errors.push({
-            file: 'config.json',
-            path: `llmConnections[${i}].slug`,
-            message: `Duplicate connection slug '${conn.slug}'`,
-            severity: 'error',
-            suggestion: 'Each connection must have a unique slug',
-          });
-        }
-        seenSlugs.add(conn.slug);
-
-        // Validate provider/auth combination
-        if (!isValidProviderAuthCombination(conn.providerType as any, conn.authType as any)) {
-          warnings.push({
-            file: 'config.json',
-            path: `llmConnections[${i}]`,
-            message: `Invalid provider/auth combination: providerType='${conn.providerType}' with authType='${conn.authType}'`,
-            severity: 'warning',
-            suggestion: 'Check supported auth types for this provider',
-          });
-        }
-      }
-
-      // Validate defaultLlmConnection references an existing connection
-      if (config.defaultLlmConnection) {
-        const exists = config.llmConnections.some(c => c.slug === config.defaultLlmConnection);
-        if (!exists) {
-          warnings.push({
-            file: 'config.json',
-            path: 'defaultLlmConnection',
-            message: `Default LLM connection '${config.defaultLlmConnection}' does not exist in llmConnections array`,
-            severity: 'warning',
-            suggestion: 'Set defaultLlmConnection to an existing connection slug',
-          });
-        }
-      }
-    }
-
-  }
-
-  return {
-    valid: errors.length === 0,
-    errors,
-    warnings,
-  };
+  return validateConfigObject(content);
 }
 
 /**

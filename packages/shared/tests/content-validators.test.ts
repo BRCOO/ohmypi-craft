@@ -4,6 +4,7 @@
  */
 import { describe, it, expect } from 'bun:test';
 import {
+  validateConfigObject,
   validateSourceConfigContent,
   validateSkillContent,
   validateStatusesContent,
@@ -11,6 +12,34 @@ import {
   detectConfigFileType,
   validateConfigFileContent,
 } from '../src/config/validators.ts';
+
+// ============================================================
+// validateConfigObject
+// ============================================================
+
+describe('validateConfigObject', () => {
+  it('accepts OMP local connections in root config', () => {
+    const result = validateConfigObject({
+      workspaces: [],
+      activeWorkspaceId: null,
+      activeSessionId: null,
+      defaultLlmConnection: 'omp-local',
+      llmConnections: [{
+        slug: 'omp-local',
+        name: 'Oh My Pi',
+        providerType: 'omp',
+        authType: 'none',
+        defaultModel: 'deepseek/deepseek-v4-flash',
+        models: ['deepseek/deepseek-v4-flash'],
+        createdAt: Date.now(),
+      }],
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+    expect(result.warnings).toHaveLength(0);
+  });
+});
 
 // ============================================================
 // validateSourceConfigContent
