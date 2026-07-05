@@ -87,6 +87,8 @@ export { EventQueue } from './event-queue.ts';
 // Provider-specific event adapters
 export { ClaudeEventAdapter } from './claude/event-adapter.ts';
 export { PiEventAdapter } from './pi/event-adapter.ts';
+export { OmpRpcEventAdapter, OmpRpcBackend, DEFAULT_OMP_MODEL } from './omp/index.ts';
+export type { OmpRpcAdaptedFrame, OmpRpcResponseFrame } from './omp/index.ts';
 
 // Agent implementations are imported directly by factory.ts
 // Consumers should use createAgent() / createBackend() instead of concrete classes

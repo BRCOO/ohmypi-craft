@@ -31,6 +31,7 @@ import type { Workspace, LlmConnection } from '../../../config/storage.ts';
 import type { SessionConfig as Session } from '../../../sessions/storage.ts';
 import { ClaudeAgent } from '../../claude-agent.ts';
 import { PiAgent } from '../../pi-agent.ts';
+import { OmpRpcBackend } from '../omp/index.ts';
 import { isValidProviderAuthCombination } from '../../../config/llm-connections.ts';
 
 // Test helpers
@@ -103,6 +104,15 @@ describe('createBackend / createAgent', () => {
     });
   });
 
+  describe('OMP provider', () => {
+    it('should create OmpRpcBackend for omp provider', () => {
+      const config = createTestConfig({ provider: 'omp' });
+      const agent = createBackend(config);
+
+      expect(agent).toBeInstanceOf(OmpRpcBackend);
+    });
+  });
+
   describe('Unknown provider', () => {
     it('should throw for unknown provider', () => {
       const config = createTestConfig({ provider: 'unknown' as any });
@@ -119,12 +129,13 @@ describe('createBackend / createAgent', () => {
 });
 
 describe('getAvailableProviders', () => {
-  it('should return anthropic and pi', () => {
+  it('should return anthropic, pi, and omp', () => {
     const providers = getAvailableProviders();
 
     expect(providers).toContain('anthropic');
     expect(providers).toContain('pi');
-    expect(providers).toHaveLength(2);
+    expect(providers).toContain('omp');
+    expect(providers).toHaveLength(3);
   });
 });
 
@@ -135,6 +146,10 @@ describe('isProviderAvailable', () => {
 
   it('should return true for pi', () => {
     expect(isProviderAvailable('pi')).toBe(true);
+  });
+
+  it('should return true for omp', () => {
+    expect(isProviderAvailable('omp')).toBe(true);
   });
 
   it('should return false for unknown provider', () => {
@@ -190,6 +205,12 @@ describe('providerTypeToAgentProvider', () => {
       expect(providerTypeToAgentProvider('pi_compat')).toBe('pi');
     });
   });
+
+  describe('OMP RPC provider', () => {
+    it('should map omp to omp', () => {
+      expect(providerTypeToAgentProvider('omp')).toBe('omp');
+    });
+  });
 });
 
 // ============================================================
@@ -236,6 +257,17 @@ describe('isValidProviderAuthCombination', () => {
 
     it('should accept none auth (for local models like Ollama)', () => {
       expect(isValidProviderAuthCombination('pi_compat', 'none')).toBe(true);
+    });
+  });
+
+  describe('OMP provider', () => {
+    it('should accept environment and none auth', () => {
+      expect(isValidProviderAuthCombination('omp', 'environment')).toBe(true);
+      expect(isValidProviderAuthCombination('omp', 'none')).toBe(true);
+    });
+
+    it('should reject api_key auth', () => {
+      expect(isValidProviderAuthCombination('omp', 'api_key')).toBe(false);
     });
   });
 

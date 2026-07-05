@@ -25,6 +25,7 @@ import type {
 } from './types.ts';
 import { ClaudeAgent } from '../claude-agent.ts';
 import { PiAgent } from '../pi-agent.ts';
+import { OmpRpcBackend, DEFAULT_OMP_MODEL } from './omp/index.ts';
 import {
   getLlmConnection,
   getDefaultLlmConnection,
@@ -59,10 +60,12 @@ import {
 } from './internal/runtime-resolver.ts';
 import { anthropicDriver } from './internal/drivers/anthropic.ts';
 import { piDriver } from './internal/drivers/pi.ts';
+import { ompDriver } from './internal/drivers/omp.ts';
 
 const DRIVER_REGISTRY: Record<AgentProvider, ProviderDriver> = {
   anthropic: anthropicDriver,
   pi: piDriver,
+  omp: ompDriver,
 };
 
 function getProviderDriver(provider: AgentProvider): ProviderDriver {
@@ -139,6 +142,9 @@ export function createBackend(config: BackendConfig): AgentBackend {
       // PiAgent implements AgentBackend directly
       // Auth is API key based via Pi's AuthStorage
       return new PiAgent(config);
+
+    case 'omp':
+      return new OmpRpcBackend(config);
 
     default:
       throw new Error(`Unknown provider: ${config.provider}`);
@@ -221,7 +227,7 @@ export function resolveBackendHostTooling(args: {
  * @returns Array of provider identifiers that have working implementations
  */
 export function getAvailableProviders(): AgentProvider[] {
-  return ['anthropic', 'pi'];
+  return ['anthropic', 'pi', 'omp'];
 }
 
 /**
@@ -258,6 +264,9 @@ export function providerTypeToAgentProvider(providerType: LlmProviderType): Agen
     case 'pi':
     case 'pi_compat':
       return 'pi';
+
+    case 'omp':
+      return 'omp';
 
     default:
       // Exhaustive check
@@ -402,6 +411,10 @@ export function resolveSetupTestConnectionHint(args: {
       providerType: 'pi',
       piAuthProvider: args.piAuthProvider,
     };
+  }
+
+  if (args.provider === 'omp') {
+    return { providerType: 'omp' };
   }
 
   return {
@@ -588,6 +601,7 @@ export const BACKEND_CAPABILITIES: Record<AgentProvider, {
 }> = {
   anthropic: { needsHttpPoolServer: false },
   pi: { needsHttpPoolServer: false },
+  omp: { needsHttpPoolServer: false },
 };
 
 // ============================================================
@@ -604,6 +618,7 @@ export function getDefaultAuthType(provider: AgentProvider): LlmAuthType | undef
   switch (provider) {
     case 'anthropic': return undefined;
     case 'pi':        return 'api_key';
+    case 'omp':       return 'none';
     default:          return undefined;
   }
 }
@@ -643,7 +658,7 @@ export function resolveModelForProvider(
     ? normalizeDeprecatedModelId(connection.defaultModel)
     : undefined;
 
-  if (provider === 'pi' && connection?.models?.length) {
+  if ((provider === 'pi' || provider === 'omp') && connection?.models?.length) {
     const connectionModelIds = connection.models.map(m => typeof m === 'string' ? m : m.id);
     if (managedModel && !connectionModelIds.includes(managedModel)) {
       managedModel = undefined;
@@ -656,6 +671,8 @@ export function resolveModelForProvider(
   switch (provider) {
     case 'pi':
       return managedModel || connectionDefault || '';
+    case 'omp':
+      return managedModel || connectionDefault || DEFAULT_OMP_MODEL;
     default:
       return managedModel || connectionDefault || DEFAULT_MODEL;
   }

@@ -14,6 +14,7 @@
 import {
   type ModelDefinition,
   ANTHROPIC_MODELS,
+  OMP_MODELS,
   normalizeDeprecatedModelId,
 } from './models';
 import type { CredentialManager } from '../credentials/manager.ts';
@@ -45,6 +46,7 @@ export function registerPiModelResolver(resolver: PiModelResolver): void {
  * - 'anthropic': Direct Anthropic API (api.anthropic.com) — uses Claude Agent SDK
  * - 'pi': Pi unified LLM API (20+ providers via @earendil-works/pi-ai)
  * - 'pi_compat': Pi with custom endpoint (Ollama, self-hosted models, Anthropic-compat endpoints)
+ * - 'omp': Oh My Pi CLI in stdio RPC mode
  *
  * Legacy values (bedrock, vertex, anthropic_compat) are migrated on startup
  * by migrateLegacyProviderTypes() in storage.ts.
@@ -52,7 +54,8 @@ export function registerPiModelResolver(resolver: PiModelResolver): void {
 export type LlmProviderType =
   | 'anthropic'
   | 'pi'
-  | 'pi_compat';
+  | 'pi_compat'
+  | 'omp';
 
 /**
  * @deprecated Use LlmProviderType instead. Kept for migration compatibility.
@@ -462,6 +465,13 @@ export function isPiProvider(providerType: LlmProviderType): boolean {
 }
 
 /**
+ * Check if a provider type uses the Oh My Pi RPC backend.
+ */
+export function isOmpProvider(providerType: LlmProviderType): boolean {
+  return providerType === 'omp';
+}
+
+/**
  * Default mid-stream send behavior for a given provider type.
  *
  * - 'anthropic' → 'queue': Claude's emulated steer (PreToolUse hook injection)
@@ -580,6 +590,10 @@ export function getModelsForProviderType(providerType: LlmProviderType, piAuthPr
     return _piModelResolver(piAuthProvider);
   }
 
+  if (providerType === 'omp') {
+    return OMP_MODELS;
+  }
+
   // Anthropic uses Claude models with bare Anthropic IDs.
   return ANTHROPIC_MODELS;
 }
@@ -647,6 +661,7 @@ export function getDefaultModelsForConnection(providerType: LlmProviderType, piA
     }
     return models;
   }
+  if (providerType === 'omp') return OMP_MODELS;
   if (providerType === 'pi_compat') return [];  // Dynamic — user specifies
   // anthropic
   return ANTHROPIC_MODELS;
@@ -735,6 +750,7 @@ export function isValidProviderAuthCombination(
     anthropic: ['api_key', 'oauth'],
     pi: ['api_key', 'oauth', 'iam_credentials', 'environment', 'none'],
     pi_compat: ['api_key_with_endpoint', 'none'],
+    omp: ['environment', 'none'],
   };
 
   return validCombinations[providerType]?.includes(authType) ?? false;

@@ -29,6 +29,8 @@ export interface BackendRuntimePayload extends Record<string, unknown> {
   customEndpoint?: { api: string; supportsImages?: boolean };
   /** Models registered for a custom endpoint. Strings default to 128K context; objects allow overrides. */
   customModels?: Array<string | { id: string; contextWindow?: number; supportsImages?: boolean }>;
+  /** Command used to start OMP in RPC mode. */
+  ompCommand?: string;
 }
 
 export interface BackendResolutionContext {
@@ -119,5 +121,7 @@ export function getDefaultProviderType(provider: AgentProvider): LlmProviderType
       return 'anthropic';
     case 'pi':
       return 'pi';
+    case 'omp':
+      return 'omp';
   }
 }

@@ -38,9 +38,17 @@ Use CodeGraph before broad grep/find/manual source reading when locating or unde
 
 ## Current branch
 
-- Branch: `main` in a fresh local Git repository
-- Phase: design/spec before implementation
+- Branch: `codex/omp-rpc-backend`
+- Phase: OMP RPC backend phase 1 implemented
 - Spec: `docs/superpowers/specs/2026-07-05-omp-rpc-backend-design.md`
+
+## Implementation status
+
+- Added a pure OMP RPC frame adapter under `packages/shared/src/agent/backend/omp/`.
+- Added a minimal `OmpRpcBackend` that extends Craft `BaseAgent`, starts `omp --mode rpc`, sends JSONL commands, and drains OMP events through Craft's `EventQueue`.
+- Registered `omp` as a separate backend/provider slug in shared model/provider/factory code.
+- Registered placeholder model `omp/default`; real OMP model discovery remains a follow-up via RPC `get_available_models`.
+- Current unsupported surface: rich `extension_ui_request` handling is surfaced as an info event rather than interactive UI.
 
 ## Verification expectations
 

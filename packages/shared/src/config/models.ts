@@ -89,7 +89,7 @@ export function normalizeDeprecatedModelId(modelId: string): string {
 /**
  * Provider identifier for AI backends.
  */
-export type ModelProvider = 'anthropic' | 'pi';
+export type ModelProvider = 'anthropic' | 'pi' | 'omp';
 
 /**
  * Full model definition with capabilities and costs.
@@ -190,6 +190,20 @@ export const MODEL_REGISTRY: ModelDefinition[] = [
   //   - Pi: getModels(provider) from @earendil-works/pi-ai SDK
   // See ModelRefreshService in apps/electron/src/main/model-fetchers/
   // ----------------------------------------
+
+  // ----------------------------------------
+  // OMP Models
+  // OMP owns its real model registry. This placeholder gives Craft a stable
+  // provider/model anchor until model discovery is wired to OMP RPC.
+  // ----------------------------------------
+  {
+    id: 'omp/default',
+    name: 'OMP Default',
+    shortName: 'OMP',
+    description: 'Use the active Oh My Pi model',
+    provider: 'omp',
+    contextWindow: 200_000,
+  },
 ];
 
 // ============================================
@@ -205,6 +219,9 @@ export function getModelsByProvider(provider: ModelProvider): ModelDefinition[] 
 
 /** All Anthropic Claude models */
 export const ANTHROPIC_MODELS = getModelsByProvider('anthropic');
+
+/** Placeholder model used by the OMP RPC backend until RPC model discovery is wired. */
+export const OMP_MODELS = getModelsByProvider('omp');
 
 
 /**
