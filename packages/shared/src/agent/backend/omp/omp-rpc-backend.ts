@@ -22,6 +22,16 @@ export interface OmpModelSelection {
 interface PendingRequest {
   resolve(value: unknown): void;
   reject(error: Error): void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+export interface OmpRpcBackendOptions {
+  /** Test seam for deterministic subprocess lifecycle coverage. */
+  spawnProcess?: typeof spawn;
+  /** Override the startup timeout without changing the production default. */
+  readyTimeoutMs?: number;
+  /** Override correlated RPC response timeout for deterministic tests. */
+  requestTimeoutMs?: number;
 }
 
 function attachmentText(attachments?: FileAttachment[]): string {
@@ -111,10 +121,17 @@ export class OmpRpcBackend extends BaseAgent {
   private abortReason: AbortReason | undefined;
   private recentStderr = '';
   private selectedModelKey: string | null = null;
+  private processGeneration = 0;
+  private readonly spawnProcess: typeof spawn;
+  private readonly readyTimeoutMs: number;
+  private readonly requestTimeoutMs: number;
 
-  constructor(config: BackendConfig) {
+  constructor(config: BackendConfig, options: OmpRpcBackendOptions = {}) {
     super(config, DEFAULT_OMP_MODEL);
     this._supportsBranching = false;
+    this.spawnProcess = options.spawnProcess ?? spawn;
+    this.readyTimeoutMs = options.readyTimeoutMs ?? 15_000;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
   }
 
   protected override debug(message: string): void {
@@ -144,6 +161,9 @@ export class OmpRpcBackend extends BaseAgent {
         type: 'prompt',
         message: formatPrompt(message, attachments),
       }).catch((error) => {
+        // Child failure already owns turn termination. Its pending rejection reaches
+        // this catch on a later microtask; do not emit a duplicate error/complete pair.
+        if (this.eventQueue.isComplete) return;
         const msg = error instanceof Error ? error.message : String(error);
         this.eventQueue.enqueue({ type: 'error', message: `OMP prompt failed: ${msg}` });
         this.eventQueue.enqueue({ type: 'complete' });
@@ -301,6 +321,7 @@ export class OmpRpcBackend extends BaseAgent {
   }
 
   private spawnSubprocess(): void {
+    const generation = ++this.processGeneration;
     const runtime = this.config.runtime ?? {};
     const resolved = resolveOmpCommand(runtime.ompCommand ?? process.env.OMP_COMMAND);
     const cwd = this.workingDirectory || this.config.workspace.rootPath || process.cwd();
@@ -311,7 +332,7 @@ export class OmpRpcBackend extends BaseAgent {
 
     this.debug(`Starting OMP RPC: ${resolved.command} ${[...resolved.args, '--mode', 'rpc'].join(' ')}`);
 
-    const child = spawn(resolved.command, [...resolved.args, '--mode', 'rpc'], {
+    const child = this.spawnProcess(resolved.command, [...resolved.args, '--mode', 'rpc'], {
       cwd,
       env,
       windowsHide: true,
@@ -322,30 +343,36 @@ export class OmpRpcBackend extends BaseAgent {
       this.readyResolve = resolve;
       this.readyReject = reject;
       this.readyTimer = setTimeout(() => {
-        this.rejectReady(new Error('Timed out waiting for OMP ready frame'));
-      }, 15_000);
+        this.handleChildFailure(
+          new Error('Timed out waiting for OMP ready frame'),
+          generation,
+          child,
+        );
+      }, this.readyTimeoutMs);
     });
 
     this.stdoutReader = readline.createInterface({ input: child.stdout });
-    this.stdoutReader.on('line', (line) => this.handleLine(line));
+    this.stdoutReader.on('line', (line) => this.handleLine(line, generation));
 
     child.stderr.on('data', (chunk) => {
+      if (generation !== this.processGeneration || child !== this.child) return;
       const text = String(chunk);
       this.appendRecentStderr(text);
       this.debug(`stderr: ${text.trim().slice(0, 500)}`);
     });
 
     child.on('error', (error) => {
-      this.handleChildFailure(error);
+      this.handleChildFailure(error, generation, child);
     });
 
     child.on('exit', (code, signal) => {
       const reason = signal ? `signal ${signal}` : `code ${code ?? 0}`;
-      this.handleChildFailure(new Error(`OMP exited with ${reason}`));
+      this.handleChildFailure(new Error(`OMP exited with ${reason}`), generation, child);
     });
   }
 
-  private handleLine(line: string): void {
+  private handleLine(line: string, generation = this.processGeneration): void {
+    if (generation !== this.processGeneration) return;
     if (!line.trim()) return;
 
     let raw: Record<string, unknown>;
@@ -369,6 +396,7 @@ export class OmpRpcBackend extends BaseAgent {
       const pending = this.pending.get(adapted.response.id);
       if (pending) {
         this.pending.delete(adapted.response.id);
+        clearTimeout(pending.timer);
         if (adapted.response.success) {
           pending.resolve(adapted.response.data ?? raw);
         } else {
@@ -387,7 +415,10 @@ export class OmpRpcBackend extends BaseAgent {
   }
 
   private send(command: Record<string, unknown>): Promise<unknown> {
-    if (!this.child?.stdin?.writable) {
+    const child = this.child;
+    const stdin = child?.stdin;
+    const generation = this.processGeneration;
+    if (!stdin?.writable) {
       return Promise.reject(new Error('OMP RPC is not connected'));
     }
 
@@ -395,10 +426,20 @@ export class OmpRpcBackend extends BaseAgent {
     const frame = { id, ...command };
 
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.child?.stdin.write(`${JSON.stringify(frame)}\n`, (error) => {
+      const timer = setTimeout(() => {
+        const pending = this.pending.get(id);
+        if (!pending) return;
+        this.pending.delete(id);
+        pending.reject(new Error(`OMP RPC command timed out: ${String(command.type ?? 'unknown')}`));
+      }, this.requestTimeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      stdin.write(`${JSON.stringify(frame)}\n`, (error) => {
         if (error) {
-          this.pending.delete(id);
+          if (generation === this.processGeneration && child === this.child) {
+            const pending = this.pending.get(id);
+            if (pending) clearTimeout(pending.timer);
+            this.pending.delete(id);
+          }
           reject(error);
         }
       });
@@ -442,7 +483,12 @@ export class OmpRpcBackend extends BaseAgent {
     this.readyReject = null;
   }
 
-  private handleChildFailure(error: Error): void {
+  private handleChildFailure(
+    error: Error,
+    generation = this.processGeneration,
+    failedChild = this.child,
+  ): void {
+    if (generation !== this.processGeneration || failedChild !== this.child) return;
     this.debug(error.message);
     this.rejectReady(error);
     this.rejectPending(error);
@@ -457,6 +503,7 @@ export class OmpRpcBackend extends BaseAgent {
 
   private rejectPending(error: Error): void {
     for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
       pending.reject(error);
     }
     this.pending.clear();
@@ -464,11 +511,15 @@ export class OmpRpcBackend extends BaseAgent {
   }
 
   private killSubprocess(): void {
-    this.rejectPending(new Error('OMP RPC backend destroyed'));
+    const error = new Error('OMP RPC backend destroyed');
+    this.rejectReady(error);
+    this.rejectPending(error);
     this.cleanupChildHandles();
   }
 
   private cleanupChildHandles(): void {
+    // Invalidate stdout/error/exit callbacks captured by the old process.
+    this.processGeneration += 1;
     if (this.readyTimer) {
       clearTimeout(this.readyTimer);
       this.readyTimer = null;
