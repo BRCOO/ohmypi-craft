@@ -1,0 +1,55 @@
+name: Package Electron
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: package-electron-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: package-electron (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: mac
+            os: macos-latest
+            script: electron:dist:dev:mac
+          - platform: windows
+            os: windows-latest
+            script: electron:dist:dev:win
+          - platform: linux
+            os: ubuntu-latest
+            script: electron:dist:dev:linux
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate release metadata
+        run: bun run electron:validate-release
+
+      - name: Build package
+        run: bun run ${{ matrix.script }}
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: oh-my-pi-${{ matrix.platform }}
+          path: apps/electron/release/**/*
+          if-no-files-found: error
+          retention-days: 14

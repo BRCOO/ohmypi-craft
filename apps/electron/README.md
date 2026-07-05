@@ -1,6 +1,6 @@
-# Craft Agents Electron App
+# Oh My Pi Electron App
 
-The primary desktop interface for Craft Agents, built with Electron + React. Provides a multi-session inbox with chat interface for interacting with Claude via Craft workspaces.
+The primary desktop interface for Oh My Pi, built with Electron + React. Provides a multi-session inbox with chat interface for interacting with Claude via Craft workspaces.
 
 ## Quick Start
 
@@ -148,7 +148,7 @@ bun run sync-secrets
 **That's it!** Now `bun run electron:dev` and `bun run electron:start` work without prompts.
 
 **How it works:**
-- `.env.1password` contains `op://` references to the `Dev_Craft_Agents` vault
+- `.env.1password` contains `op://` references to the `Dev_Oh_My_Pi` vault
 - `bun run sync-secrets` resolves references → writes `.env` (gitignored)
 - Secrets are baked into the build at compile time via esbuild `--define` flags
 
@@ -171,7 +171,7 @@ bun run electron:build           # All of the above
 
 ## macOS Liquid Glass Icon
 
-The app includes a pre-compiled `Assets.car` for macOS 26+ Liquid Glass icons. This enables the layered glass effect on macOS Tahoe. On older macOS versions, the app falls back to `icon.icns`.
+The app can include a locally generated `Assets.car` for macOS 26+ Liquid Glass icons. This enables the layered glass effect on macOS Tahoe. On older macOS versions, or when `Assets.car` is not present, the app falls back to `icon.icns`.
 
 **Regenerating after icon changes:**
 
@@ -184,7 +184,7 @@ xcrun actool "resources/icon.icon" --compile "resources" \
   --platform macosx --output-partial-info-plist /dev/null
 ```
 
-> **Note:** This requires macOS 26 with Xcode 26 (macOS 26 SDK). The pre-compiled Assets.car is committed to the repo so CI builds work without the SDK.
+> **Note:** This requires macOS 26 with Xcode 26 (macOS 26 SDK). `Assets.car` is intentionally optional; CI builds work without it and use `icon.icns` as the fallback.
 
 ## Debugging
 
@@ -194,9 +194,10 @@ Enable console logging by checking the terminal where you ran `electron:start`. 
 
 DevTools opens automatically (configured in `index.ts`). Remove `mainWindow.webContents.openDevTools()` for production.
 
-## Current Limitations
+## Release Validation
 
-1. **In development only** - No electron-builder config for distribution
+- `bun run electron:validate-release` checks product metadata, artifact naming, icons, and current Oh My Pi branding.
+- `bun run electron:dist:dev:mac`, `bun run electron:dist:dev:win`, and `bun run electron:dist:dev:linux` build unsigned/dev-runtime packages for release smoke tests.
 
 ## Implemented Features
 
