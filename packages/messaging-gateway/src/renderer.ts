@@ -61,6 +61,33 @@ interface PermissionRequest {
   type?: string
 }
 
+interface ExtensionUiRequest {
+  method?: unknown
+  title?: unknown
+  message?: unknown
+  instructions?: unknown
+  url?: unknown
+  launchUrl?: unknown
+}
+
+const BLOCKING_EXTENSION_UI_METHODS = new Set(['select', 'confirm', 'input', 'editor'])
+const DESKTOP_ONLY_EXTENSION_UI_METHODS = new Set([
+  'setStatus',
+  'setWidget',
+  'setTitle',
+  'set_editor_text',
+])
+
+export function sanitizeExtensionUiUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.toString() : undefined
+  } catch {
+    return undefined
+  }
+}
+
 interface RenderState {
   // --- streaming mode ---------------------------------------------------
   /** Accumulated text for the current response (streaming mode). */
@@ -175,6 +202,13 @@ export class Renderer {
   ): Promise<void> {
     // Permission / error prompts are mode-agnostic — handle first so they
     // can't be swallowed by mode state.
+    if (event.type === 'extension_ui_request') {
+      await this.handleExtensionUiRequest(event, binding, adapter)
+      return
+    }
+    if (event.type === 'extension_ui_cancel') {
+      return
+    }
     if (event.type === 'permission_request') {
       await this.handlePermissionRequest(event, binding, adapter, this.getState(binding.id))
       return
@@ -479,6 +513,63 @@ export class Renderer {
   // ---------------------------------------------------------------------------
   // Permissions / errors (shared across modes)
   // ---------------------------------------------------------------------------
+
+  private async handleExtensionUiRequest(
+    event: SessionEvent,
+    binding: ChannelBinding,
+    adapter: PlatformAdapter,
+  ): Promise<void> {
+    const request = event.request as ExtensionUiRequest | undefined
+    const method = typeof request?.method === 'string' ? request.method : 'unknown'
+
+    if (BLOCKING_EXTENSION_UI_METHODS.has(method)) {
+      const title = typeof request?.title === 'string' ? request.title.trim() : ''
+      const detail = title ? ` (${title})` : ''
+      await this.sendText(
+        adapter,
+        binding,
+        `⏸ Oh My Pi needs desktop input${detail}. Open the desktop app to continue.`,
+      )
+      return
+    }
+
+    if (method === 'notify') {
+      const message = typeof request?.message === 'string'
+        ? request.message.trim()
+        : typeof request?.title === 'string'
+          ? request.title.trim()
+          : ''
+      if (message) await this.sendText(adapter, binding, message)
+      return
+    }
+
+    if (method === 'open_url') {
+      const safeUrl = sanitizeExtensionUiUrl(request?.launchUrl ?? request?.url)
+      const instructions = typeof request?.instructions === 'string'
+        ? request.instructions.trim()
+        : typeof request?.message === 'string'
+          ? request.message.trim()
+          : ''
+      if (safeUrl) {
+        await this.sendText(
+          adapter,
+          binding,
+          [instructions, `Open this link to continue: ${safeUrl}`].filter(Boolean).join('\n'),
+        )
+      } else {
+        await this.sendText(adapter, binding, '🔒 Oh My Pi blocked an unsafe or invalid extension link.')
+      }
+      return
+    }
+
+    if (DESKTOP_ONLY_EXTENSION_UI_METHODS.has(method)) return
+
+    await this.sendText(
+      adapter,
+      binding,
+      '⏸ Oh My Pi requested a control that is unavailable in messaging. Open the desktop app to continue.',
+    )
+  }
 
   private async handlePermissionRequest(
     event: SessionEvent,

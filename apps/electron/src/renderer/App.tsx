@@ -846,7 +846,7 @@ export default function App() {
           case 'extension_ui_request': {
             const request = effect.request
             if (request.method === 'notify') {
-              const message = request.message || request.title || 'OMP extension notification'
+              const message = request.message || request.title || t('chat.extensionUi.notification')
               if (request.notifyType === 'error') {
                 toast.error(message)
               } else if (request.notifyType === 'warning') {
@@ -1086,6 +1086,7 @@ export default function App() {
     syncSessionOptionsFromSession,
     applyPermissionModeState,
     reconcilePermissionModeState,
+    t,
   ])
 
   // Transport reconnect recovery — refresh session metadata plus active/processing
@@ -1679,11 +1680,16 @@ export default function App() {
       : true
 
     if (!success && requiresBackendResponse) {
-      toast.error('Could not deliver OMP extension UI response; the session may have stopped.')
+      toast.error(t('chat.extensionUi.deliveryFailed'), {
+        action: {
+          label: t('chat.extensionUi.openAiSettings'),
+          onClick: () => navigate(routes.view.settings()),
+        },
+      })
     }
 
     setPendingExtensionUiRequests(prev => removeExtensionUiRequest(prev, sessionId, requestId))
-  }, [pendingExtensionUiRequests])
+  }, [pendingExtensionUiRequests, t])
 
   // Centralized link interceptor: classifies file types and decides whether to
   // show an in-app preview overlay or open externally. Replaces the old

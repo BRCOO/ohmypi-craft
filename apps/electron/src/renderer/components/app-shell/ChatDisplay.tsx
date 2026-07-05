@@ -1962,9 +1962,17 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
           </div>
 
           {extensionUiHostState && (
-            <div className="shrink-0 px-4 pb-2 space-y-2">
+            <div
+              className="shrink-0 px-4 pb-2 space-y-2"
+              aria-label={t('chat.extensionUi.hostState')}
+            >
               {Object.keys(extensionUiHostState.statuses).length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
+                <div
+                  className="flex flex-wrap gap-1.5"
+                  role="status"
+                  aria-live="polite"
+                  aria-label={t('chat.extensionUi.status')}
+                >
                   {Object.entries(extensionUiHostState.statuses).map(([key, text]) => (
                     <div
                       key={key}
@@ -1980,6 +1988,8 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                 <div
                   key={key}
                   className="rounded-md border border-border/60 bg-foreground/[0.025] px-3 py-2 font-mono text-[11px] leading-4 text-muted-foreground whitespace-pre-wrap"
+                  role="note"
+                  aria-label={t('chat.extensionUi.widget', { name: key })}
                 >
                   {widget.lines.join('\n')}
                 </div>

@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it, beforeEach } from 'bun:test'
-import { Renderer, type SessionEvent } from '../renderer'
+import { Renderer, sanitizeExtensionUiUrl, type SessionEvent } from '../renderer'
 import {
   DEFAULT_BINDING_CONFIG,
   type AdapterCapabilities,
@@ -152,6 +152,81 @@ const ev = {
   }),
   complete: (): SessionEvent => ({ type: 'complete', sessionId: 's' }),
 }
+
+describe('Renderer — OMP extension UI fallback', () => {
+  it('asks for desktop input for blocking controls in every response mode', async () => {
+    for (const responseMode of ['streaming', 'progress', 'final_only'] as ResponseMode[]) {
+      const renderer = new Renderer()
+      const adapter = makeAdapter()
+      await renderer.handle({
+        type: 'extension_ui_request',
+        sessionId: 's',
+        request: { method: 'select', title: 'Choose environment' },
+      }, makeBinding({ responseMode }), adapter)
+
+      expect(adapter.calls.at(-1)?.text).toContain('needs desktop input (Choose environment)')
+    }
+  })
+
+  it('forwards notification text but keeps desktop-only host state silent', async () => {
+    const renderer = new Renderer()
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+
+    await renderer.handle({
+      type: 'extension_ui_request',
+      sessionId: 's',
+      request: { method: 'notify', message: 'Build finished' },
+    }, binding, adapter)
+    await renderer.handle({
+      type: 'extension_ui_request',
+      sessionId: 's',
+      request: { method: 'setStatus', statusText: 'running' },
+    }, binding, adapter)
+
+    expect(adapter.calls.filter((call) => call.kind === 'sendText').map((call) => call.text)).toEqual(['Build finished'])
+  })
+
+  it('only renders http and https extension links', async () => {
+    expect(sanitizeExtensionUiUrl('https://example.com/auth')).toBe('https://example.com/auth')
+    expect(sanitizeExtensionUiUrl('http://localhost:3000/callback')).toBe('http://localhost:3000/callback')
+    expect(sanitizeExtensionUiUrl('file:///etc/passwd')).toBeUndefined()
+    expect(sanitizeExtensionUiUrl('javascript:alert(1)')).toBeUndefined()
+
+    const renderer = new Renderer()
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await renderer.handle({
+      type: 'extension_ui_request',
+      sessionId: 's',
+      request: { method: 'open_url', url: 'file:///secret', instructions: 'Authenticate' },
+    }, binding, adapter)
+
+    expect(adapter.calls.at(-1)?.text).toContain('blocked an unsafe or invalid extension link')
+    expect(adapter.calls.at(-1)?.text).not.toContain('file:///secret')
+  })
+
+  it('does not fabricate a response or emit a second message for cancellation', async () => {
+    const renderer = new Renderer()
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await renderer.handle({
+      type: 'extension_ui_request',
+      sessionId: 's',
+      request: { method: 'custom-control', raw: { secret: 'never leak' } },
+    }, binding, adapter)
+    await renderer.handle({
+      type: 'extension_ui_cancel',
+      sessionId: 's',
+      requestId: 'cancel-1',
+      targetId: 'custom-1',
+    }, binding, adapter)
+
+    expect(adapter.calls.filter((call) => call.kind === 'sendText')).toHaveLength(1)
+    expect(adapter.calls[0]?.text).toContain('unavailable in messaging')
+    expect(adapter.calls[0]?.text).not.toContain('never leak')
+  })
+})
 
 // ---------------------------------------------------------------------------
 // progress mode (default)
