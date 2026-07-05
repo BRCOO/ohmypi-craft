@@ -45,6 +45,15 @@ const IGNORED_CONSOLE_PATTERNS = [
   'theme name already registered',
 ]
 
+type SentryElectronRendererOptions = NonNullable<Parameters<typeof sentryInit>[0]>
+type SentryElectronRendererIntegration =
+  NonNullable<SentryElectronRendererOptions['integrations']> extends Array<infer T>
+    ? T
+    : never
+
+const captureConsoleForElectron = captureConsoleIntegration({ levels: ['error'] }) as unknown as SentryElectronRendererIntegration
+const sentryReactInitForElectron = Sentry.init as unknown as NonNullable<Parameters<typeof sentryInit>[1]>
+
 // Initialize Sentry in the renderer process using the dual-init pattern.
 // Combines Electron IPC transport (sentryInit) with React error boundary support (sentryReactInit).
 // DSN and config are inherited from the main process init.
@@ -55,7 +64,7 @@ const IGNORED_CONSOLE_PATTERNS = [
 // NOTE: Source map upload is intentionally disabled — see main/index.ts for details.
 sentryInit(
   {
-    integrations: [captureConsoleIntegration({ levels: ['error'] })],
+    integrations: [captureConsoleForElectron],
 
     beforeSend(event) {
       // Drop events matching known-harmless console patterns to avoid Sentry quota waste
@@ -88,7 +97,7 @@ sentryInit(
       return event
     },
   },
-  Sentry.init,
+  sentryReactInitForElectron,
 )
 
 /**

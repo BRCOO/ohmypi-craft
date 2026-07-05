@@ -27,6 +27,6 @@
       "@craft-agent/core/*": ["../core/src/*"]
     }
   },
-  "include": ["src/**/*", "../shared/src/agent/bash-parser.d.ts"],
+  "include": ["src/**/*", "../shared/src/**/*.d.ts"],
   "exclude": ["node_modules", "dist"]
 }
