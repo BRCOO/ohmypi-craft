@@ -6568,15 +6568,22 @@ export class SessionManager implements ISessionManager {
     requestId: string,
     response: import('@craft-agent/shared/protocol').ExtensionUiResponse,
   ): boolean {
+    const requestKey = this.extensionUiRequestKey(sessionId, requestId)
+    if (!this.pendingExtensionUiRequests.has(requestKey)) {
+      sessionLog.warn(`Cannot respond to stale extension UI request ${requestId} for session ${sessionId}`)
+      return false
+    }
+
     const managed = this.sessions.get(sessionId)
     const responder = managed?.agent?.respondToExtensionUiRequest
     if (managed?.agent && typeof responder === 'function') {
-      this.pendingExtensionUiRequests.delete(this.extensionUiRequestKey(sessionId, requestId))
+      this.pendingExtensionUiRequests.delete(requestKey)
       sessionLog.info(`Delivering extension UI response for ${requestId}`)
       responder.call(managed.agent, requestId, response)
       return true
     }
 
+    this.pendingExtensionUiRequests.delete(requestKey)
     sessionLog.warn(`Cannot respond to extension UI - no capable agent for session ${sessionId}`)
     return false
   }

@@ -73,15 +73,14 @@ import { getFileManagerName } from '@/lib/platform'
 import { rendererLog } from '@/lib/logger'
 import { ActionRegistryProvider } from '@/actions'
 import { toast } from 'sonner'
+import {
+  enqueueExtensionUiRequest,
+  removeExtensionUiRequest,
+  shouldQueueExtensionUiRequest,
+  updateExtensionUiHostStates,
+} from '@/lib/extension-ui-state'
 
 type AppState = 'loading' | 'onboarding' | 'reauth' | 'workspace-picker' | 'ready'
-
-const QUEUED_EXTENSION_UI_METHODS = new Set(['select', 'confirm', 'input', 'editor', 'open_url'])
-
-function shouldQueueExtensionUiRequest(request: ExtensionUiRequest): boolean {
-  return QUEUED_EXTENSION_UI_METHODS.has(request.method)
-    || !['notify', 'setStatus', 'setTitle', 'set_editor_text'].includes(request.method)
-}
 
 /** Type for the Jotai store returned by useStore() */
 type JotaiStore = ReturnType<typeof getDefaultStore>
@@ -868,47 +867,12 @@ export default function App() {
             }
 
             if (request.method === 'setStatus') {
-              const key = request.statusKey || 'status'
-              setExtensionUiHostStates(prevStates => {
-                const next = new Map(prevStates)
-                const current = next.get(sessionId) ?? { statuses: {}, widgets: {} }
-                const statuses = { ...current.statuses }
-                if (request.statusText === undefined) {
-                  delete statuses[key]
-                } else {
-                  statuses[key] = request.statusText
-                }
-                if (Object.keys(statuses).length === 0 && Object.keys(current.widgets).length === 0) {
-                  next.delete(sessionId)
-                } else {
-                  next.set(sessionId, { ...current, statuses })
-                }
-                return next
-              })
+              setExtensionUiHostStates(prevStates => updateExtensionUiHostStates(prevStates, sessionId, request))
               break
             }
 
             if (request.method === 'setWidget') {
-              const key = request.widgetKey || 'widget'
-              setExtensionUiHostStates(prevStates => {
-                const next = new Map(prevStates)
-                const current = next.get(sessionId) ?? { statuses: {}, widgets: {} }
-                const widgets = { ...current.widgets }
-                if (request.widgetLines === undefined) {
-                  delete widgets[key]
-                } else {
-                  widgets[key] = {
-                    lines: request.widgetLines,
-                    placement: request.widgetPlacement,
-                  }
-                }
-                if (Object.keys(current.statuses).length === 0 && Object.keys(widgets).length === 0) {
-                  next.delete(sessionId)
-                } else {
-                  next.set(sessionId, { ...current, widgets })
-                }
-                return next
-              })
+              setExtensionUiHostStates(prevStates => updateExtensionUiHostStates(prevStates, sessionId, request))
               break
             }
 
@@ -917,27 +881,12 @@ export default function App() {
             }
 
             if (shouldQueueExtensionUiRequest(request)) {
-              setPendingExtensionUiRequests(prevRequests => {
-                const next = new Map(prevRequests)
-                const existingQueue = next.get(sessionId) || []
-                next.set(sessionId, [...existingQueue, request])
-                return next
-              })
+              setPendingExtensionUiRequests(prevRequests => enqueueExtensionUiRequest(prevRequests, sessionId, request))
             }
             break
           }
           case 'extension_ui_cancel': {
-            setPendingExtensionUiRequests(prevRequests => {
-              const next = new Map(prevRequests)
-              const queue = next.get(sessionId) || []
-              const remainingQueue = queue.filter(request => request.requestId !== effect.targetId)
-              if (remainingQueue.length === 0) {
-                next.delete(sessionId)
-              } else {
-                next.set(sessionId, remainingQueue)
-              }
-              return next
-            })
+            setPendingExtensionUiRequests(prevRequests => removeExtensionUiRequest(prevRequests, sessionId, effect.targetId))
             break
           }
           case 'restore_input': {
@@ -1733,17 +1682,7 @@ export default function App() {
       toast.error('Could not deliver OMP extension UI response; the session may have stopped.')
     }
 
-    setPendingExtensionUiRequests(prev => {
-      const next = new Map(prev)
-      const queue = next.get(sessionId) || []
-      const remainingQueue = queue.filter(item => item.requestId !== requestId)
-      if (remainingQueue.length === 0) {
-        next.delete(sessionId)
-      } else {
-        next.set(sessionId, remainingQueue)
-      }
-      return next
-    })
+    setPendingExtensionUiRequests(prev => removeExtensionUiRequest(prev, sessionId, requestId))
   }, [pendingExtensionUiRequests])
 
   // Centralized link interceptor: classifies file types and decides whether to

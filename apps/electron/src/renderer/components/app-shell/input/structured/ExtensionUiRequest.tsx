@@ -11,6 +11,11 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
+import {
+  createExtensionUiResponseGate,
+  getExtensionUiTimeoutMs,
+  isBlockingExtensionUiMethod,
+} from '@/lib/extension-ui-state'
 import type {
   ExtensionUiRequest as ExtensionUiRequestType,
   ExtensionUiResponse,
@@ -22,8 +27,6 @@ interface ExtensionUiRequestProps {
   unstyled?: boolean
 }
 
-const BLOCKING_METHODS = new Set(['select', 'confirm', 'input', 'editor'])
-
 function requestDescription(request: ExtensionUiRequestType): string | undefined {
   return request.message || request.instructions
 }
@@ -34,30 +37,32 @@ export function ExtensionUiRequest({
   unstyled = false,
 }: ExtensionUiRequestProps) {
   const [value, setValue] = React.useState(request.prefill ?? '')
-  const respondedRef = React.useRef(false)
   const onResponseRef = React.useRef(onResponse)
+  const responseGateRef = React.useRef<ReturnType<typeof createExtensionUiResponseGate> | null>(null)
   const description = requestDescription(request)
   const targetUrl = request.launchUrl || request.url
+  const requestTimeoutMs = getExtensionUiTimeoutMs(request)
   onResponseRef.current = onResponse
+  if (!responseGateRef.current) {
+    responseGateRef.current = createExtensionUiResponseGate((response) => onResponseRef.current(response))
+  }
 
   const respond = React.useCallback((response: ExtensionUiResponse) => {
-    if (respondedRef.current) return
-    respondedRef.current = true
-    onResponseRef.current(response)
+    responseGateRef.current?.respond(response)
   }, [])
 
   React.useEffect(() => {
-    respondedRef.current = false
+    responseGateRef.current?.reset()
     setValue(request.prefill ?? '')
   }, [request.requestId, request.prefill])
 
   React.useEffect(() => {
-    if (!request.timeoutMs || !BLOCKING_METHODS.has(request.method)) return
+    if (!requestTimeoutMs) return
     const timer = window.setTimeout(() => {
       respond({ cancelled: true, timedOut: true })
-    }, request.timeoutMs)
+    }, requestTimeoutMs)
     return () => window.clearTimeout(timer)
-  }, [request.requestId, request.method, request.timeoutMs, respond])
+  }, [request.requestId, requestTimeoutMs, respond])
 
   const submitValue = (event: React.FormEvent) => {
     event.preventDefault()
@@ -213,7 +218,7 @@ export function ExtensionUiRequest({
             Dismiss
           </Button>
         )}
-        {BLOCKING_METHODS.has(request.method) && request.method !== 'confirm' && (
+        {isBlockingExtensionUiMethod(request.method) && request.method !== 'confirm' && (
           <Button size="sm" variant="ghost" className="h-7 gap-1.5 text-muted-foreground" onClick={() => respond({ cancelled: true })}>
             <X className="h-3.5 w-3.5" /> Cancel
           </Button>
