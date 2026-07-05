@@ -97,6 +97,7 @@ export const BASE_SLUG_FOR_METHOD: Record<ApiSetupMethod, string> = {
   pi_chatgpt_oauth: 'chatgpt-plus',
   pi_copilot_oauth: 'github-copilot',
   pi_api_key: 'pi-api-key',
+  omp: 'omp-local',
 }
 
 /**
@@ -189,6 +190,11 @@ export function apiSetupMethodToConnectionSetup(
         iamCredentials: options.iamCredentials,
         awsRegion: options.awsRegion,
         bedrockAuthMethod: options.bedrockAuthMethod,
+      }
+    case 'omp':
+      return {
+        slug,
+        modelSelectionMode: 'automaticallySyncedFromProvider',
       }
   }
 }
@@ -634,8 +640,8 @@ export function useOnboarding({
   }, [state.apiSetupMethod, saveAndValidateConnection, editingSlug, existingSlugs])
 
   // Map ProviderChoice → ApiSetupMethod and navigate to the right step
-  const handleSelectProvider = useCallback((choice: ProviderChoice) => {
-    const CHOICE_TO_METHOD: Record<Exclude<ProviderChoice, 'local'>, ApiSetupMethod> = {
+  const handleSelectProvider = useCallback(async (choice: ProviderChoice) => {
+    const CHOICE_TO_METHOD: Record<Exclude<ProviderChoice, 'local' | 'omp'>, ApiSetupMethod> = {
       claude: 'claude_oauth',
       chatgpt: 'pi_chatgpt_oauth',
       copilot: 'pi_copilot_oauth',
@@ -645,6 +651,31 @@ export function useOnboarding({
     if (choice === 'local') {
       // Local uses anthropic_api_key with custom endpoint (Ollama doesn't need an API key)
       setState(s => ({ ...s, step: 'local-model', apiSetupMethod: 'anthropic_api_key', credentialStatus: 'idle', errorMessage: undefined }))
+      return
+    }
+
+    if (choice === 'omp') {
+      setState(s => ({
+        ...s,
+        step: 'complete',
+        apiSetupMethod: 'omp',
+        credentialStatus: 'validating',
+        completionStatus: 'saving',
+        errorMessage: undefined,
+      }))
+
+      const saved = await handleSaveConfig(
+        undefined,
+        { modelSelectionMode: 'automaticallySyncedFromProvider' },
+        'omp',
+      )
+
+      setState(s => ({
+        ...s,
+        step: saved ? 'complete' : 'provider-select',
+        credentialStatus: saved ? 'success' : 'error',
+        completionStatus: saved ? 'complete' : 'saving',
+      }))
       return
     }
 
@@ -662,7 +693,7 @@ export function useOnboarding({
       // Defer to next tick so state is updated before handleStartOAuth reads it
       setTimeout(() => handleStartOAuth(method), 0)
     }
-  }, [handleStartOAuth])
+  }, [handleSaveConfig, handleStartOAuth])
 
   // Submit authorization code (second step of OAuth flow)
   const handleSubmitAuthCode = useCallback(async (code: string) => {

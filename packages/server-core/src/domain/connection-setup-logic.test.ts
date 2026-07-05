@@ -139,6 +139,14 @@ describe('createBuiltInConnection seeds midStreamBehavior', () => {
     expect(conn.midStreamBehavior).toBe('steer')
   })
 
+  it("Oh My Pi → 'steer' with no credentials", () => {
+    const conn = createBuiltInConnection('omp-local')
+    expect(conn.name).toBe('Oh My Pi')
+    expect(conn.providerType).toBe('omp')
+    expect(conn.authType).toBe('none')
+    expect(conn.midStreamBehavior).toBe('steer')
+  })
+
   it("anthropic-api with custom endpoint becomes pi_compat → 'steer'", () => {
     const conn = createBuiltInConnection('anthropic-api', 'http://localhost:11434/v1')
     expect(conn.providerType).toBe('pi_compat')

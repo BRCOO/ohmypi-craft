@@ -49,6 +49,7 @@ Use CodeGraph before broad grep/find/manual source reading when locating or unde
 - Registered `omp` as a separate backend/provider slug in shared model/provider/factory code.
 - Kept `omp/default` as a startup fallback and added dynamic model discovery through RPC `get_available_models` plus `get_state`; Craft receives provider-qualified model IDs such as `deepseek/deepseek-v4-flash`.
 - Explicit OMP model strings such as `deepseek/deepseek-v4-flash` are translated into an RPC `set_model` call before the next prompt; a real DeepSeek smoke test completed successfully.
+- Added an onboarding/provider-select entry for Oh My Pi / OMP. It creates a keyless `omp-local` connection through the normal setup handler, refreshes OMP models immediately, and lets Craft's existing model selector display the full OMP model list.
 - Current unsupported surface: rich `extension_ui_request` handling is surfaced as an info event rather than interactive UI.
 
 ## Verification expectations

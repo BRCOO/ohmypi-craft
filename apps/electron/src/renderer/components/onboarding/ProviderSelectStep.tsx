@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next"
 import { cn } from "@/lib/utils"
-import { Key, Monitor } from "lucide-react"
+import { Key, Monitor, Sparkles } from "lucide-react"
 import { CraftAgentsSymbol } from "@/components/icons/CraftAgentsSymbol"
 import { StepFormLayout } from "./primitives"
 
@@ -12,7 +12,7 @@ import copilotIcon from "@/assets/provider-icons/copilot.svg"
  * The high-level provider choice the user makes on first launch.
  * This maps to one or more ApiSetupMethods downstream.
  */
-export type ProviderChoice = 'claude' | 'chatgpt' | 'copilot' | 'api_key' | 'local'
+export type ProviderChoice = 'claude' | 'chatgpt' | 'copilot' | 'omp' | 'api_key' | 'local'
 
 interface ProviderOption {
   id: ProviderChoice
@@ -25,6 +25,7 @@ const PROVIDER_ICONS: Record<ProviderChoice, React.ReactNode> = {
   claude: <img src={claudeIcon} alt="" className="size-5 rounded-[3px]" />,
   chatgpt: <img src={openaiIcon} alt="" className="size-5 rounded-[3px]" />,
   copilot: <img src={copilotIcon} alt="" className="size-5 rounded-[3px]" />,
+  omp: <Sparkles className="size-5" />,
   api_key: <Key className="size-5" />,
   local: <Monitor className="size-5" />,
 }
@@ -34,6 +35,8 @@ interface ProviderSelectStepProps {
   onSelect: (choice: ProviderChoice) => void
   /** Called when the user chooses to skip setup */
   onSkip?: () => void
+  /** Optional setup error to show after an automatic provider setup fails */
+  errorMessage?: string
 }
 
 /**
@@ -42,7 +45,7 @@ interface ProviderSelectStepProps {
  * Welcomes the user and asks them to pick their subscription / auth method.
  * Selecting a card immediately advances to the next step.
  */
-export function ProviderSelectStep({ onSelect, onSkip }: ProviderSelectStepProps) {
+export function ProviderSelectStep({ onSelect, onSkip, errorMessage }: ProviderSelectStepProps) {
   const { t } = useTranslation()
 
   const PROVIDER_OPTIONS: ProviderOption[] = [
@@ -63,6 +66,12 @@ export function ProviderSelectStep({ onSelect, onSkip }: ProviderSelectStepProps
       name: t("onboarding.providerSelect.githubCopilot"),
       description: t("onboarding.providerSelect.githubCopilotDesc"),
       icon: PROVIDER_ICONS.copilot,
+    },
+    {
+      id: 'omp',
+      name: 'Oh My Pi / OMP',
+      description: 'Use Oh My Pi RPC and automatically sync its available models.',
+      icon: PROVIDER_ICONS.omp,
     },
     {
       id: 'api_key',
@@ -115,6 +124,12 @@ export function ProviderSelectStep({ onSelect, onSkip }: ProviderSelectStepProps
           </button>
         ))}
       </div>
+
+      {errorMessage && (
+        <p className="mt-3 text-center text-xs text-destructive">
+          {errorMessage}
+        </p>
+      )}
 
       {onSkip && (
         <div className="mt-4 text-center">

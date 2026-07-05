@@ -146,6 +146,7 @@ export function OnboardingWizard({
           <ProviderSelectStep
             onSelect={onSelectProvider!}
             onSkip={onSkipSetup}
+            errorMessage={state.errorMessage}
           />
         )
 

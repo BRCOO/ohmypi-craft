@@ -34,7 +34,7 @@ describe('resolveSlugForMethod', () => {
   it('works for all setup methods', () => {
     const methods: ApiSetupMethod[] = [
       'anthropic_api_key', 'claude_oauth',
-      'pi_chatgpt_oauth', 'pi_copilot_oauth', 'pi_api_key',
+      'pi_chatgpt_oauth', 'pi_copilot_oauth', 'pi_api_key', 'omp',
     ]
     for (const method of methods) {
       const slug = resolveSlugForMethod(method, null, new Set())
@@ -99,6 +99,14 @@ describe('apiSetupMethodToConnectionSetup', () => {
     expect(setup.credential).toBe('sk-pi')
     expect(setup.piAuthProvider).toBe('anthropic')
     expect(setup.modelSelectionMode).toBe('userDefined3Tier')
+  })
+
+  it('omp maps to the keyless OMP connection slug and auto-sync mode', () => {
+    const setup = apiSetupMethodToConnectionSetup('omp', {}, null, new Set())
+    expect(setup.slug).toBe('omp-local')
+    expect(setup.credential).toBeUndefined()
+    expect(setup.baseUrl).toBeUndefined()
+    expect(setup.modelSelectionMode).toBe('automaticallySyncedFromProvider')
   })
 
   it('uses editingSlug when editing', () => {

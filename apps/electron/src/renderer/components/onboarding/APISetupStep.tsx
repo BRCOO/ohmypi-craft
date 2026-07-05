@@ -23,6 +23,7 @@ const BetaBadge = ({ label }: { label: string }) => (
  * - 'pi_chatgpt_oauth' → pi + oauth
  * - 'pi_copilot_oauth' → pi + oauth
  * - 'pi_api_key' → pi + api_key
+ * - 'omp' → omp + none
  */
 export type ApiSetupMethod =
   | 'anthropic_api_key'
@@ -30,6 +31,7 @@ export type ApiSetupMethod =
   | 'pi_chatgpt_oauth'
   | 'pi_copilot_oauth'
   | 'pi_api_key'
+  | 'omp'
 
 /**
  * Map ApiSetupMethod to the underlying LLM connection types.
@@ -49,6 +51,8 @@ export function apiSetupMethodToConnectionTypes(method: ApiSetupMethod): {
       return { providerType: 'pi', authType: 'oauth' };
     case 'pi_api_key':
       return { providerType: 'pi', authType: 'api_key' };
+    case 'omp':
+      return { providerType: 'omp', authType: 'none' };
   }
 }
 
@@ -66,6 +70,7 @@ const API_SETUP_ICONS: Record<ApiSetupMethod, React.ReactNode> = {
   pi_chatgpt_oauth: <Cpu className="size-4" />,
   pi_copilot_oauth: <Cpu className="size-4" />,
   pi_api_key: <Key className="size-4" />,
+  omp: <Cpu className="size-4" />,
 }
 
 interface APISetupStepProps {

@@ -4,7 +4,7 @@ Date: 2026-07-05
 
 ## Status
 
-Design approved at direction level. Implementation has not started in this branch.
+Implemented in phases on `codex/omp-rpc-backend`: OMP RPC backend, dynamic RPC model discovery, provider-qualified model selection, and a minimal onboarding entry for creating an `omp-local` connection through Craft's existing setup flow.
 
 ## Objective
 
@@ -211,4 +211,3 @@ Use fixtures derived from:
 - OMP protocol handling is isolated from renderer code.
 - Every unsupported OMP frame has an explicit Phase 1 behavior.
 - Unit tests cover the adapter before Electron smoke testing.
-
