@@ -17,6 +17,7 @@ import {
   cleanupSourceRuntimeArtifacts,
   providerTypeToAgentProvider,
   type AgentBackend,
+  type AgentProvider,
   type BackendHostRuntimeContext,
   type PostInitResult,
 } from '@craft-agent/shared/agent/backend'
@@ -2513,7 +2514,7 @@ export class SessionManager implements ISessionManager {
       managedModel: resolvedModelOption,
     })
     const targetProviderType = targetBackendContext.connection?.providerType
-      ?? (targetBackendContext.provider === 'pi' ? 'pi' : 'anthropic')
+      ?? targetBackendContext.provider
     const targetPiAuthProvider = targetBackendContext.connection?.piAuthProvider
 
     // Resolve working directory from options:
@@ -2541,7 +2542,7 @@ export class SessionManager implements ISessionManager {
       branchFromSessionPath?: string
       branchFromSdkCwd?: string
       branchFromSdkTurnId?: string
-      sourceProvider?: 'anthropic' | 'pi'
+      sourceProvider?: AgentProvider
     } | undefined
 
     if (options?.branchFromSessionId || options?.branchFromMessageId) {
@@ -2586,7 +2587,7 @@ export class SessionManager implements ISessionManager {
         managedModel: sourceManaged?.model || sourceSession.model,
       })
       const sourceProviderType = sourceBackendContext.connection?.providerType
-        ?? (sourceBackendContext.provider === 'pi' ? 'pi' : 'anthropic')
+        ?? sourceBackendContext.provider
       const sourcePiAuthProvider = sourceBackendContext.connection?.piAuthProvider
 
       const providerMismatch = sourceBackendContext.provider !== targetBackendContext.provider
