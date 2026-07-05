@@ -9,6 +9,7 @@ import type { FileAttachment } from '../../../utils/files.ts';
 import type { ChatOptions, BackendConfig } from '../types.ts';
 import { AbortReason } from '../types.ts';
 import { EventQueue } from '../event-queue.ts';
+import { resolveOmpCommand } from './omp-command.ts';
 import { OmpRpcEventAdapter } from './omp-rpc-adapter.ts';
 
 export const DEFAULT_OMP_MODEL = 'omp/default';
@@ -21,24 +22,6 @@ export interface OmpModelSelection {
 interface PendingRequest {
   resolve(value: unknown): void;
   reject(error: Error): void;
-}
-
-function resolveCommand(rawCommand: unknown): { command: string; args: string[] } {
-  const command = typeof rawCommand === 'string' && rawCommand.trim()
-    ? rawCommand.trim()
-    : 'omp';
-
-  const quoted = command.match(/^"([^"]+)"(?:\s+(.*))?$/);
-  if (quoted?.[1]) {
-    return {
-      command: quoted[1],
-      args: quoted[2] ? quoted[2].split(/\s+/).filter(Boolean) : [],
-    };
-  }
-
-  const parts = command.split(/\s+/).filter(Boolean);
-  if (parts.length <= 1) return { command, args: [] };
-  return { command: parts[0]!, args: parts.slice(1) };
 }
 
 function attachmentText(attachments?: FileAttachment[]): string {
@@ -285,7 +268,7 @@ export class OmpRpcBackend extends BaseAgent {
 
   private spawnSubprocess(): void {
     const runtime = this.config.runtime ?? {};
-    const resolved = resolveCommand(runtime.ompCommand ?? process.env.OMP_COMMAND);
+    const resolved = resolveOmpCommand(runtime.ompCommand ?? process.env.OMP_COMMAND);
     const cwd = this.workingDirectory || this.config.workspace.rootPath || process.cwd();
     const env: NodeJS.ProcessEnv = {
       ...process.env,

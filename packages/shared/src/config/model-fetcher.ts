@@ -7,8 +7,8 @@
  * has a registered fetcher — adding a new LlmProviderType without a fetcher
  * causes a type error.
  *
- * Compat providers (pi_compat) and providers without productized discovery
- * (currently OMP) are excluded from the refresh registry.
+ * Compat providers (pi_compat) are excluded because users configure their
+ * arbitrary endpoint models manually.
  */
 
 import type { ModelDefinition } from './models';
@@ -28,7 +28,6 @@ import type { LlmProviderType, LlmConnection } from './llm-connections';
  */
 export type FetchableProvider = Exclude<LlmProviderType,
   | 'pi_compat'
-  | 'omp'
 >;
 
 /**

@@ -4,7 +4,7 @@ Date: 2026-07-05
 
 ## Status
 
-Design approved in conversation. Awaiting final review before implementation planning.
+Implemented on `codex/omp-rpc-backend`.
 
 ## Objective
 
