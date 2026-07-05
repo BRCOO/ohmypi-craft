@@ -397,6 +397,37 @@ export interface TestLlmConnectionResult {
   error?: string
 }
 
+export type OmpCommandSource = 'config' | 'env' | 'default'
+
+export type OmpRuntimeErrorCode =
+  | 'not_found'
+  | 'spawn_failed'
+  | 'timeout'
+  | 'rpc_error'
+  | 'no_models'
+  | 'unknown'
+
+export interface OmpRuntimeStatus {
+  ok: boolean
+  command: string
+  args: string[]
+  rawCommand: string
+  source: OmpCommandSource
+  cwd?: string
+  elapsedMs: number
+  modelCount?: number
+  defaultModel?: string
+  error?: string
+  errorCode?: OmpRuntimeErrorCode
+  checkedAt: number
+}
+
+export interface SetOmpCommandPathResult {
+  success: boolean
+  status?: OmpRuntimeStatus
+  error?: string
+}
+
 // ---------------------------------------------------------------------------
 // Source / skill types
 // ---------------------------------------------------------------------------

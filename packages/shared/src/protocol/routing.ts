@@ -327,6 +327,11 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.pi.GET_PROVIDER_BASE_URL,
   RPC_CHANNELS.pi.GET_PROVIDER_MODELS,
 
+  // omp — runtime/config on workspace server
+  RPC_CHANNELS.omp.GET_STATUS,
+  RPC_CHANNELS.omp.SET_COMMAND_PATH,
+  RPC_CHANNELS.omp.CLEAR_COMMAND_PATH,
+
   // preferences — workspace-level preferences
   RPC_CHANNELS.preferences.READ,
   RPC_CHANNELS.preferences.WRITE,

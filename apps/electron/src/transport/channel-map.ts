@@ -166,6 +166,11 @@ export const CHANNEL_MAP = {
   getPiProviderBaseUrl: invoke(RPC_CHANNELS.pi.GET_PROVIDER_BASE_URL),
   getPiProviderModels: invoke(RPC_CHANNELS.pi.GET_PROVIDER_MODELS),
 
+  // OMP runtime diagnostics
+  getOmpRuntimeStatus: invoke(RPC_CHANNELS.omp.GET_STATUS),
+  setOmpCommandPath: invoke(RPC_CHANNELS.omp.SET_COMMAND_PATH),
+  clearOmpCommandPath: invoke(RPC_CHANNELS.omp.CLEAR_COMMAND_PATH),
+
   // Session-specific model
   getSessionModel: invoke(RPC_CHANNELS.sessions.GET_MODEL),
   setSessionModel: invoke(RPC_CHANNELS.sessions.SET_MODEL),
@@ -369,6 +374,7 @@ export const CHANNEL_MAP = {
   testLlmConnection: invoke(RPC_CHANNELS.llmConnections.TEST),
   setDefaultLlmConnection: invoke(RPC_CHANNELS.llmConnections.SET_DEFAULT),
   setWorkspaceDefaultLlmConnection: invoke(RPC_CHANNELS.llmConnections.SET_WORKSPACE_DEFAULT),
+  refreshLlmConnectionModels: invoke(RPC_CHANNELS.llmConnections.REFRESH_MODELS),
 
   // Automations
   getAutomations: invoke(RPC_CHANNELS.automations.GET),

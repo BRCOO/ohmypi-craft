@@ -87,6 +87,8 @@ export interface StoredConfig {
   networkProxy?: import('./types.ts').NetworkProxySettings;
   // Windows: path to Git Bash (bash.exe) for the SDK subprocess
   gitBashPath?: string;
+  // Path or command used to launch Oh My Pi in RPC mode. Defaults to `omp` on PATH.
+  ompCommandPath?: string;
   // User chose "Setup later" during onboarding — skip showing onboarding on next launch
   setupDeferred?: boolean;
   // Server mode — embedded remote server settings
@@ -620,6 +622,44 @@ export function clearGitBashPath(): void {
   const config = loadStoredConfig();
   if (!config || !config.gitBashPath) return;
   delete config.gitBashPath;
+  saveConfig(config);
+}
+
+/**
+ * Get persisted Oh My Pi command/path.
+ * Used to spawn `omp --mode rpc` for OMP-backed sessions and diagnostics.
+ */
+export function getOmpCommandPath(): string | undefined {
+  const config = loadStoredConfig();
+  return config?.ompCommandPath;
+}
+
+/**
+ * Persist Oh My Pi command/path.
+ * Accepts either a bare command (`omp`) or a full executable path.
+ */
+export function setOmpCommandPath(path: string): boolean {
+  const trimmed = path.trim();
+  if (!trimmed) return false;
+
+  const config = loadStoredConfig();
+  if (!config) {
+    console.warn('[storage] Failed to persist OMP command path: config could not be loaded');
+    return false;
+  }
+
+  config.ompCommandPath = trimmed;
+  saveConfig(config);
+  return true;
+}
+
+/**
+ * Clear persisted Oh My Pi command/path and fall back to OMP_COMMAND/PATH.
+ */
+export function clearOmpCommandPath(): void {
+  const config = loadStoredConfig();
+  if (!config || !config.ompCommandPath) return;
+  delete config.ompCommandPath;
   saveConfig(config);
 }
 

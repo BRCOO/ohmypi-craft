@@ -22,7 +22,7 @@ import { Spinner, FullscreenOverlayBase, Tooltip, TooltipTrigger, TooltipContent
 import { useSetAtom } from 'jotai'
 import { fullscreenOverlayOpenAtom } from '@/atoms/overlay'
 import { motion, AnimatePresence } from 'motion/react'
-import type { LlmConnectionWithStatus, ThinkingLevel, WorkspaceSettings, Workspace } from '../../../shared/types'
+import type { LlmConnectionWithStatus, OmpRuntimeStatus, ThinkingLevel, WorkspaceSettings, Workspace } from '../../../shared/types'
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVELS } from '@craft-agent/shared/agent/thinking-levels'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import {
@@ -96,6 +96,24 @@ function getModelOptionsForConnection(
     description: m.description,
     descriptionKey: m.descriptionKey,
   }))
+}
+
+function getOmpSourceLabel(source: OmpRuntimeStatus['source']): string {
+  switch (source) {
+    case 'config': return 'saved path'
+    case 'env': return 'OMP_COMMAND'
+    default: return 'PATH fallback'
+  }
+}
+
+function getOmpStatusDescription(status: OmpRuntimeStatus | null): string {
+  if (!status) return 'Checking local OMP RPC runtime…'
+  const command = status.rawCommand || status.command
+  if (status.ok) {
+    const models = typeof status.modelCount === 'number' ? `${status.modelCount} models` : 'models available'
+    return `${models} · ${getOmpSourceLabel(status.source)} · ${command}`
+  }
+  return `${getOmpSourceLabel(status.source)} · ${command} · ${status.error || 'OMP runtime is not reachable'}`
 }
 
 export const meta: DetailsPageMeta = {
@@ -652,6 +670,11 @@ export default function AiSettingsPage() {
   const [rtkStatus, setRtkStatus] = useState<{ installed: boolean; path: string | null; version: string | null } | null>(null)
   const [rtkRechecking, setRtkRechecking] = useState(false)
   const [rtkGain, setRtkGain] = useState<{ totalCommands: number; totalInput: number; totalOutput: number; totalSaved: number; avgSavingsPct: number; totalTimeMs: number; avgTimeMs: number } | null>(null)
+  const [ompStatus, setOmpStatus] = useState<OmpRuntimeStatus | null>(null)
+  const [ompCommandInput, setOmpCommandInput] = useState('')
+  const [ompChecking, setOmpChecking] = useState(false)
+  const [ompSaving, setOmpSaving] = useState(false)
+  const [ompRefreshingModels, setOmpRefreshingModels] = useState(false)
 
   // Validation state per connection
   const [validationStates, setValidationStates] = useState<Record<string, {
@@ -689,6 +712,10 @@ export default function AiSettingsPage() {
 
         const status = await window.electronAPI.getRtkStatus()
         setRtkStatus(status)
+
+        const omp = await window.electronAPI.getOmpRuntimeStatus()
+        setOmpStatus(omp)
+        setOmpCommandInput(omp.source === 'config' ? omp.rawCommand : '')
 
         // Check credential health for potential issues (corruption, machine migration)
         const health = await window.electronAPI.getCredentialHealth()
@@ -1016,6 +1043,91 @@ export default function AiSettingsPage() {
     window.electronAPI?.openUrl('https://github.com/rtk-ai/rtk')
   }, [])
 
+  const refreshOmpStatus = useCallback(async () => {
+    if (!window.electronAPI) return null
+    setOmpChecking(true)
+    try {
+      const status = await window.electronAPI.getOmpRuntimeStatus()
+      setOmpStatus(status)
+      if (status.source === 'config') setOmpCommandInput(status.rawCommand)
+      return status
+    } catch (error) {
+      console.error('Failed to check OMP runtime:', error)
+      toast.error('Failed to check OMP runtime')
+      return null
+    } finally {
+      setOmpChecking(false)
+    }
+  }, [])
+
+  const handleSaveOmpCommand = useCallback(async () => {
+    if (!window.electronAPI) return
+    const trimmed = ompCommandInput.trim()
+    if (!trimmed) {
+      toast.error('Enter an OMP command or executable path first')
+      return
+    }
+
+    setOmpSaving(true)
+    try {
+      const result = await window.electronAPI.setOmpCommandPath(trimmed)
+      if (result.status) setOmpStatus(result.status)
+      if (result.success) {
+        toast.success('OMP command path saved')
+      } else {
+        toast.error(result.error || 'OMP command path is not usable')
+      }
+    } catch (error) {
+      console.error('Failed to save OMP command path:', error)
+      toast.error('Failed to save OMP command path')
+    } finally {
+      setOmpSaving(false)
+    }
+  }, [ompCommandInput])
+
+  const handleClearOmpCommand = useCallback(async () => {
+    if (!window.electronAPI) return
+    setOmpSaving(true)
+    try {
+      const result = await window.electronAPI.clearOmpCommandPath()
+      if (result.status) setOmpStatus(result.status)
+      setOmpCommandInput('')
+      toast.success('OMP command path cleared')
+    } catch (error) {
+      console.error('Failed to clear OMP command path:', error)
+      toast.error('Failed to clear OMP command path')
+    } finally {
+      setOmpSaving(false)
+    }
+  }, [])
+
+  const handleRefreshOmpModels = useCallback(async () => {
+    if (!window.electronAPI) return
+    const ompConnections = llmConnections.filter(conn => conn.providerType === 'omp')
+    if (ompConnections.length === 0) {
+      toast.error('Add the Oh My Pi connection before refreshing OMP models')
+      return
+    }
+
+    setOmpRefreshingModels(true)
+    try {
+      for (const conn of ompConnections) {
+        const result = await window.electronAPI.refreshLlmConnectionModels(conn.slug)
+        if (!result.success) {
+          throw new Error(result.error || `Failed to refresh ${conn.name}`)
+        }
+      }
+      await refreshLlmConnections?.()
+      await refreshOmpStatus()
+      toast.success('OMP models refreshed')
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Failed to refresh OMP models'
+      toast.error(msg)
+    } finally {
+      setOmpRefreshingModels(false)
+    }
+  }, [llmConnections, refreshLlmConnections, refreshOmpStatus])
+
   const refreshRtkGain = useCallback(async () => {
     const gain = await window.electronAPI?.getRtkGain()
     setRtkGain(gain ?? null)
@@ -1106,6 +1218,76 @@ export default function AiSettingsPage() {
                   </div>
                 </SettingsSection>
               )}
+
+              {/* Oh My Pi runtime */}
+              <SettingsSection title="Oh My Pi runtime" description="Local OMP RPC status, command path, and live model discovery.">
+                <SettingsCard>
+                  <SettingsRow
+                    label={(
+                      <div className="flex items-center gap-2">
+                        {ompStatus?.ok ? (
+                          <CheckCircle2 className="size-4 text-emerald-500" />
+                        ) : ompStatus ? (
+                          <AlertTriangle className="size-4 text-amber-500" />
+                        ) : (
+                          <Spinner className="text-xs" />
+                        )}
+                        <span>{ompStatus?.ok ? 'Runtime ready' : ompStatus ? 'Runtime needs attention' : 'Checking runtime'}</span>
+                      </div>
+                    )}
+                    description={getOmpStatusDescription(ompStatus)}
+                  >
+                    <Button
+                      size="sm"
+                      onClick={refreshOmpStatus}
+                      disabled={ompChecking}
+                      className="bg-background shadow-minimal text-foreground hover:bg-foreground/5 rounded-lg"
+                    >
+                      {ompChecking ? 'Checking' : 'Recheck'}
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={handleRefreshOmpModels}
+                      disabled={ompRefreshingModels}
+                      className="bg-background shadow-minimal text-foreground hover:bg-foreground/5 rounded-lg"
+                    >
+                      {ompRefreshingModels ? 'Refreshing' : 'Refresh models'}
+                    </Button>
+                  </SettingsRow>
+                  <div className="px-4 pb-4 pt-1 space-y-2">
+                    <div className="text-xs font-medium text-foreground/70">OMP command or executable path</div>
+                    <div className="flex gap-2">
+                      <input
+                        value={ompCommandInput}
+                        onChange={(event) => setOmpCommandInput(event.target.value)}
+                        placeholder={ompStatus?.source === 'config' ? ompStatus.rawCommand : 'omp or C:\\Program Files\\Oh My Pi\\omp.exe'}
+                        className="min-w-0 flex-1 h-8 px-3 rounded-lg bg-background shadow-minimal text-sm text-foreground placeholder:text-muted-foreground/50 outline-none focus:ring-1 focus:ring-ring"
+                      />
+                      <Button
+                        size="sm"
+                        onClick={handleSaveOmpCommand}
+                        disabled={ompSaving || !ompCommandInput.trim()}
+                        className="bg-background shadow-minimal text-foreground hover:bg-foreground/5 rounded-lg"
+                      >
+                        {ompSaving ? 'Saving' : 'Save'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={handleClearOmpCommand}
+                        disabled={ompSaving || ompStatus?.source !== 'config'}
+                        className="bg-background shadow-minimal text-foreground hover:bg-foreground/5 rounded-lg"
+                      >
+                        Clear
+                      </Button>
+                    </div>
+                    {ompStatus?.defaultModel && (
+                      <div className="text-xs text-muted-foreground">
+                        Default from OMP: {ompStatus.defaultModel}
+                      </div>
+                    )}
+                  </div>
+                </SettingsCard>
+              </SettingsSection>
 
               {/* Connections Management */}
               <SettingsSection title={t("settings.ai.connections")} description={t("settings.ai.connectionsDesc")}>

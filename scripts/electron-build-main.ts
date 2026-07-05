@@ -4,6 +4,7 @@
  */
 
 import { spawn } from "bun";
+import { build } from "esbuild";
 import { existsSync, readFileSync, statSync, mkdirSync } from "fs";
 import { join } from "path";
 
@@ -20,6 +21,7 @@ const PI_AGENT_SERVER_OUTPUT = join(PI_AGENT_SERVER_DIR, "dist/index.js");
 const WA_WORKER_DIR = join(ROOT_DIR, "packages/messaging-whatsapp-worker");
 const WA_WORKER_SOURCE = join(WA_WORKER_DIR, "src/worker.ts");
 const WA_WORKER_OUTPUT = join(WA_WORKER_DIR, "dist/worker.cjs");
+const BUN_EXE = process.versions.bun ? process.execPath : "bun";
 
 // Load .env file if it exists
 function loadEnvFile(): void {
@@ -49,7 +51,7 @@ function loadEnvFile(): void {
 // To enable in the future, add @sentry/esbuild-plugin. See apps/electron/CLAUDE.md.
 // NOTE: Google OAuth credentials are NOT baked into the build - users provide their own
 // via source config. See README_FOR_OSS.md for setup instructions.
-function getBuildDefines(): string[] {
+function getBuildDefines(): Record<string, string> {
   const definedVars = [
     "SLACK_OAUTH_CLIENT_ID",
     "SLACK_OAUTH_CLIENT_SECRET",
@@ -59,10 +61,10 @@ function getBuildDefines(): string[] {
     "CRAFT_DEV_RUNTIME",
   ];
 
-  return definedVars.map((varName) => {
+  return Object.fromEntries(definedVars.map((varName) => {
     const value = process.env[varName] || "";
-    return `--define:process.env.${varName}="${value}"`;
-  });
+    return [`process.env.${varName}`, JSON.stringify(value)];
+  }));
 }
 
 // Wait for file to stabilize (no size changes)
@@ -140,25 +142,18 @@ function verifySessionToolsCore(): void {
 async function buildInterceptor(): Promise<void> {
   console.log("🔌 Building unified network interceptor...");
 
-  const proc = spawn({
-    cmd: [
-      "bun", "run", "esbuild",
-      INTERCEPTOR_SOURCE,
-      "--bundle",
-      "--platform=node",
-      "--format=cjs",
-      `--outfile=${INTERCEPTOR_OUTPUT}`,
-    ],
-    cwd: ROOT_DIR,
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-
-  const exitCode = await proc.exited;
-
-  if (exitCode !== 0) {
-    console.error("❌ Interceptor build failed with exit code", exitCode);
-    process.exit(exitCode);
+  try {
+    await build({
+      entryPoints: [INTERCEPTOR_SOURCE],
+      bundle: true,
+      platform: "node",
+      format: "cjs",
+      outfile: INTERCEPTOR_OUTPUT,
+      logLevel: "info",
+    });
+  } catch (error) {
+    console.error("❌ Interceptor build failed:", error instanceof Error ? error.message : error);
+    process.exit(1);
   }
 
   if (!existsSync(INTERCEPTOR_OUTPUT)) {
@@ -181,7 +176,7 @@ async function buildSessionServer(): Promise<void> {
 
   const proc = spawn({
     cmd: [
-      "bun", "build",
+      BUN_EXE, "build",
       join(SESSION_SERVER_DIR, "src/index.ts"),
       "--outfile", SESSION_SERVER_OUTPUT,
       "--target", "node",
@@ -229,7 +224,7 @@ async function buildPiAgentServer(): Promise<void> {
   // calls that fail at runtime since there are no node_modules relative to dist/.
   const proc = spawn({
     cmd: [
-      "bun", "build",
+      BUN_EXE, "build",
       join(PI_AGENT_SERVER_DIR, "src/index.ts"),
       "--outfile", PI_AGENT_SERVER_OUTPUT,
       "--target", "bun",
@@ -274,32 +269,28 @@ async function buildWhatsAppWorker(): Promise<void> {
   // Baileys is bundled INTO worker.cjs (not external) so the packaged app is
   // self-contained. Dynamic `import('@whiskeysockets/baileys')` is resolved
   // at bundle time because the specifier is a literal.
-  const proc = spawn({
-    cmd: [
-      "bun", "run", "esbuild",
-      WA_WORKER_SOURCE,
-      "--bundle",
-      "--platform=node",
-      "--format=cjs",
-      "--target=node20",
-      `--outfile=${WA_WORKER_OUTPUT}`,
-      "--external:electron",
-      // Baileys' runtime-optional features — wrapped in try/catch at the
-      // call site and not used by Craft Agent (we send text + documents, no
-      // link previews, no inline image processing, no terminal QR).
-      "--external:link-preview-js",
-      "--external:qrcode-terminal",
-      "--external:jimp",
-    ],
-    cwd: ROOT_DIR,
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-
-  const exitCode = await proc.exited;
-  if (exitCode !== 0) {
-    console.error("❌ WhatsApp worker build failed with exit code", exitCode);
-    process.exit(exitCode);
+  try {
+    await build({
+      entryPoints: [WA_WORKER_SOURCE],
+      bundle: true,
+      platform: "node",
+      format: "cjs",
+      target: "node20",
+      outfile: WA_WORKER_OUTPUT,
+      external: [
+        "electron",
+        // Baileys' runtime-optional features — wrapped in try/catch at the
+        // call site and not used by Craft Agent (we send text + documents, no
+        // link previews, no inline image processing, no terminal QR).
+        "link-preview-js",
+        "qrcode-terminal",
+        "jimp",
+      ],
+      logLevel: "info",
+    });
+  } catch (error) {
+    console.error("❌ WhatsApp worker build failed:", error instanceof Error ? error.message : error);
+    process.exit(1);
   }
 
   if (!existsSync(WA_WORKER_OUTPUT)) {
@@ -334,45 +325,37 @@ async function main(): Promise<void> {
   // Build WhatsApp worker (Baileys subprocess — optional package)
   await buildWhatsAppWorker();
 
-  const buildDefines = getBuildDefines();
-
   console.log("🔨 Building main process...");
-
-  const proc = spawn({
-    cmd: [
-      "bun", "run", "esbuild",
-      "apps/electron/src/main/index.ts",
-      "--bundle",
-      "--platform=node",
-      "--format=cjs",
-      "--outfile=apps/electron/dist/main.cjs",
-      "--external:electron",
-      // Claude Agent SDK is pure ESM (sdk.mjs) and calls `createRequire(import.meta.url)`
-      // at module init. esbuild's CJS bundling leaves the synthesized `import_meta.url`
-      // undefined for inner ESM modules, which throws ERR_INVALID_ARG_VALUE on load.
-      // Externalize so Node loads the SDK natively as ESM (with a real import.meta.url).
-      // Electron 39 ships Node 22.x which supports require() of ESM without TLA, so the
-      // bundled main.cjs's `require('@anthropic-ai/claude-agent-sdk')` works.
-      "--external:@anthropic-ai/claude-agent-sdk",
+  try {
+    await build({
+      entryPoints: [join(ROOT_DIR, "apps/electron/src/main/index.ts")],
+      bundle: true,
+      platform: "node",
+      format: "cjs",
+      outfile: OUTPUT_FILE,
+      external: [
+        "electron",
+        // Claude Agent SDK is pure ESM (sdk.mjs) and calls `createRequire(import.meta.url)`
+        // at module init. esbuild's CJS bundling leaves the synthesized `import_meta.url`
+        // undefined for inner ESM modules, which throws ERR_INVALID_ARG_VALUE on load.
+        // Externalize so Node loads the SDK natively as ESM (with a real import.meta.url).
+        // Electron 39 ships Node 22.x which supports require() of ESM without TLA, so the
+        // bundled main.cjs's `require('@anthropic-ai/claude-agent-sdk')` works.
+        "@anthropic-ai/claude-agent-sdk",
+      ],
       // Replace grammY's bundled polyfills (node-fetch@2 + abort-controller@3)
-      // with native Node globals. esbuild otherwise renames the polyfill's
-      // `class AbortSignal` to `_AbortSignal` to dodge collision with the
-      // global, which then breaks node-fetch@2's `constructor.name` check and
-      // fails every Telegram API call with a TypeError.
-      "--alias:node-fetch=./apps/electron/src/main/shims/node-fetch.cjs",
-      "--alias:abort-controller=./apps/electron/src/main/shims/abort-controller.cjs",
-      ...buildDefines,
-    ],
-    cwd: ROOT_DIR,
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-
-  const exitCode = await proc.exited;
-
-  if (exitCode !== 0) {
-    console.error("❌ esbuild failed with exit code", exitCode);
-    process.exit(exitCode);
+      // with native Node globals. JS API aliases are path-safe on Windows workspaces
+      // with spaces, unlike long CLI alias arguments routed through package scripts.
+      alias: {
+        "node-fetch": join(ROOT_DIR, "apps/electron/src/main/shims/node-fetch.cjs"),
+        "abort-controller": join(ROOT_DIR, "apps/electron/src/main/shims/abort-controller.cjs"),
+      },
+      define: getBuildDefines(),
+      logLevel: "info",
+    });
+  } catch (error) {
+    console.error("❌ esbuild failed:", error instanceof Error ? error.message : error);
+    process.exit(1);
   }
 
   // Wait for file to stabilize

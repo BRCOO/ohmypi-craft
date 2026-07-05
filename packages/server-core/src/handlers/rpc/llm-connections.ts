@@ -1,8 +1,10 @@
-import { RPC_CHANNELS, type LlmConnectionSetup } from '@craft-agent/shared/protocol'
+import { RPC_CHANNELS, type LlmConnectionSetup, type OmpRuntimeStatus, type SetOmpCommandPathResult } from '@craft-agent/shared/protocol'
 import { getLlmConnections, getLlmConnection, addLlmConnection, updateLlmConnection, deleteLlmConnection, getDefaultLlmConnection, setDefaultLlmConnection, touchLlmConnection, isCompatProvider, isAnthropicProvider, getDefaultModelsForConnection, getDefaultModelForConnection, type LlmConnection, type LlmConnectionWithStatus, toBedrockNativeId, deriveBedrockRegionPrefix } from '@craft-agent/shared/config'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
-import { setSetupDeferred } from '@craft-agent/shared/config/storage'
+import { clearOmpCommandPath, getOmpCommandPath, setOmpCommandPath, setSetupDeferred } from '@craft-agent/shared/config/storage'
 import {
+  checkOmpRuntime,
+  fetchBackendModels,
   resolveSetupTestConnectionHint,
   testBackendConnection,
   validateStoredBackendConnection,
@@ -43,10 +45,19 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.pi.GET_API_KEY_PROVIDERS,
   RPC_CHANNELS.pi.GET_PROVIDER_BASE_URL,
   RPC_CHANNELS.pi.GET_PROVIDER_MODELS,
+  RPC_CHANNELS.omp.GET_STATUS,
+  RPC_CHANNELS.omp.SET_COMMAND_PATH,
+  RPC_CHANNELS.omp.CLEAR_COMMAND_PATH,
 ] as const
 
 export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerDeps): void {
   const { sessionManager } = deps
+  const checkCurrentOmpRuntime = (configuredCommand: unknown = getOmpCommandPath()) => checkOmpRuntime({
+    configuredCommand,
+    envCommand: process.env.OMP_COMMAND,
+    cwd: deps.platform.appRootPath || process.cwd(),
+    timeoutMs: 15_000,
+  })
 
   // Unified handler for LLM connection setup
   server.handle(RPC_CHANNELS.settings.SETUP_LLM_CONNECTION, async (_ctx, setup: LlmConnectionSetup): Promise<{ success: boolean; error?: string }> => {
@@ -220,6 +231,37 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
         updates.modelSelectionMode = inferredMode
       }
 
+      if (pendingConnection.providerType === 'omp') {
+        try {
+          const result = await fetchBackendModels({
+            connection: pendingConnection,
+            credentials: {},
+            hostRuntime: buildBackendHostRuntimeContext(deps.platform),
+            timeoutMs: 15_000,
+          })
+          if (!result.models.length) {
+            return { success: false, error: 'OMP returned no models. Check the OMP runtime and provider credentials.' }
+          }
+
+          pendingConnection.models = result.models
+          updates.models = result.models
+          pendingConnection.modelSelectionMode = 'automaticallySyncedFromProvider'
+          updates.modelSelectionMode = 'automaticallySyncedFromProvider'
+
+          const liveDefault = result.serverDefault ?? result.models[0]?.id
+          if (liveDefault) {
+            pendingConnection.defaultModel = liveDefault
+            updates.defaultModel = liveDefault
+          }
+
+          deps.platform.logger?.info(`OMP setup live model discovery succeeded: ${result.models.length} models`)
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error)
+          deps.platform.logger?.warn(`OMP setup live model discovery failed: ${msg}`)
+          return { success: false, error: `OMP runtime unavailable: ${msg}` }
+        }
+      }
+
       if (updates.models && updates.models.length > 0) {
         const validation = validateModelList(updates.models, pendingConnection.defaultModel)
         if (!validation.valid) {
@@ -287,7 +329,7 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
       // Awaited so the model selector shows real available models immediately.
       const pendingModels = Array.isArray(pendingConnection.models) ? pendingConnection.models : []
       const isAutoSynced = pendingConnection.modelSelectionMode === 'automaticallySyncedFromProvider'
-      if (!pendingModels.length || isAutoSynced) {
+      if (pendingConnection.providerType !== 'omp' && (!pendingModels.length || isAutoSynced)) {
         try {
           await getModelRefreshService().refreshNow(setup.slug)
         } catch (err) {
@@ -394,6 +436,47 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
     } catch {
       return { models: [], totalCount: 0 }
     }
+  })
+
+  // ============================================================
+  // OMP Runtime Diagnostics
+  // ============================================================
+
+  server.handle(RPC_CHANNELS.omp.GET_STATUS, async (): Promise<OmpRuntimeStatus> => {
+    return checkCurrentOmpRuntime()
+  })
+
+  server.handle(RPC_CHANNELS.omp.SET_COMMAND_PATH, async (_ctx, path: string): Promise<SetOmpCommandPathResult> => {
+    const trimmed = typeof path === 'string' ? path.trim() : ''
+    if (!trimmed) {
+      return { success: false, error: 'OMP command path is required.' }
+    }
+
+    const status = await checkCurrentOmpRuntime(trimmed)
+    if (!status.ok) {
+      return {
+        success: false,
+        status,
+        error: status.error || 'OMP command did not respond successfully.',
+      }
+    }
+
+    if (!setOmpCommandPath(trimmed)) {
+      return {
+        success: false,
+        status,
+        error: 'Failed to save OMP command path.',
+      }
+    }
+
+    deps.platform.logger?.info(`OMP command path updated: ${trimmed}`)
+    return { success: true, status }
+  })
+
+  server.handle(RPC_CHANNELS.omp.CLEAR_COMMAND_PATH, async (): Promise<SetOmpCommandPathResult> => {
+    clearOmpCommandPath()
+    const status = await checkCurrentOmpRuntime(undefined)
+    return { success: true, status }
   })
 
   // ============================================================
@@ -598,7 +681,9 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
         return { success: false, error: 'Connection not found' }
       }
 
-      await getModelRefreshService().refreshNow(slug)
+      await getModelRefreshService().refreshNow(slug, {
+        requireLiveProviderModels: connection.providerType === 'omp',
+      })
       return { success: true }
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Unknown error'

@@ -31,6 +31,14 @@ const COPILOT_REFRESH_INTERVAL_MS = 10 * 60 * 1000
 
 type CredentialResolver = (slug: string) => Promise<ModelFetcherCredentials>
 
+export interface ModelRefreshOptions {
+  /**
+   * Require a live provider/runtime response. When true, stale persisted models
+   * and static registry fallbacks are not treated as success.
+   */
+  requireLiveProviderModels?: boolean
+}
+
 // ============================================================
 // ModelRefreshService
 // ============================================================
@@ -49,14 +57,15 @@ class ModelRefreshService {
    * Deduplicates concurrent calls for the same slug — if a refresh is already
    * in progress, callers share the same promise instead of racing.
    */
-  async refreshConnection(slug: string): Promise<void> {
-    const existing = this.inFlight.get(slug)
+  async refreshConnection(slug: string, options: ModelRefreshOptions = {}): Promise<void> {
+    const inFlightKey = `${slug}:${options.requireLiveProviderModels ? 'live' : 'fallback'}`
+    const existing = this.inFlight.get(inFlightKey)
     if (existing) return existing
 
-    const promise = this._doRefresh(slug).finally(() => {
-      this.inFlight.delete(slug)
+    const promise = this._doRefresh(slug, options).finally(() => {
+      this.inFlight.delete(inFlightKey)
     })
-    this.inFlight.set(slug, promise)
+    this.inFlight.set(inFlightKey, promise)
     return promise
   }
 
@@ -66,15 +75,21 @@ class ModelRefreshService {
    * Preserves user's defaultModel if still valid.
    * Updates connection.models in storage on success.
    */
-  private async _doRefresh(slug: string): Promise<void> {
+  private async _doRefresh(slug: string, options: ModelRefreshOptions = {}): Promise<void> {
     const connection = getLlmConnection(slug)
     if (!connection) {
       handlerLog.warn(`Model refresh: connection not found: ${slug}`)
+      if (options.requireLiveProviderModels) {
+        throw new Error(`Connection not found: ${slug}`)
+      }
       return
     }
 
     // Skip compat providers — users configure models manually
     if (isCompatProvider(connection.providerType)) {
+      if (options.requireLiveProviderModels) {
+        throw new Error(`Model discovery is not available for compatible endpoint provider: ${connection.providerType}`)
+      }
       return
     }
 
@@ -82,6 +97,9 @@ class ModelRefreshService {
     const fetcher = this.fetchers[providerType]
     if (!fetcher) {
       handlerLog.warn(`Model refresh: no fetcher for provider type: ${providerType}`)
+      if (options.requireLiveProviderModels) {
+        throw new Error(`No model fetcher for provider type: ${providerType}`)
+      }
       return
     }
 
@@ -99,6 +117,9 @@ class ModelRefreshService {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
       handlerLog.warn(`Model refresh [${slug}]: provider fetch failed: ${msg}`)
+      if (options.requireLiveProviderModels) {
+        throw new Error(msg)
+      }
     }
 
     // Layer 2: Persisted connection.models (keep what we have)
@@ -118,6 +139,9 @@ class ModelRefreshService {
 
     if (!newModels || newModels.length === 0) {
       handlerLog.warn(`Model refresh [${slug}]: no models available from any source`)
+      if (options.requireLiveProviderModels) {
+        throw new Error(`No live models available for ${slug}`)
+      }
       return
     }
 
@@ -197,8 +221,8 @@ class ModelRefreshService {
    * Also starts a periodic timer if the fetcher supports it.
    * Called when: connection created, auth completed, user clicks refresh.
    */
-  async refreshNow(slug: string): Promise<void> {
-    await this.refreshConnection(slug)
+  async refreshNow(slug: string, options: ModelRefreshOptions = {}): Promise<void> {
+    await this.refreshConnection(slug, options)
 
     // Ensure periodic timer is running
     const connection = getLlmConnection(slug)
