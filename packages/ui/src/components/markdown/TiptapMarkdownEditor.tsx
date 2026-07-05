@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
+import type { Extensions } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
 import TaskList from '@tiptap/extension-task-list'
@@ -228,6 +229,10 @@ export function TiptapMarkdownEditor({
 
   const useOfficialMarkdown = markdownEngine === 'official'
 
+  // `tiptap-markdown` and official TipTap extensions can resolve @tiptap/core
+  // through different peer paths in mixed package-manager installs. The runtime
+  // extension API is compatible; normalize the array at the editor boundary so
+  // typechecking does not depend on local node_modules topology.
   const extensions = React.useMemo(() => {
     const base = [
       StarterKit.configure({
@@ -296,7 +301,7 @@ export function TiptapMarkdownEditor({
         transformCopiedText: true,
       }),
     ]
-  }, [placeholder, useOfficialMarkdown])
+  }, [placeholder, useOfficialMarkdown]) as Extensions
 
   const initialContent = useOfficialMarkdown
     ? preprocessMarkdownForOfficial(content)

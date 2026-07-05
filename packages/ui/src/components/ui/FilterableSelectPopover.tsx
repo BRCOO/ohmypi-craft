@@ -49,7 +49,7 @@ export function FilterableSelectPopover<T>({
   closeOnSelect = false,
   minWidth = 200,
   maxWidth = 320,
-}: FilterableSelectPopoverProps<T>) {
+}: FilterableSelectPopoverProps<T>): React.ReactPortal | null {
   const { t } = useTranslation()
   const resolvedPlaceholder = filterPlaceholder ?? t('common.search')
   const [filter, setFilter] = React.useState('')
