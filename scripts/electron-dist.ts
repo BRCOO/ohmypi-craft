@@ -1,5 +1,6 @@
 import { existsSync } from 'fs'
 import { join } from 'path'
+import { downloadUv, type Arch, type Platform } from './build/common'
 
 const ROOT_DIR = join(import.meta.dir, '..')
 const ELECTRON_DIR = join(ROOT_DIR, 'apps/electron')
@@ -59,6 +60,47 @@ function builderArgs(platform: PlatformTarget): string[] {
   return args
 }
 
+function currentPlatform(): Platform {
+  if (process.platform === 'darwin') return 'darwin'
+  if (process.platform === 'win32') return 'win32'
+  if (process.platform === 'linux') return 'linux'
+  throw new Error(`Unsupported platform: ${process.platform}`)
+}
+
+function currentArch(): Arch {
+  if (process.arch === 'arm64') return 'arm64'
+  if (process.arch === 'x64') return 'x64'
+  throw new Error(`Unsupported architecture: ${process.arch}`)
+}
+
+function targetPlatform(platform: PlatformTarget): Platform {
+  if (platform === 'mac') return 'darwin'
+  if (platform === 'win') return 'win32'
+  if (platform === 'linux') return 'linux'
+  return currentPlatform()
+}
+
+function targetArchs(platform: PlatformTarget): Arch[] {
+  if (platform === 'mac') return ['arm64', 'x64']
+  if (platform === 'win' || platform === 'linux') return ['x64']
+  return currentPlatform() === 'darwin' ? ['arm64', 'x64'] : [currentArch()]
+}
+
+async function ensureBundledUv(platform: PlatformTarget): Promise<void> {
+  const resolvedPlatform = targetPlatform(platform)
+  for (const arch of targetArchs(platform)) {
+    await downloadUv({
+      platform: resolvedPlatform,
+      arch,
+      upload: false,
+      uploadLatest: false,
+      uploadScript: false,
+      rootDir: ROOT_DIR,
+      electronDir: ELECTRON_DIR,
+    })
+  }
+}
+
 async function main(): Promise<void> {
   const { platform, dev, skipBuild } = parseArgs()
   if (!existsSync(ELECTRON_BUILDER_CLI)) {
@@ -70,6 +112,8 @@ async function main(): Promise<void> {
     env.CRAFT_DEV_RUNTIME = '1'
     env.CSC_IDENTITY_AUTO_DISCOVERY = 'false'
   }
+
+  await ensureBundledUv(platform)
 
   if (!skipBuild) {
     await run([BUN_EXE, 'run', 'electron:build'], { cwd: ROOT_DIR, env })

@@ -23,10 +23,12 @@ class DocxToolSmokeTests(unittest.TestCase):
 
     def test_create_extract_template_and_replace(self) -> None:
         created = self.tmpdir / "created.docx"
+        source_md = self.tmpdir / "source.md"
+        source_md.write_text("# Report\n\nHello **world**", encoding="utf-8")
         create = self.run_tool(
             "create",
-            "--text",
-            "# Report\n\nHello **world**",
+            "--from-file",
+            str(source_md),
             "--title",
             "Q1",
             "-o",

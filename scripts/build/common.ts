@@ -191,6 +191,21 @@ function findFileRecursive(root: string, fileName: string): string | null {
   return null;
 }
 
+async function rmDirWithRetries(path: string): Promise<void> {
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+      if (!['EBUSY', 'ENOTEMPTY', 'EPERM'].includes(code) || attempt === 5) {
+        throw error;
+      }
+      await Bun.sleep(100 * attempt);
+    }
+  }
+}
+
 /**
  * Download and verify uv binary, then install it to resources/bin/<platform-arch>/uv(.exe).
  */
@@ -213,7 +228,7 @@ export async function downloadUv(config: BuildConfig): Promise<void> {
 
   mkdirSync(targetDir, { recursive: true });
   const tempDir = join(electronDir, '.uv-download-temp');
-  rmSync(tempDir, { recursive: true, force: true });
+  await rmDirWithRetries(tempDir);
   mkdirSync(tempDir, { recursive: true });
 
   try {
@@ -264,7 +279,7 @@ export async function downloadUv(config: BuildConfig): Promise<void> {
 
     console.log(`  uv installed to ${targetPath} ✓`);
   } finally {
-    rmSync(tempDir, { recursive: true, force: true });
+    await rmDirWithRetries(tempDir);
   }
 }
 
