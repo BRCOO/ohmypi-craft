@@ -289,6 +289,8 @@ export interface ElectronAPI {
   openSessionInNewWindow(workspaceId: string, sessionId: string): Promise<void>
   switchWorkspace(workspaceId: string): Promise<void>
   closeWindow(): Promise<void>
+  minimizeWindow(): Promise<void>
+  toggleMaximizeWindow(): Promise<void>
   confirmCloseWindow(): Promise<void>
   /** Cancel a pending close request (renderer handled it by closing a modal/panel). */
   cancelCloseWindow(): Promise<void>

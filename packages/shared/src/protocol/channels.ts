@@ -71,6 +71,8 @@ export const RPC_CHANNELS = {
     OPEN_SESSION_IN_NEW_WINDOW: 'window:openSessionInNewWindow',
     SWITCH_WORKSPACE: 'window:switchWorkspace',
     CLOSE: 'window:close',
+    MINIMIZE: 'window:minimize',
+    TOGGLE_MAXIMIZE: 'window:toggleMaximize',
     CLOSE_REQUESTED: 'window:closeRequested',
     CONFIRM_CLOSE: 'window:confirmClose',
     CANCEL_CLOSE: 'window:cancelClose',

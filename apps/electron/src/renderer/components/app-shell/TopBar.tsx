@@ -13,7 +13,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@craft-agent/ui"
 import { PanelLeftRounded } from "../icons/PanelLeftRounded"
 import { TopBarButton } from "../ui/TopBarButton"
 import { cn } from "@/lib/utils"
-import { isMac, isWebUI } from "@/lib/platform"
+import { isMac, isWebUI, isWindows } from "@/lib/platform"
 import { useActionLabel } from "@/actions"
 import {
   DropdownMenu,
@@ -34,6 +34,37 @@ import { AppMenu } from "../AppMenu"
 
 const RIGHT_SLOT_FULL_BADGES_THRESHOLD = 420
 const RIGHT_SLOT_TWO_BADGES_THRESHOLD = 300
+
+function WindowsWindowControls() {
+  return (
+    <div className="absolute top-0 right-0 z-[2] flex h-full titlebar-no-drag overflow-hidden rounded-tr-[10px]">
+      <button
+        type="button"
+        aria-label="Minimize window"
+        className="flex h-full w-11 items-center justify-center text-foreground/65 transition-colors duration-100 hover:bg-foreground/10 hover:text-foreground"
+        onClick={() => void window.electronAPI.minimizeWindow()}
+      >
+        <Icons.Minus className="h-4 w-4" strokeWidth={1.5} />
+      </button>
+      <button
+        type="button"
+        aria-label="Maximize or restore window"
+        className="flex h-full w-11 items-center justify-center text-foreground/65 transition-colors duration-100 hover:bg-foreground/10 hover:text-foreground"
+        onClick={() => void window.electronAPI.toggleMaximizeWindow()}
+      >
+        <Icons.Square className="h-3.5 w-3.5" strokeWidth={1.5} />
+      </button>
+      <button
+        type="button"
+        aria-label="Close window"
+        className="flex h-full w-11 items-center justify-center text-foreground/65 transition-colors duration-100 hover:bg-destructive hover:text-white"
+        onClick={() => void window.electronAPI.closeWindow()}
+      >
+        <Icons.X className="h-4 w-4" strokeWidth={1.5} />
+      </button>
+    </div>
+  )
+}
 
 interface TopBarProps {
   workspaces: Workspace[]
@@ -129,20 +160,23 @@ export function TopBar({
   // and has no traffic lights regardless of host OS — collapse to a normal
   // 12px inset so the logo sits at the edge.
   const menuLeftPadding = isMac && !isWebUI ? 86 : 12
+  const showWindowsWindowControls = isWindows && !isWebUI
+  const windowControlsRightPadding = showWindowsWindowControls ? 132 : 12
+  const compactRightPadding = isCompact ? windowControlsRightPadding : 0
 
   return (
     <div
-      className="fixed top-0 left-0 right-0 z-panel titlebar-drag-region"
+      className="fixed top-0 left-0 right-0 z-panel titlebar-drag-region border-b border-border/70 bg-background"
       style={{ height: 'var(--topbar-height)' }}
     >
-      <div className="flex h-full w-full items-center justify-between gap-2">
+      <div className="relative flex h-full w-full items-center justify-between gap-2">
       {/* === LEFT: Sidebar + Menu + Navigation + Workspace === */}
       {/* Keep this container draggable. Only individual interactive controls should use titlebar-no-drag. */}
       {/* In compact mode the right slot is hidden, so we add right padding here
           so the workspace pill doesn't run flush against the viewport edge. */}
       <div
         className="pointer-events-auto flex min-w-0 flex-1 items-center gap-0.5"
-        style={{ paddingLeft: menuLeftPadding, paddingRight: isCompact ? 12 : 0 }}
+        style={{ paddingLeft: menuLeftPadding, paddingRight: compactRightPadding }}
       >
         <div className="flex items-center gap-0.5">
         {!isCompact && (
@@ -223,7 +257,7 @@ export function TopBar({
 
       {/* === RIGHT: Browser strip + add + help === */}
       {!isCompact && (
-      <div ref={rightSlotRef} className="flex min-w-0 shrink-0 items-center justify-end gap-1" style={{ paddingRight: 12 }}>
+      <div ref={rightSlotRef} className="flex h-full min-w-0 shrink-0 items-center justify-end gap-1" style={{ paddingRight: windowControlsRightPadding }}>
         <div className="min-w-0">
           <BrowserTabStrip activeSessionId={activeSessionId} maxVisibleBadges={maxVisibleBrowserBadges} />
         </div>
@@ -292,6 +326,7 @@ export function TopBar({
         </DropdownMenu>
       </div>
       )}
+      {showWindowsWindowControls && <WindowsWindowControls />}
       </div>
     </div>
   )

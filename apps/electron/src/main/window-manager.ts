@@ -2,7 +2,6 @@ import { BrowserWindow, shell, nativeTheme, Menu, app } from 'electron'
 import { windowLog } from './logger'
 import { join, resolve, sep } from 'path'
 import { existsSync } from 'fs'
-import { release } from 'os'
 import { fileURLToPath } from 'url'
 import { BACKGROUND_HEX, getWorkspaceByNameOrId } from '@craft-agent/shared/config'
 import { classifyExternalUrl, formatBlockedUrlError } from '@craft-agent/shared/utils/url-safety'
@@ -11,31 +10,6 @@ import type { SavedWindow } from './window-state'
 
 // Vite dev server URL for hot reload
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
-
-/**
- * Get the appropriate background material for Windows transparency effects
- * - Windows 11 (build 22000+): Mica effect
- * - Windows 10 1809+ (build 17763+): Acrylic effect
- * - Older versions: No transparency
- */
-function getWindowsBackgroundMaterial(): 'mica' | 'acrylic' | undefined {
-  if (process.platform !== 'win32') return undefined
-
-  // os.release() returns "10.0.xxxxx" where xxxxx is the build number
-  const buildNumber = parseInt(release().split('.')[2] || '0', 10)
-
-  if (buildNumber >= 22000) {
-    windowLog.info('Windows 11 detected (build ' + buildNumber + '), using Mica')
-    return 'mica'
-  } else if (buildNumber >= 17763) {
-    windowLog.info('Windows 10 1809+ detected (build ' + buildNumber + '), using Acrylic')
-    return 'acrylic'
-  }
-
-  windowLog.info('Older Windows detected (build ' + buildNumber + '), no transparency')
-  return undefined
-}
-
 
 interface ManagedWindow {
   window: BrowserWindow
@@ -222,7 +196,6 @@ export class WindowManager {
     // Platform-specific window options
     const isMac = process.platform === 'darwin'
     const isWindows = process.platform === 'win32'
-    const windowsBackgroundMaterial = getWindowsBackgroundMaterial()
 
     const window = new BrowserWindow({
       width: windowWidth,
@@ -240,14 +213,13 @@ export class WindowManager {
         vibrancy: 'under-window',
         visualEffectState: 'active',
       }),
-      // Windows: use native frame with Mica/Acrylic transparency (Windows 10/11)
+      // Windows: let the renderer own the complete titlebar surface. The
+      // app-shell TopBar renders custom window controls, which avoids the
+      // native Mica/Acrylic color seam above the OMP dark chrome.
       ...(isWindows && {
-        frame: true, // Keep native frame for better UX
+        frame: false,
+        thickFrame: true,
         autoHideMenuBar: true, // Menu is null on Windows, this is just for safety
-        // Note: Don't use transparent:true with backgroundMaterial - it hides the window frame
-        ...(windowsBackgroundMaterial && {
-          backgroundMaterial: windowsBackgroundMaterial,
-        }),
       }),
       // Linux: use native frame
       ...(!isMac && !isWindows && {
@@ -578,6 +550,30 @@ export class WindowManager {
     const managed = this.windows.get(webContentsId)
     if (managed && !managed.window.isDestroyed()) {
       managed.window.close()
+    }
+  }
+
+  /**
+   * Minimize window by webContents.id.
+   */
+  minimizeWindow(webContentsId: number): void {
+    const managed = this.windows.get(webContentsId)
+    if (managed && !managed.window.isDestroyed()) {
+      managed.window.minimize()
+    }
+  }
+
+  /**
+   * Toggle maximized/restored state by webContents.id.
+   */
+  toggleMaximizeWindow(webContentsId: number): void {
+    const managed = this.windows.get(webContentsId)
+    if (managed && !managed.window.isDestroyed()) {
+      if (managed.window.isMaximized()) {
+        managed.window.unmaximize()
+      } else {
+        managed.window.maximize()
+      }
     }
   }
 

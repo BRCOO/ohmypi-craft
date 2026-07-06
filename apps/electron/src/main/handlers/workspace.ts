@@ -7,6 +7,8 @@ export const GUI_HANDLED_CHANNELS = [
   RPC_CHANNELS.window.OPEN_WORKSPACE,
   RPC_CHANNELS.window.OPEN_SESSION_IN_NEW_WINDOW,
   RPC_CHANNELS.window.CLOSE,
+  RPC_CHANNELS.window.MINIMIZE,
+  RPC_CHANNELS.window.TOGGLE_MAXIMIZE,
   RPC_CHANNELS.window.CONFIRM_CLOSE,
   RPC_CHANNELS.window.CANCEL_CLOSE,
   RPC_CHANNELS.window.SET_TRAFFIC_LIGHTS,
@@ -114,6 +116,18 @@ export function registerWorkspaceGuiHandlers(server: RpcServer, deps: HandlerDep
   server.handle(RPC_CHANNELS.window.CLOSE, (ctx) => {
     if (!windowManager) return
     windowManager.closeWindow(ctx.webContentsId!)
+  })
+
+  // Minimize the calling window (used by custom Windows titlebar controls).
+  server.handle(RPC_CHANNELS.window.MINIMIZE, (ctx) => {
+    if (!windowManager) return
+    windowManager.minimizeWindow(ctx.webContentsId!)
+  })
+
+  // Toggle maximized/restored state for the calling window.
+  server.handle(RPC_CHANNELS.window.TOGGLE_MAXIMIZE, (ctx) => {
+    if (!windowManager) return
+    windowManager.toggleMaximizeWindow(ctx.webContentsId!)
   })
 
   // Confirm close - force close the window (bypasses interception).

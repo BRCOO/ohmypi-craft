@@ -64,6 +64,8 @@ export const CHANNEL_MAP = {
   openSessionInNewWindow: invoke(RPC_CHANNELS.window.OPEN_SESSION_IN_NEW_WINDOW),
   switchWorkspace: invoke(RPC_CHANNELS.window.SWITCH_WORKSPACE),
   closeWindow: invoke(RPC_CHANNELS.window.CLOSE),
+  minimizeWindow: invoke(RPC_CHANNELS.window.MINIMIZE),
+  toggleMaximizeWindow: invoke(RPC_CHANNELS.window.TOGGLE_MAXIMIZE),
   confirmCloseWindow: invoke(RPC_CHANNELS.window.CONFIRM_CLOSE),
   cancelCloseWindow: invoke(RPC_CHANNELS.window.CANCEL_CLOSE),
   onCloseRequested: listener(RPC_CHANNELS.window.CLOSE_REQUESTED),

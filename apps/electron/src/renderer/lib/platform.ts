@@ -22,7 +22,10 @@ export const isMac =
 /** True if running on Windows */
 export const isWindows =
   typeof navigator !== 'undefined' &&
-  navigator.platform.toLowerCase().includes('win')
+  (
+    navigator.platform.toLowerCase().includes('win') ||
+    navigator.userAgent.toLowerCase().includes('windows')
+  )
 
 /** True if running on Linux */
 export const isLinux =
