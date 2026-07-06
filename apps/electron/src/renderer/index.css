@@ -68,7 +68,7 @@
    Base colors:
    - background: Light/dark surface
    - foreground: Text and icons
-   - accent: OMP iris (highlights, Auto mode)
+   - accent: OMP iris/violet (highlights, Auto mode)
    - info: Amber (warnings, Ask mode)
    - success: Green (connected, checkmarks)
    - destructive: Red (errors, failed)
@@ -98,13 +98,14 @@
   --success-rgb: 38, 136, 82;               /* RGB for shadow-tinted */
   --destructive: oklch(0.58 0.22 18);       /* red - errors, failed */
   --destructive-rgb: 188, 52, 70;           /* RGB for shadow-tinted */
-  --omp-magenta: oklch(0.70 0.24 340);
+  --omp-blue: oklch(0.66 0.18 255);
+  --omp-violet: oklch(0.68 0.22 285);
   --omp-cyan: oklch(0.81 0.14 200);
   --omp-iris: oklch(0.62 0.21 295);
-  --omp-brand-gradient: linear-gradient(135deg, var(--omp-magenta) 0%, var(--omp-iris) 42%, var(--omp-cyan) 100%);
+  --omp-brand-gradient: linear-gradient(135deg, var(--omp-blue) 0%, var(--omp-violet) 48%, var(--omp-cyan) 100%);
   --omp-brand-wash:
     radial-gradient(circle at 14% 0%, oklch(0.81 0.14 200 / 0.12), transparent 32rem),
-    radial-gradient(circle at 86% 6%, oklch(0.70 0.24 340 / 0.10), transparent 28rem);
+    radial-gradient(circle at 86% 6%, oklch(0.66 0.18 255 / 0.10), transparent 28rem);
 
   /* === SHADOW OPACITY (light mode = subtle, dark mode = stronger) === */
   --shadow-border-opacity: 0.08;            /* Border ring opacity */
@@ -251,21 +252,22 @@
   --foreground-rgb: 245, 240, 234;           /* RGB for shadow borders */
   --user-message-bubble: oklch(from var(--foreground) l c h / 0.05);
   --user-message-bubble-dimmed: oklch(from var(--foreground) l c h / 0.03);
-  --accent: oklch(0.70 0.24 340);            /* OMP magenta for dark high points */
-  --accent-rgb: 159, 68, 143;                /* RGB for shadow-tinted */
+  --accent: oklch(0.68 0.22 285);            /* OMP electric violet - brand high points */
+  --accent-rgb: 111, 75, 205;                /* RGB for shadow-tinted */
   --info: oklch(0.82 0.16 90);               /* amber */
   --info-rgb: 220, 170, 65;                  /* RGB for shadow-tinted */
   --success: oklch(0.78 0.16 150);           /* green */
   --success-rgb: 82, 180, 112;               /* RGB for shadow-tinted */
   --destructive: oklch(0.68 0.22 18);        /* brighter red in dark */
   --destructive-rgb: 214, 76, 92;            /* RGB for shadow-tinted */
-  --omp-magenta: oklch(0.70 0.24 340);
+  --omp-blue: oklch(0.66 0.18 255);
+  --omp-violet: oklch(0.68 0.22 285);
   --omp-cyan: oklch(0.81 0.14 200);
   --omp-iris: oklch(0.62 0.21 295);
-  --omp-brand-gradient: linear-gradient(135deg, var(--omp-magenta) 0%, var(--omp-iris) 42%, var(--omp-cyan) 100%);
+  --omp-brand-gradient: linear-gradient(135deg, var(--omp-blue) 0%, var(--omp-violet) 48%, var(--omp-cyan) 100%);
   --omp-brand-wash:
     radial-gradient(circle at 14% 0%, oklch(0.81 0.14 200 / 0.12), transparent 34rem),
-    radial-gradient(circle at 88% 8%, oklch(0.70 0.24 340 / 0.16), transparent 30rem);
+    radial-gradient(circle at 88% 8%, oklch(0.66 0.18 255 / 0.16), transparent 30rem);
 
   /* === SHADOW OPACITY (stronger in dark mode for visibility) === */
   --shadow-border-opacity: 0.15;

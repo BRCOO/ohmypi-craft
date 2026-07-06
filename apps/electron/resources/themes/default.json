@@ -17,7 +17,7 @@
   "dark": {
     "background": "#0f0a14",
     "foreground": "#f5f0ea",
-    "accent": "#e34fff",
+    "accent": "#8b6cff",
     "info": "#ddb241",
     "success": "#52b470",
     "destructive": "#d64c5c"

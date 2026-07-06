@@ -234,6 +234,9 @@ app.setName(process.env.CRAFT_APP_NAME || 'Oh My Pi')
 // BrowserWindow receives the new icon.
 if (process.platform === 'win32') {
   app.setAppUserModelId('com.ohmypi.desktop')
+  // OMP is dark-first. Force Electron's native Windows chrome into dark mode
+  // so the OS titlebar does not render as a pale strip above the dark shell.
+  nativeTheme.themeSource = 'dark'
 }
 
 // Register as default protocol client for craftagents:// URLs

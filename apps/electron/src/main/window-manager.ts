@@ -4,7 +4,7 @@ import { join, resolve, sep } from 'path'
 import { existsSync } from 'fs'
 import { release } from 'os'
 import { fileURLToPath } from 'url'
-import { getWorkspaceByNameOrId } from '@craft-agent/shared/config'
+import { BACKGROUND_HEX, getWorkspaceByNameOrId } from '@craft-agent/shared/config'
 import { classifyExternalUrl, formatBlockedUrlError } from '@craft-agent/shared/utils/url-safety'
 import { RPC_CHANNELS, type WindowCloseRequestSource } from '../shared/types'
 import type { SavedWindow } from './window-state'
@@ -232,6 +232,7 @@ export class WindowManager {
       show: false, // Don't show until ready-to-show event (faster perceived startup)
       title: '',
       icon: iconExists ? iconPath : undefined,
+      backgroundColor: BACKGROUND_HEX.dark,
       // macOS-specific: hidden title bar with inset traffic lights
       ...(isMac && {
         titleBarStyle: 'hiddenInset',

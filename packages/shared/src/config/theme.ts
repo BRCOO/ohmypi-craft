@@ -255,7 +255,7 @@ export const DEFAULT_THEME: ThemeOverrides = {
   dark: {
     background: 'oklch(0.135 0.018 295)',
     foreground: 'oklch(0.97 0.008 90)',
-    accent: 'oklch(0.70 0.24 340)',
+    accent: 'oklch(0.68 0.22 285)',
     info: 'oklch(0.82 0.16 90)',
     success: 'oklch(0.78 0.16 150)',
     destructive: 'oklch(0.68 0.22 18)',
