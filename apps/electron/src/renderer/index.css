@@ -29,19 +29,19 @@
 @property --background {
   syntax: "<color>";
   inherits: true;
-  initial-value: oklch(0.98 0.003 265);
+  initial-value: oklch(0.97 0.008 90);
 }
 
 @property --foreground {
   syntax: "<color>";
   inherits: true;
-  initial-value: oklch(0.185 0.01 270);
+  initial-value: oklch(0.22 0.025 285);
 }
 
 @property --accent {
   syntax: "<color>";
   inherits: true;
-  initial-value: oklch(0.62 0.13 293);
+  initial-value: oklch(0.62 0.21 295);
 }
 
 @property --info {
@@ -63,12 +63,12 @@
 }
 
 /* =============================================================================
-   CRAFT AGENT THEME - 6 Color System
+   OH MY PI THEME - 6 Color System
 
    Base colors:
    - background: Light/dark surface
    - foreground: Text and icons
-   - accent: Brand purple (highlights, Auto mode)
+   - accent: OMP iris (highlights, Auto mode)
    - info: Amber (warnings, Ask mode)
    - success: Green (connected, checkmarks)
    - destructive: Red (errors, failed)
@@ -83,21 +83,28 @@
 /* Light Mode */
 :root {
   /* === 6 BASE COLORS === */
-  --background: oklch(0.98 0.003 265);
+  --background: oklch(0.97 0.008 90);
   --background-elevated: color-mix(in srgb, var(--foreground) 1.5%, var(--background));
-  --foreground: oklch(0.185 0.01 270);
+  --foreground: oklch(0.22 0.025 285);
   --foreground-dimmed: color-mix(in srgb, var(--foreground) 80%, var(--background)); /* unfocused panel text */
-  --foreground-rgb: 38, 36, 42;             /* RGB for shadow borders */
+  --foreground-rgb: 43, 33, 58;             /* RGB for shadow borders */
   --user-message-bubble: oklch(from var(--foreground) l c h / 0.05);
   --user-message-bubble-dimmed: oklch(from var(--foreground) l c h / 0.03);
-  --accent: oklch(0.62 0.13 293);           /* purple - brand, Auto mode */
-  --accent-rgb: 104, 78, 133;               /* darkened RGB for shadow-tinted (70% of accent) */
-  --info: oklch(0.75 0.16 70);              /* amber - warnings, Ask mode */
-  --info-rgb: 180, 120, 40;                 /* RGB for shadow-tinted */
-  --success: oklch(0.55 0.17 145);          /* green - connected, checkmarks */
-  --success-rgb: 34, 120, 60;               /* RGB for shadow-tinted */
-  --destructive: oklch(0.58 0.24 28);       /* red - errors, failed */
-  --destructive-rgb: 180, 60, 50;           /* RGB for shadow-tinted */
+  --accent: oklch(0.62 0.21 295);           /* OMP iris - brand, Auto mode */
+  --accent-rgb: 98, 69, 190;                /* RGB for shadow-tinted */
+  --info: oklch(0.70 0.13 80);              /* amber - warnings, Ask mode */
+  --info-rgb: 176, 122, 28;                 /* RGB for shadow-tinted */
+  --success: oklch(0.58 0.15 150);          /* green - connected, checkmarks */
+  --success-rgb: 38, 136, 82;               /* RGB for shadow-tinted */
+  --destructive: oklch(0.58 0.22 18);       /* red - errors, failed */
+  --destructive-rgb: 188, 52, 70;           /* RGB for shadow-tinted */
+  --omp-magenta: oklch(0.70 0.24 340);
+  --omp-cyan: oklch(0.81 0.14 200);
+  --omp-iris: oklch(0.62 0.21 295);
+  --omp-brand-gradient: linear-gradient(135deg, var(--omp-magenta) 0%, var(--omp-iris) 42%, var(--omp-cyan) 100%);
+  --omp-brand-wash:
+    radial-gradient(circle at 14% 0%, oklch(0.81 0.14 200 / 0.12), transparent 32rem),
+    radial-gradient(circle at 86% 6%, oklch(0.70 0.24 340 / 0.10), transparent 28rem);
 
   /* === SHADOW OPACITY (light mode = subtle, dark mode = stronger) === */
   --shadow-border-opacity: 0.08;            /* Border ring opacity */
@@ -237,21 +244,28 @@
 /* Dark Mode */
 .dark {
   /* === 6 BASE COLORS (must match DEFAULT_THEME.dark in theme.ts) === */
-  --background: oklch(0.145 0.015 270);
+  --background: oklch(0.135 0.018 295);
   --background-elevated: color-mix(in srgb, var(--foreground) 1.5%, var(--background));
-  --foreground: oklch(0.95 0.01 270);
+  --foreground: oklch(0.97 0.008 90);
   --foreground-dimmed: color-mix(in srgb, var(--foreground) 80%, var(--background)); /* unfocused panel text */
-  --foreground-rgb: 237, 236, 240;           /* RGB for shadow borders */
+  --foreground-rgb: 245, 240, 234;           /* RGB for shadow borders */
   --user-message-bubble: oklch(from var(--foreground) l c h / 0.05);
   --user-message-bubble-dimmed: oklch(from var(--foreground) l c h / 0.03);
-  --accent: oklch(0.65 0.22 293);            /* brighter purple in dark */
-  --accent-rgb: 130, 75, 185;               /* darkened RGB for shadow-tinted (70% of accent) */
-  --info: oklch(0.78 0.14 70);               /* amber */
-  --info-rgb: 210, 155, 55;                  /* RGB for shadow-tinted */
-  --success: oklch(0.60 0.17 145);           /* green */
-  --success-rgb: 50, 140, 80;               /* RGB for shadow-tinted */
-  --destructive: oklch(0.65 0.22 28);        /* brighter red in dark */
-  --destructive-rgb: 200, 70, 60;            /* RGB for shadow-tinted */
+  --accent: oklch(0.70 0.24 340);            /* OMP magenta for dark high points */
+  --accent-rgb: 159, 68, 143;                /* RGB for shadow-tinted */
+  --info: oklch(0.82 0.16 90);               /* amber */
+  --info-rgb: 220, 170, 65;                  /* RGB for shadow-tinted */
+  --success: oklch(0.78 0.16 150);           /* green */
+  --success-rgb: 82, 180, 112;               /* RGB for shadow-tinted */
+  --destructive: oklch(0.68 0.22 18);        /* brighter red in dark */
+  --destructive-rgb: 214, 76, 92;            /* RGB for shadow-tinted */
+  --omp-magenta: oklch(0.70 0.24 340);
+  --omp-cyan: oklch(0.81 0.14 200);
+  --omp-iris: oklch(0.62 0.21 295);
+  --omp-brand-gradient: linear-gradient(135deg, var(--omp-magenta) 0%, var(--omp-iris) 42%, var(--omp-cyan) 100%);
+  --omp-brand-wash:
+    radial-gradient(circle at 14% 0%, oklch(0.81 0.14 200 / 0.12), transparent 34rem),
+    radial-gradient(circle at 88% 8%, oklch(0.70 0.24 340 / 0.16), transparent 30rem);
 
   /* === SHADOW OPACITY (stronger in dark mode for visibility) === */
   --shadow-border-opacity: 0.15;
@@ -302,7 +316,9 @@ html[data-theme-override]::before {
   content: '';
   position: fixed;
   inset: 0;
-  background: color-mix(in srgb, var(--background) 50%, transparent);
+  background:
+    var(--omp-brand-wash),
+    color-mix(in srgb, var(--background) 50%, transparent);
   z-index: -1;
   pointer-events: none;
 }

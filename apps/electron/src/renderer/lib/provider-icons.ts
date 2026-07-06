@@ -38,6 +38,7 @@ export const providerIcons = {
   ollama: ollamaIcon,
   openai: openaiIcon,
   openrouter: openrouterIcon,
+  omp: piIcon,
   pi: piIcon,
   vercel: vercelIcon,
 } as const
@@ -55,6 +56,7 @@ const providerDisplayNames: Record<string, string> = {
   minimax: 'Minimax',
   ollama: 'Ollama',
   openrouter: 'OpenRouter',
+  omp: 'Oh My Pi / OMP',
   pi: 'Oh My Pi Backend',
   pi_compat: 'Oh My Pi Backend',
   vercel: 'Vercel',
@@ -183,6 +185,8 @@ export function getProviderIcon(
       return providerIcons.openai
     case 'copilot':
       return providerIcons.copilot
+    case 'omp':
+      return providerIcons.omp
     case 'pi':
     case 'pi_compat': {
       // Resolve to actual upstream provider icon

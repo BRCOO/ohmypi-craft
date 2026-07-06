@@ -1,6 +1,6 @@
 {
   "name": "Default",
-  "description": "Clean purple-tinted neutral theme",
+  "description": "Oh My Pi ink theme with blue-violet energy accents",
   "author": "Oh My Pi",
   "license": "MIT",
   "supportedModes": ["light", "dark"],
@@ -8,18 +8,18 @@
     "light": "github-light",
     "dark": "github-dark"
   },
-  "background": "#faf9fb",
-  "foreground": "#1a1625",
-  "accent": "#8b5cf6",
-  "info": "#d97706",
-  "success": "#16a34a",
-  "destructive": "#dc2626",
+  "background": "#f5f0ea",
+  "foreground": "#2b213a",
+  "accent": "#7f5af0",
+  "info": "#b47a1c",
+  "success": "#238a52",
+  "destructive": "#bc3446",
   "dark": {
-    "background": "#1e1d21",
-    "foreground": "#f5f5f7",
-    "accent": "#a78bfa",
-    "info": "#fbbf24",
-    "success": "#22c55e",
-    "destructive": "#ef4444"
+    "background": "#0f0a14",
+    "foreground": "#f5f0ea",
+    "accent": "#e34fff",
+    "info": "#ddb241",
+    "success": "#52b470",
+    "destructive": "#d64c5c"
   }
 }

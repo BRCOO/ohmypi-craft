@@ -1,9 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg width="32px" height="32px" viewBox="0 0 32 32" version="1.1" xmlns="http://www.w3.org/2000/svg">
-    <title>Pi</title>
-    <g id="Pi" stroke="none" fill="none" fill-rule="evenodd">
-        <g transform="translate(4, 4)" fill="currentColor">
-            <path d="M2,4 L22,4 C22.5522847,4 23,4.44771525 23,5 C23,5.55228475 22.5522847,6 22,6 L17,6 L17,20 C17,20.5522847 16.5522847,21 16,21 C15.4477153,21 15,20.5522847 15,20 L15,6 L9,6 L9,20 C9,20.5522847 8.55228475,21 8,21 C7.44771525,21 7,20.5522847 7,20 L7,6 L2,6 C1.44771525,6 1,5.55228475 1,5 C1,4.44771525 1.44771525,4 2,4 Z"/>
-        </g>
-    </g>
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Oh My Pi</title>
+  <defs>
+    <linearGradient id="ompProviderBg" x1="5" y1="4" x2="28" y2="29" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7DB7FF"/>
+      <stop offset="0.44" stop-color="#8C5CFF"/>
+      <stop offset="1" stop-color="#E34FFF"/>
+    </linearGradient>
+    <linearGradient id="ompProviderMark" x1="8" y1="9" x2="23" y2="24" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EFF6FF"/>
+      <stop offset="0.55" stop-color="#8BE9FF"/>
+      <stop offset="1" stop-color="#F5F0EA"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="28" height="28" rx="7" fill="url(#ompProviderBg)"/>
+  <path
+    d="M7.75 9.5h16.5a2 2 0 0 1 0 4h-3.125v10a2 2 0 0 1-4 0v-10h-3.5v10a2 2 0 0 1-4 0v-10H7.75a2 2 0 0 1 0-4z"
+    fill="url(#ompProviderMark)"
+  />
+  <path d="M24.3 6.8h1.2v1.2h1.2v1.2h-1.2v1.2h-1.2V9.2h-1.2V8h1.2z" fill="#EFF6FF" opacity="0.9"/>
 </svg>

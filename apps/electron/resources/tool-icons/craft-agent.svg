@@ -1,10 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
   <defs>
-    <linearGradient id="g" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#7C3AED"/>
-      <stop offset="1" stop-color="#06B6D4"/>
+    <linearGradient id="ompToolBg" x1="10" y1="8" x2="56" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7DB7FF"/>
+      <stop offset="0.46" stop-color="#8C5CFF"/>
+      <stop offset="1" stop-color="#E34FFF"/>
+    </linearGradient>
+    <linearGradient id="ompToolMark" x1="16" y1="18" x2="45" y2="48" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EFF6FF"/>
+      <stop offset="0.55" stop-color="#8BE9FF"/>
+      <stop offset="1" stop-color="#F5F0EA"/>
     </linearGradient>
   </defs>
-  <rect x="6" y="6" width="52" height="52" rx="14" fill="url(#g)"/>
-  <path d="M20 32c0-6.627 5.373-12 12-12h12v8H32a4 4 0 000 8h6v8h-6c-6.627 0-12-5.373-12-12z" fill="white"/>
+  <rect x="6" y="6" width="52" height="52" rx="14" fill="url(#ompToolBg)"/>
+  <path
+    d="M15.5 19h33a4 4 0 0 1 0 8h-6.25v20a4 4 0 0 1-8 0V27h-7v20a4 4 0 0 1-8 0V27H15.5a4 4 0 0 1 0-8z"
+    fill="url(#ompToolMark)"
+  />
+  <path d="M48 14h2.5v2.5H53V19h-2.5v2.5H48V19h-2.5v-2.5H48z" fill="#EFF6FF" opacity="0.9"/>
 </svg>

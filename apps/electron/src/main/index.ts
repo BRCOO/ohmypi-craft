@@ -228,6 +228,14 @@ let pendingDeepLink: string | null = null
 // Supports multi-instance dev: CRAFT_APP_NAME env var (e.g., "Oh My Pi [1]")
 app.setName(process.env.CRAFT_APP_NAME || 'Oh My Pi')
 
+// Windows uses the AppUserModelID to group taskbar windows and resolve the app
+// icon/notifications identity. Without setting this in dev, Windows can keep
+// grouping the window under Electron or an older Craft identity even when
+// BrowserWindow receives the new icon.
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.ohmypi.desktop')
+}
+
 // Register as default protocol client for craftagents:// URLs
 // This must be done before app.whenReady() on some platforms
 if (process.defaultApp) {

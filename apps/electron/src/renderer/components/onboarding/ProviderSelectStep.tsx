@@ -1,12 +1,13 @@
 import { useTranslation } from "react-i18next"
 import { cn } from "@/lib/utils"
-import { Key, Monitor, Sparkles } from "lucide-react"
+import { Key, Monitor } from "lucide-react"
 import { CraftAgentsSymbol } from "@/components/icons/CraftAgentsSymbol"
 import { StepFormLayout } from "./primitives"
 
 import claudeIcon from "@/assets/provider-icons/claude.svg"
 import openaiIcon from "@/assets/provider-icons/openai.svg"
 import copilotIcon from "@/assets/provider-icons/copilot.svg"
+import ompIcon from "@/assets/provider-icons/pi.svg"
 
 /**
  * The high-level provider choice the user makes on first launch.
@@ -25,7 +26,7 @@ const PROVIDER_ICONS: Record<ProviderChoice, React.ReactNode> = {
   claude: <img src={claudeIcon} alt="" className="size-5 rounded-[3px]" />,
   chatgpt: <img src={openaiIcon} alt="" className="size-5 rounded-[3px]" />,
   copilot: <img src={copilotIcon} alt="" className="size-5 rounded-[3px]" />,
-  omp: <Sparkles className="size-5" />,
+  omp: <img src={ompIcon} alt="" className="size-5 rounded-[5px]" />,
   api_key: <Key className="size-5" />,
   local: <Monitor className="size-5" />,
 }
