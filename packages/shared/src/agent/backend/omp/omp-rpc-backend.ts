@@ -11,6 +11,13 @@ import { AbortReason } from '../types.ts';
 import { EventQueue } from '../event-queue.ts';
 import { resolveOmpCommand } from './omp-command.ts';
 import { OmpRpcEventAdapter } from './omp-rpc-adapter.ts';
+import {
+  parseOmpPromptResponseData,
+  parseOmpSessionState,
+  type OmpRpcCommand,
+  type OmpRpcExtensionUiResponse,
+  type OmpRpcSessionState,
+} from './omp-rpc-protocol.ts';
 
 export const DEFAULT_OMP_MODEL = 'omp/default';
 
@@ -23,6 +30,12 @@ interface PendingRequest {
   resolve(value: unknown): void;
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout>;
+}
+
+interface ActiveTurn {
+  requestId: string;
+  processGeneration: number;
+  finished: boolean;
 }
 
 export interface OmpRpcBackendOptions {
@@ -79,7 +92,7 @@ export function resolveOmpModelSelection(model: string | undefined): OmpModelSel
 export function buildOmpExtensionUiResponseFrame(
   requestId: string,
   response: ExtensionUiResponse,
-): Record<string, unknown> {
+): OmpRpcExtensionUiResponse {
   if ('value' in response) {
     return {
       type: 'extension_ui_response',
@@ -122,6 +135,9 @@ export class OmpRpcBackend extends BaseAgent {
   private recentStderr = '';
   private selectedModelKey: string | null = null;
   private processGeneration = 0;
+  private readySyncGeneration: number | null = null;
+  private sessionState: OmpRpcSessionState | null = null;
+  private activeTurn: ActiveTurn | null = null;
   private readonly spawnProcess: typeof spawn;
   private readonly readyTimeoutMs: number;
   private readonly requestTimeoutMs: number;
@@ -155,19 +171,39 @@ export class OmpRpcBackend extends BaseAgent {
 
     try {
       await this.ensureSubprocess();
+      if (!this._isProcessing) {
+        for await (const event of this.eventQueue.drain()) yield event;
+        return;
+      }
       await this.ensureModelSelected();
+      if (!this._isProcessing) {
+        for await (const event of this.eventQueue.drain()) yield event;
+        return;
+      }
 
-      this.send({
+      const promptRequest = this.createRequest({
         type: 'prompt',
         message: formatPrompt(message, attachments),
+      });
+      const activeTurn: ActiveTurn = {
+        requestId: promptRequest.id,
+        processGeneration: this.processGeneration,
+        finished: false,
+      };
+      this.activeTurn = activeTurn;
+
+      promptRequest.promise.then((data) => {
+        const promptResult = parseOmpPromptResponseData(data);
+        if (promptResult?.agentInvoked === false) {
+          this.finishTurn(promptRequest.id);
+        }
       }).catch((error) => {
         // Child failure already owns turn termination. Its pending rejection reaches
         // this catch on a later microtask; do not emit a duplicate error/complete pair.
-        if (this.eventQueue.isComplete) return;
+        if (this.eventQueue.isComplete || activeTurn.finished) return;
         const msg = error instanceof Error ? error.message : String(error);
         this.eventQueue.enqueue({ type: 'error', message: `OMP prompt failed: ${msg}` });
-        this.eventQueue.enqueue({ type: 'complete' });
-        this.eventQueue.complete();
+        this.finishTurn(promptRequest.id);
       });
 
       for await (const event of this.eventQueue.drain()) {
@@ -195,6 +231,7 @@ export class OmpRpcBackend extends BaseAgent {
       yield { type: 'complete' };
     } finally {
       this._isProcessing = false;
+      if (this.activeTurn?.finished) this.activeTurn = null;
     }
   }
 
@@ -205,14 +242,14 @@ export class OmpRpcBackend extends BaseAgent {
     this.send({ type: 'abort' }).catch((error) => {
       this.debug(`Abort command failed: ${error instanceof Error ? error.message : String(error)}`);
     });
-    this.eventQueue.complete();
+    this.finishTurnOrIdle();
   }
 
   forceAbort(reason: AbortReason): void {
     this.abortReason = reason;
     this._isProcessing = false;
     this.emitAutomationEvent('Stop', { hook_event_name: 'Stop' });
-    this.eventQueue.complete();
+    this.finishTurnOrIdle();
 
     if (reason !== AbortReason.PlanSubmitted && reason !== AbortReason.AuthRequest) {
       this.send({ type: 'abort' }).catch((error) => {
@@ -386,10 +423,7 @@ export class OmpRpcBackend extends BaseAgent {
     const adapted = this.adapter.adaptFrame(raw);
 
     if (adapted.ready) {
-      if (adapted.sessionId) {
-        this.config.onSdkSessionIdUpdate?.(adapted.sessionId);
-      }
-      this.resolveReady();
+      this.beginStateSynchronization(generation);
     }
 
     if (adapted.response?.id) {
@@ -398,7 +432,7 @@ export class OmpRpcBackend extends BaseAgent {
         this.pending.delete(adapted.response.id);
         clearTimeout(pending.timer);
         if (adapted.response.success) {
-          pending.resolve(adapted.response.data ?? raw);
+          pending.resolve(adapted.response.data);
         } else {
           pending.reject(new Error(adapted.response.error ?? 'OMP RPC command failed'));
         }
@@ -406,33 +440,44 @@ export class OmpRpcBackend extends BaseAgent {
     }
 
     for (const event of adapted.events) {
-      this.eventQueue.enqueue(event);
+      if (!this.eventQueue.isComplete) this.eventQueue.enqueue(event);
+    }
+
+    if (adapted.promptResult?.agentInvoked === false) {
+      this.finishTurn(adapted.promptResult.id);
     }
 
     if (adapted.complete) {
-      this.eventQueue.complete();
+      this.finishTurn();
     }
   }
 
-  private send(command: Record<string, unknown>): Promise<unknown> {
+  private send<T = unknown>(command: OmpRpcCommand): Promise<T> {
+    return this.createRequest<T>(command).promise;
+  }
+
+  private createRequest<T = unknown>(command: OmpRpcCommand): { id: string; promise: Promise<T> } {
     const child = this.child;
     const stdin = child?.stdin;
     const generation = this.processGeneration;
     if (!stdin?.writable) {
-      return Promise.reject(new Error('OMP RPC is not connected'));
+      return {
+        id: '',
+        promise: Promise.reject(new Error('OMP RPC is not connected')),
+      };
     }
 
     const id = `omp-${++this.requestCounter}`;
     const frame = { id, ...command };
 
-    return new Promise((resolve, reject) => {
+    const promise = new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         const pending = this.pending.get(id);
         if (!pending) return;
         this.pending.delete(id);
         pending.reject(new Error(`OMP RPC command timed out: ${String(command.type ?? 'unknown')}`));
       }, this.requestTimeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve: (value) => resolve(value as T), reject, timer });
       stdin.write(`${JSON.stringify(frame)}\n`, (error) => {
         if (error) {
           if (generation === this.processGeneration && child === this.child) {
@@ -444,9 +489,10 @@ export class OmpRpcBackend extends BaseAgent {
         }
       });
     });
+    return { id, promise };
   }
 
-  private writeSideChannel(frame: Record<string, unknown>): Promise<void> {
+  private writeSideChannel(frame: OmpRpcExtensionUiResponse): Promise<void> {
     const stdin = this.child?.stdin;
     if (!stdin?.writable) {
       return Promise.reject(new Error('OMP RPC is not connected'));
@@ -464,20 +510,14 @@ export class OmpRpcBackend extends BaseAgent {
   }
 
   private resolveReady(): void {
-    if (this.readyTimer) {
-      clearTimeout(this.readyTimer);
-      this.readyTimer = null;
-    }
+    this.clearReadyTimer();
     this.readyResolve?.();
     this.readyResolve = null;
     this.readyReject = null;
   }
 
   private rejectReady(error: Error): void {
-    if (this.readyTimer) {
-      clearTimeout(this.readyTimer);
-      this.readyTimer = null;
-    }
+    this.clearReadyTimer();
     this.readyReject?.(error);
     this.readyResolve = null;
     this.readyReject = null;
@@ -492,13 +532,12 @@ export class OmpRpcBackend extends BaseAgent {
     this.debug(error.message);
     this.rejectReady(error);
     this.rejectPending(error);
-    this.cleanupChildHandles();
 
-    if (this._isProcessing && this.abortReason === undefined) {
+    if (this._isProcessing && this.abortReason === undefined && this.activeTurn) {
       this.eventQueue.enqueue({ type: 'error', message: error.message });
-      this.eventQueue.enqueue({ type: 'complete' });
-      this.eventQueue.complete();
+      this.finishTurn();
     }
+    this.cleanupChildHandles();
   }
 
   private rejectPending(error: Error): void {
@@ -520,10 +559,7 @@ export class OmpRpcBackend extends BaseAgent {
   private cleanupChildHandles(): void {
     // Invalidate stdout/error/exit callbacks captured by the old process.
     this.processGeneration += 1;
-    if (this.readyTimer) {
-      clearTimeout(this.readyTimer);
-      this.readyTimer = null;
-    }
+    this.clearReadyTimer();
     this.stdoutReader?.close();
     this.stdoutReader = null;
 
@@ -532,6 +568,8 @@ export class OmpRpcBackend extends BaseAgent {
     this.readyPromise = null;
     this.readyResolve = null;
     this.readyReject = null;
+    this.readySyncGeneration = null;
+    this.sessionState = null;
 
     if (child && !child.killed) {
       child.kill();
@@ -540,5 +578,70 @@ export class OmpRpcBackend extends BaseAgent {
 
   private appendRecentStderr(text: string): void {
     this.recentStderr = (this.recentStderr + text).slice(-8192);
+  }
+
+  private clearReadyTimer(): void {
+    if (!this.readyTimer) return;
+    clearTimeout(this.readyTimer);
+    this.readyTimer = null;
+  }
+
+  private beginStateSynchronization(generation: number): void {
+    if (
+      generation !== this.processGeneration
+      || !this.child
+      || this.readySyncGeneration === generation
+      || !this.readyResolve
+    ) {
+      return;
+    }
+
+    const child = this.child;
+    this.readySyncGeneration = generation;
+    this.clearReadyTimer();
+
+    this.send({ type: 'get_state' }).then((data) => {
+      if (generation !== this.processGeneration || child !== this.child) return;
+      const state = parseOmpSessionState(data);
+      if (!state) {
+        throw new Error('OMP get_state returned an invalid session state');
+      }
+
+      this.sessionState = state;
+      this.config.onSdkSessionIdUpdate?.(state.sessionId);
+      this.debug(`Synchronized OMP session: ${state.sessionId}`);
+      this.resolveReady();
+    }).catch((error) => {
+      if (generation !== this.processGeneration || child !== this.child) return;
+      const message = error instanceof Error ? error.message : String(error);
+      this.handleChildFailure(
+        new Error(`Failed to synchronize OMP state: ${message}`),
+        generation,
+        child,
+      );
+    });
+  }
+
+  private finishTurn(expectedRequestId?: string): boolean {
+    const turn = this.activeTurn;
+    if (
+      !turn
+      || turn.finished
+      || turn.processGeneration !== this.processGeneration
+      || (expectedRequestId !== undefined && expectedRequestId !== turn.requestId)
+    ) {
+      return false;
+    }
+
+    turn.finished = true;
+    this.eventQueue.enqueue({ type: 'complete' });
+    this.eventQueue.complete();
+    return true;
+  }
+
+  private finishTurnOrIdle(): void {
+    if (this.finishTurn() || this.eventQueue.isComplete) return;
+    this.eventQueue.enqueue({ type: 'complete' });
+    this.eventQueue.complete();
   }
 }

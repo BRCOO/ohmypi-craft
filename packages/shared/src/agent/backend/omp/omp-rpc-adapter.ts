@@ -1,19 +1,18 @@
 import type { AgentEvent } from '@craft-agent/core/types';
 import type { PermissionRequestType } from '../types.ts';
-
-export interface OmpRpcResponseFrame {
-  id?: string;
-  command?: string;
-  success: boolean;
-  error?: string;
-  data?: Record<string, unknown>;
-}
+import {
+  parseOmpPromptResult,
+  parseOmpRpcResponse,
+  type OmpRpcPromptResultFrame,
+  type OmpRpcResponseFrame,
+} from './omp-rpc-protocol.ts';
 
 export interface OmpRpcAdaptedFrame {
   events: AgentEvent[];
   ready?: boolean;
   complete?: boolean;
   response?: OmpRpcResponseFrame;
+  promptResult?: OmpRpcPromptResultFrame;
   sessionId?: string;
 }
 
@@ -212,23 +211,18 @@ export class OmpRpcEventAdapter {
         };
 
       case 'response': {
-        const {
-          type: _type,
-          id,
-          command,
-          success,
-          error,
-          ...rest
-        } = raw;
+        const response = parseOmpRpcResponse(raw);
         return {
           events: [],
-          response: {
-            id: asString(id),
-            command: asString(command),
-            success: success !== false,
-            error: asString(error),
-            data: rest as Record<string, unknown>,
-          },
+          ...(response ? { response } : {}),
+        };
+      }
+
+      case 'prompt_result': {
+        const promptResult = parseOmpPromptResult(raw);
+        return {
+          events: [],
+          ...(promptResult ? { promptResult } : {}),
         };
       }
 
@@ -236,7 +230,7 @@ export class OmpRpcEventAdapter {
         return { events: [] };
 
       case 'agent_end':
-        return { events: [{ type: 'complete' }], complete: true };
+        return { events: [], complete: true };
 
       case 'turn_start':
         this.currentTurnId = `omp-turn-${this.turnIndex++}`;

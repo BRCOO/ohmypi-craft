@@ -8,4 +8,5 @@ export { resolveOmpCommand, resolveOmpRuntimeCommand } from './omp-command.ts';
 export type { ResolvedOmpCommand, ResolvedOmpRuntimeCommand, OmpCommandSource } from './omp-command.ts';
 export { normalizeOmpModels, resolveOmpServerDefault, DEFAULT_OMP_CONTEXT_WINDOW } from './omp-models.ts';
 export { OmpRpcEventAdapter } from './omp-rpc-adapter.ts';
-export type { OmpRpcAdaptedFrame, OmpRpcResponseFrame } from './omp-rpc-adapter.ts';
+export type { OmpRpcAdaptedFrame } from './omp-rpc-adapter.ts';
+export type { OmpRpcResponseFrame } from './omp-rpc-protocol.ts';

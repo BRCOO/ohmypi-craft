@@ -28,7 +28,7 @@
 - `abort`
 - `set_model`
 - `get_available_models`
-- `get_state`（目前只用于独立的模型发现进程）
+- `get_state`（用于独立模型发现和真实会话启动同步）
 
 这不等于 OMP 内核只运行了 6/39 的能力。`omp --mode rpc` 仍会加载 OMP 自身的工具、项目配置、技能、扩展和 MCP。但这些能力中的很大一部分没有桌面入口、状态同步、事件呈现、持久化或错误恢复。
 
@@ -74,7 +74,7 @@
 
 当前 `OmpRpcEventAdapter` 在处理 `response` 时把除公共字段外的所有字段放入 `response.data`，导致上游原本的 `data` 变成 `response.data.data`。
 
-- [ ] 按上游协议直接读取 `raw.data`。
+- [x] 按上游协议直接读取 `raw.data`。
 - [ ] 保留兼容旧 OMP 帧的兜底逻辑，但不能污染标准响应结构。
 - [ ] 为 `get_state`、`get_available_models`、`set_model` 和无数据响应分别增加单元测试。
 - [ ] 对错误响应保留 `command`、`id`、`error` 和原始帧，便于诊断。
@@ -85,11 +85,11 @@
 
 OMP 的 `/model`、`/stats`、`/context` 等 RPC/ACP 命令可能返回 `{ agentInvoked: false }`，不会产生 `agent_end`。当前后端只在 `agent_end` 时结束 `EventQueue`，因此会一直处理中。
 
-- [ ] 处理 `prompt` 响应中的 `data.agentInvoked`。
-- [ ] 处理独立的 `prompt_result` 帧。
-- [ ] 当 `agentInvoked:false` 时输出已有 `command_output`，随后只发一次 `complete`。
-- [ ] 当 `agentInvoked:true` 时继续等待正常的 `agent_end`。
-- [ ] 防止响应和 `agent_end` 同时到达时产生两个 `complete`。
+- [x] 处理 `prompt` 响应中的 `data.agentInvoked`。
+- [x] 处理独立的 `prompt_result` 帧。
+- [x] 当 `agentInvoked:false` 时输出已有 `command_output`，随后只发一次 `complete`。
+- [x] 当 `agentInvoked:true` 时继续等待正常的 `agent_end`。
+- [x] 防止响应和 `agent_end` 同时到达时产生两个 `complete`。
 - [ ] 覆盖同步命令、异步命令、技能命令、文件模板命令和扩展命令测试。
 
 验收标准：输入 `/stats`、`/context`、`/model` 等不会卡住，命令结果可见，输入框恢复可用。
@@ -98,10 +98,10 @@ OMP 的 `/model`、`/stats`、`/context` 等 RPC/ACP 命令可能返回 `{ agent
 
 上游 RPC `ready` 帧当前只输出 `{ type: "ready" }`，不保证包含 `sessionId`。当前适配器尝试从 `ready.sessionId` 更新 SDK 会话 ID，因此正常情况下拿不到会话 ID。
 
-- [ ] `ready` 后在同一个运行时子进程调用 `get_state`。
-- [ ] 从 `get_state.data.sessionId`、`sessionFile`、`sessionName` 初始化运行时状态。
-- [ ] 不再依赖非标准的 `ready.sessionId`，但保留向后兼容。
-- [ ] 把运行时 `get_state` 与模型发现进程的 `get_state` 分开；不能用临时发现进程的会话状态代表真实会话。
+- [x] `ready` 后在同一个运行时子进程调用 `get_state`。
+- [x] 从 `get_state.data.sessionId`、`sessionFile`、`sessionName` 初始化运行时状态。
+- [x] 不再依赖非标准的 `ready.sessionId`，但保留向后兼容。
+- [x] 把运行时 `get_state` 与模型发现进程的 `get_state` 分开；不能用临时发现进程的会话状态代表真实会话。
 - [ ] 子进程重启后重新同步状态、模型、思考等级、队列策略和自动维护设置。
 
 验收标准：每个 Craft 会话都能明确关联一个真实 OMP sessionId/sessionFile，崩溃重启后不会悄悄换成空会话。
@@ -110,7 +110,7 @@ OMP 的 `/model`、`/stats`、`/context` 等 RPC/ACP 命令可能返回 `{ agent
 
 当前后端用 `Record<string, unknown>` 发送所有命令，协议漂移很难在编译期发现。
 
-- [ ] 从 OMP 上游同步或生成精简的 `RpcCommand`、`RpcResponse`、事件帧类型。
+- [x] 从 OMP 上游同步或生成精简的 `RpcCommand`、`RpcResponse`、事件帧类型。
 - [ ] 为每种命令定义返回数据类型和默认超时。
 - [ ] 区分普通 request/response、无响应 side channel 和长时操作。
 - [ ] 为登录、压缩、导出等长操作配置单独超时。
@@ -143,7 +143,7 @@ OMP 的 `/model`、`/stats`、`/context` 等 RPC/ACP 命令可能返回 `{ agent
 | 4 | `abort` | 已接入 | 区分用户停止、重定向、关闭会话和崩溃原因。 |
 | 5 | `abort_and_prompt` | 未接入 | 用于可靠的“停止并立即改问”，替代本地先 abort 再猜测时序。 |
 | 6 | `new_session` | 未接入 | 把 Craft 新会话与 OMP 新会话建立一一映射，支持 `parentSession`。 |
-| 7 | `get_state` | 仅模型发现使用 | 在真实会话启动、恢复、重连和调试页使用。 |
+| 7 | `get_state` | 启动同步已接入 | 继续用于恢复、重连和调试页，并把状态接入对应 UI。 |
 | 8 | `get_available_commands` | 未接入 | 拉取动态命令并驱动输入框自动补全。 |
 | 9 | `set_todos` | 未接入 | 把桌面 Todo 编辑结果同步回 OMP。 |
 | 10 | `set_host_tools` | 未接入 | 把 Craft 数据源、会话操作和宿主工具注册给 OMP。 |
@@ -183,9 +183,9 @@ OMP 的 `/model`、`/stats`、`/context` 等 RPC/ACP 命令可能返回 `{ agent
 
 ### 5.1 基础响应和状态帧
 
-- [ ] `ready`：完成后主动获取真实状态。
+- [x] `ready`：完成后主动获取真实状态。
 - [ ] `response`：正确解包 `data`，记录命令耗时。
-- [ ] `prompt_result`：决定是否等待 `agent_end`。
+- [x] `prompt_result`：决定是否等待 `agent_end`。
 - [ ] `command_output`：保留富文本/代码块，不应全部降级为普通 info 字符串。
 - [ ] `available_commands_update`：更新命令缓存和输入框补全。
 - [ ] `config_update`：同步模型、思考等级和其他运行时配置。
@@ -774,9 +774,9 @@ OMP 当前 RPC 协议并没有使用现有适配器中的标准 `permission_resp
 
 ### 集成测试
 
-- [ ] 启动真实本地 OMP，完成 ready/get_state。
+- [x] 启动真实本地 OMP，完成 ready/get_state。
 - [ ] 普通 prompt。
-- [ ] 纯命令 prompt (`/stats`) 不挂起。
+- [x] 纯命令 prompt (`/stats`) 不挂起。
 - [ ] Skill 命令。
 - [ ] Extension blocking UI。
 - [ ] Tool streaming update。
@@ -805,9 +805,9 @@ OMP 当前 RPC 协议并没有使用现有适配器中的标准 `permission_resp
 ### Phase A：协议可信（P0）
 
 - [ ] 类型化 RPC 客户端。
-- [ ] 修复 response.data。
-- [ ] 修复 `agentInvoked:false` 挂起。
-- [ ] 真实会话 get_state。
+- [x] 修复 response.data。
+- [x] 修复 `agentInvoked:false` 挂起。
+- [x] 真实会话 get_state。
 - [ ] 图片和 thinking。
 - [ ] 完整事件日志与未知帧诊断。
 

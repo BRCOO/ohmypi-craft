@@ -16,10 +16,21 @@ describe('OmpRpcEventAdapter', () => {
     expect(adapter.adaptFrame({ type: 'response', id: 'r1', command: 'prompt', success: true, data: { ok: true } })).toEqual({
       events: [],
       response: {
+        type: 'response',
         id: 'r1',
         command: 'prompt',
         success: true,
-        data: { data: { ok: true } },
+        error: undefined,
+        data: { ok: true },
+      },
+    });
+
+    expect(adapter.adaptFrame({ type: 'prompt_result', id: 'r1', agentInvoked: false })).toEqual({
+      events: [],
+      promptResult: {
+        type: 'prompt_result',
+        id: 'r1',
+        agentInvoked: false,
       },
     });
   });
@@ -123,7 +134,7 @@ describe('OmpRpcEventAdapter', () => {
     ]);
 
     expect(adapter.adaptFrame({ type: 'agent_end' })).toEqual({
-      events: [{ type: 'complete' }],
+      events: [],
       complete: true,
     });
   });
