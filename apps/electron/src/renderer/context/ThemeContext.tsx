@@ -68,6 +68,8 @@ interface StoredTheme {
   mode: ThemeMode
   colorTheme: string
   font?: FontFamily
+  /** True when user explicitly changed light/dark/system mode in UI */
+  modeUserOverride?: boolean
   /** True when user explicitly changed theme in UI (not auto-saved on startup) */
   isUserOverride?: boolean
 }
@@ -112,9 +114,19 @@ function saveTheme(theme: StoredTheme): void {
   storage.set(storage.KEYS.theme, theme)
 }
 
+function resolveInitialMode(stored: StoredTheme | null, defaultMode: ThemeMode): ThemeMode {
+  // Legacy Craft settings did not distinguish a user-selected mode from the
+  // old app default of "system". Let OMP boot into its dark-first identity
+  // unless this version has already recorded an explicit mode choice.
+  if (stored?.modeUserOverride) {
+    return stored.mode
+  }
+  return defaultMode
+}
+
 export function ThemeProvider({
   children,
-  defaultMode = 'system',
+  defaultMode = 'dark',
   defaultColorTheme = 'default',
   defaultFont = 'system',
   activeWorkspaceId = null
@@ -122,7 +134,7 @@ export function ThemeProvider({
   const stored = loadStoredTheme()
 
   // === Preference state (persisted at app level) ===
-  const [mode, setModeState] = useState<ThemeMode>(stored?.mode ?? defaultMode)
+  const [mode, setModeState] = useState<ThemeMode>(() => resolveInitialMode(stored, defaultMode))
   // Only use localStorage colorTheme if user explicitly set it via UI
   const [colorTheme, setColorThemeState] = useState<string>(() => {
     if (stored?.isUserOverride && stored.colorTheme) {
@@ -423,6 +435,7 @@ export function ThemeProvider({
         mode: preferences.mode as ThemeMode,
         colorTheme: preferences.colorTheme,
         font: preferences.font as FontFamily,
+        modeUserOverride: true,
         isUserOverride: true
       })
       setTimeout(() => {
@@ -438,7 +451,13 @@ export function ThemeProvider({
     setModeState(newMode)
     // Preserve existing isUserOverride flag
     const existing = loadStoredTheme()
-    saveTheme({ mode: newMode, colorTheme, font, isUserOverride: existing?.isUserOverride })
+    saveTheme({
+      mode: newMode,
+      colorTheme,
+      font,
+      modeUserOverride: true,
+      isUserOverride: existing?.isUserOverride
+    })
     if (!isExternalUpdate.current && window.electronAPI?.broadcastThemePreferences) {
       window.electronAPI.broadcastThemePreferences({ mode: newMode, colorTheme, font })
     }
@@ -447,7 +466,14 @@ export function ThemeProvider({
   const setColorTheme = useCallback((newTheme: string) => {
     setColorThemeState(newTheme)
     // Mark as user override - user explicitly changed theme via UI
-    saveTheme({ mode, colorTheme: newTheme, font, isUserOverride: true })
+    const existing = loadStoredTheme()
+    saveTheme({
+      mode,
+      colorTheme: newTheme,
+      font,
+      modeUserOverride: existing?.modeUserOverride,
+      isUserOverride: true
+    })
     if (!isExternalUpdate.current && window.electronAPI?.broadcastThemePreferences) {
       window.electronAPI.broadcastThemePreferences({ mode, colorTheme: newTheme, font })
     }
@@ -457,7 +483,13 @@ export function ThemeProvider({
     setFontState(newFont)
     // Preserve existing isUserOverride flag
     const existing = loadStoredTheme()
-    saveTheme({ mode, colorTheme, font: newFont, isUserOverride: existing?.isUserOverride })
+    saveTheme({
+      mode,
+      colorTheme,
+      font: newFont,
+      modeUserOverride: existing?.modeUserOverride,
+      isUserOverride: existing?.isUserOverride
+    })
     if (!isExternalUpdate.current && window.electronAPI?.broadcastThemePreferences) {
       window.electronAPI.broadcastThemePreferences({ mode, colorTheme, font: newFont })
     }
