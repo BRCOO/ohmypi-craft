@@ -276,6 +276,7 @@ export function handleInfo(
     content: event.message,
     timestamp: event.timestamp ?? Date.now(),
     infoLevel: event.level,
+    ompCommand: event.ompCommand,
   }
 
   return {

@@ -7366,6 +7366,17 @@ export class SessionManager implements ISessionManager {
               },
             }, workspaceId)
           }
+        } else if (event.ompCommand) {
+          const commandMessage: Message = {
+            id: generateMessageId(),
+            role: 'info',
+            content: event.message,
+            timestamp: infoTimestamp,
+            infoLevel: event.level,
+            ompCommand: event.ompCommand,
+          }
+          managed.messages.push(commandMessage)
+          this.persistSession(managed)
         }
 
         this.sendEvent({
@@ -7373,6 +7384,8 @@ export class SessionManager implements ISessionManager {
           sessionId,
           message: event.message,
           statusType: isCompactionComplete ? 'compaction_complete' : undefined,
+          level: event.level,
+          ompCommand: event.ompCommand,
           timestamp: infoTimestamp,
         }, workspaceId)
         break

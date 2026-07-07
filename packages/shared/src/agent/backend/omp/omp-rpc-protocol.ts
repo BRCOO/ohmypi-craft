@@ -99,6 +99,7 @@ export interface OmpRpcResponseFrame<T = unknown> {
   success: boolean;
   error?: string;
   data?: T;
+  raw?: Record<string, unknown>;
 }
 
 export interface OmpRpcPromptResultFrame {
@@ -283,6 +284,7 @@ export function parseOmpRpcResponse(value: unknown): OmpRpcResponseFrame | null 
     success: raw.success,
     error: raw.error as string | undefined,
     data: raw.data,
+    raw: { ...raw },
   };
 }
 

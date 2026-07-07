@@ -70,6 +70,36 @@ function stableJson(value: unknown): string {
   }
 }
 
+function prettyJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function commandOutputContent(raw: Record<string, unknown>): { content: string; format: 'markdown' | 'text' | 'json' } {
+  const direct = asString(raw.content) ?? asString(raw.text) ?? asString(raw.output);
+  if (direct !== undefined) {
+    return { content: direct.trim().length > 0 ? direct : 'Command completed', format: 'markdown' };
+  }
+
+  const structured = raw.content ?? raw.output ?? raw.data ?? raw.result;
+  if (structured !== undefined) {
+    return {
+      content: `\`\`\`json\n${prettyJson(structured)}\n\`\`\``,
+      format: 'json',
+    };
+  }
+
+  return { content: 'Command completed', format: 'text' };
+}
+
+function commandOutputLevel(raw: Record<string, unknown>): 'info' | 'warning' | 'error' | 'success' {
+  const level = asString(raw.level);
+  return level === 'warning' || level === 'error' || level === 'success' ? level : 'info';
+}
+
 function parseArguments(value: unknown): Record<string, unknown> {
   if (!value) return {};
   if (typeof value === 'string') {
@@ -224,8 +254,9 @@ export class OmpRpcEventAdapter {
   private hasEmittedFinalText = false;
   private toolNames = new Map<string, string>();
   private toolInputs = new Map<string, Record<string, unknown>>();
+  private commandContext: string | undefined;
 
-  startTurn(): void {
+  startTurn(commandContext?: string): void {
     this.currentTurnId = `omp-turn-${this.turnIndex++}`;
     this.textBuffer = '';
     this.thinkingBuffers.clear();
@@ -233,6 +264,11 @@ export class OmpRpcEventAdapter {
     this.hasEmittedFinalText = false;
     this.toolNames.clear();
     this.toolInputs.clear();
+    this.commandContext = commandContext;
+  }
+
+  clearCommandContext(): void {
+    this.commandContext = undefined;
   }
 
   adaptFrame(raw: Record<string, unknown>): OmpRpcAdaptedFrame {
@@ -504,12 +540,23 @@ export class OmpRpcEventAdapter {
         };
 
       case 'command_output':
+      {
+        const output = commandOutputContent(raw);
+        const level = commandOutputLevel(raw);
         return {
           events: [{
             type: 'info',
-            message: asString(raw.content) ?? asString(raw.text) ?? asString(raw.output) ?? '',
+            message: output.content,
+            level,
+            ompCommand: {
+              command: asString(raw.command) ?? this.commandContext,
+              title: 'Oh My Pi Command',
+              level,
+              format: output.format,
+            },
           }],
         };
+      }
 
       case 'extension_ui_request': {
         const request = buildExtensionUiRequest(raw);

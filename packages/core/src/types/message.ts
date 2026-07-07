@@ -16,6 +16,26 @@ export type MessageRole =
   | 'plan'
   | 'auth-request';
 
+export type OmpCommandResultLevel = 'info' | 'warning' | 'error' | 'success';
+export type OmpCommandResultFormat = 'markdown' | 'text' | 'json';
+
+export interface OmpCommandResultMeta {
+  /** Slash command label, e.g. `/stats`, when known. */
+  command?: string;
+  /** Header label used when command is unknown. */
+  title?: string;
+  /** Visual status for the card shell. */
+  level?: OmpCommandResultLevel;
+  /** How the content should be interpreted by the renderer. */
+  format?: OmpCommandResultFormat;
+  /** RPC request id associated with an error/result, when available. */
+  requestId?: string;
+  /** Concise error text for failed commands. */
+  error?: string;
+  /** Optional diagnostic detail, safe to show as secondary text. */
+  details?: string;
+}
+
 /**
  * Credential input modes for different auth types
  */
@@ -295,6 +315,8 @@ export interface Message {
   statusType?: 'compacting' | 'compaction_complete';
   // Info level for info messages (determines icon/color)
   infoLevel?: 'info' | 'warning' | 'error' | 'success';
+  // OMP command result card metadata for role='info'
+  ompCommand?: OmpCommandResultMeta;
   // Error-specific fields (for typed errors with diagnostics)
   errorCode?: string;
   errorTitle?: string;
@@ -376,6 +398,8 @@ export interface StoredMessage {
   statusType?: 'compacting' | 'compaction_complete';
   // Info level for info messages (persisted for reload)
   infoLevel?: 'info' | 'warning' | 'error' | 'success';
+  // OMP command result card metadata for role='info'
+  ompCommand?: OmpCommandResultMeta;
   // Error display fields
   errorCode?: string;
   errorTitle?: string;
@@ -596,7 +620,7 @@ export interface AgentEventUsage {
  */
 export type AgentEvent =
   | { type: 'status'; message: string }
-  | { type: 'info'; message: string }
+  | { type: 'info'; message: string; level?: OmpCommandResultLevel; ompCommand?: OmpCommandResultMeta }
   | { type: 'text_delta'; text: string; isThinking?: boolean; turnId?: string; parentToolUseId?: string }
   | { type: 'text_complete'; text: string; isIntermediate?: boolean; isThinking?: boolean; turnId?: string; parentToolUseId?: string; sdkMessageId?: string }
   | { type: 'pi_turn_anchor'; sdkMessageId: string; sdkTurnAnchor: string }

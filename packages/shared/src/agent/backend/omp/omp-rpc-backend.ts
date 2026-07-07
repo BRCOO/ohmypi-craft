@@ -81,6 +81,11 @@ export function resolveOmpModelSelection(model: string | undefined): OmpModelSel
   return { provider, modelId };
 }
 
+function extractSlashCommandLabel(message: string): string | undefined {
+  const match = message.trimStart().match(/^\/([A-Za-z0-9:_-]+)/);
+  return match ? `/${match[1]}` : undefined;
+}
+
 export function buildOmpExtensionUiResponseFrame(
   requestId: string,
   response: ExtensionUiResponse,
@@ -172,7 +177,8 @@ export class OmpRpcBackend extends BaseAgent {
     this._isProcessing = true;
     this.abortReason = undefined;
     this.eventQueue.reset();
-    this.adapter.startTurn();
+    const commandContext = extractSlashCommandLabel(message);
+    this.adapter.startTurn(commandContext);
     let shouldRestoreThinkingLevel = false;
 
     this.emitAutomationEvent('UserPromptSubmit', {
@@ -232,7 +238,24 @@ export class OmpRpcBackend extends BaseAgent {
         // this catch on a later microtask; do not emit a duplicate error/complete pair.
         if (this.eventQueue.isComplete || activeTurn.finished) return;
         const msg = error instanceof Error ? error.message : String(error);
-        this.eventQueue.enqueue({ type: 'error', message: `OMP prompt failed: ${msg}` });
+        if (commandContext) {
+          this.eventQueue.enqueue({
+            type: 'info',
+            message: msg,
+            level: 'error',
+            ompCommand: {
+              command: commandContext,
+              title: 'Oh My Pi Command',
+              level: 'error',
+              format: 'markdown',
+              requestId: promptRequest.id,
+              error: msg,
+              details: 'RPC command: prompt',
+            },
+          });
+        } else {
+          this.eventQueue.enqueue({ type: 'error', message: `OMP prompt failed: ${msg}` });
+        }
         this.finishTurn(promptRequest.id);
       });
 
@@ -270,6 +293,7 @@ export class OmpRpcBackend extends BaseAgent {
         }
       }
       this._isProcessing = false;
+      this.adapter.clearCommandContext();
       if (this.activeTurn?.finished) this.activeTurn = null;
     }
   }

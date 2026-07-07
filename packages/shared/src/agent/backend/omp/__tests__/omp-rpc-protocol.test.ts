@@ -51,6 +51,14 @@ describe('OMP RPC protocol parsers', () => {
       success: true,
       error: undefined,
       data: { alive: true },
+      raw: {
+        type: 'response',
+        id: 'omp-1',
+        command: 'get_state',
+        success: true,
+        data: { alive: true },
+        futureField: 'ignored',
+      },
     });
   });
 

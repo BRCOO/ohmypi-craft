@@ -10,6 +10,7 @@ import {
   CircleAlert,
   ExternalLink,
   Info,
+  Sparkles,
   X,
 } from "lucide-react"
 import { motion, AnimatePresence } from "motion/react"
@@ -2397,6 +2398,16 @@ function MessageBubble({
 
   // === INFO MESSAGE: Icon and color based on level ===
   if (message.role === 'info') {
+    if (message.ompCommand) {
+      return (
+        <OmpCommandResultCard
+          message={message}
+          onOpenFile={onOpenFile}
+          onOpenUrl={onOpenUrl}
+        />
+      )
+    }
+
     // Compaction complete message - render as horizontal rule with centered label
     // This persists after reload to show where context was compacted
     if (message.statusType === 'compaction_complete') {
@@ -2445,6 +2456,70 @@ function MessageBubble({
   }
 
   return null
+}
+
+function OmpCommandResultCard({
+  message,
+  onOpenFile,
+  onOpenUrl,
+}: {
+  message: Message
+  onOpenFile: (path: string) => void
+  onOpenUrl: (url: string) => void
+}) {
+  const meta = message.ompCommand
+  const level = meta?.level || message.infoLevel || 'info'
+  const isError = level === 'error'
+  const commandLabel = meta?.command || meta?.title || 'Oh My Pi Command'
+  const header = meta?.command ? `Oh My Pi · ${commandLabel}` : commandLabel
+  const content = message.content?.trim() ? message.content : 'Command completed'
+
+  return (
+    <div className="flex justify-start px-3 py-1.5">
+      <div
+        className={cn(
+          'w-full max-w-[90%] rounded-[10px] border px-3.5 py-3 text-sm select-text',
+          isError
+            ? 'border-destructive/25 bg-destructive/5 text-foreground'
+            : 'border-accent/20 bg-accent/5 text-foreground'
+        )}
+      >
+        <div className="mb-2 flex items-center gap-2 text-[12px] font-medium">
+          <span
+            className={cn(
+              'flex h-5 w-5 items-center justify-center rounded-full',
+              isError ? 'bg-destructive/10 text-destructive' : 'bg-accent/10 text-accent'
+            )}
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+          </span>
+          <span className={isError ? 'text-destructive' : 'text-accent'}>{header}</span>
+          {isError && (
+            <span className="rounded-full bg-destructive/10 px-1.5 py-0.5 text-[10px] text-destructive">
+              Error
+            </span>
+          )}
+        </div>
+
+        <Markdown
+          mode="minimal"
+          onUrlClick={onOpenUrl}
+          onFileClick={onOpenFile}
+          id={message.id}
+          className="text-sm"
+        >
+          {content}
+        </Markdown>
+
+        {meta?.details && (
+          <details className="mt-2 border-t border-foreground/10 pt-2 text-xs text-muted-foreground">
+            <summary className="cursor-pointer select-none">Details</summary>
+            <div className="mt-1 font-mono">{meta.details}</div>
+          </details>
+        )}
+      </div>
+    </div>
+  )
 }
 
 /**

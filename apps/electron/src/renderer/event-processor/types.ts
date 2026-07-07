@@ -5,7 +5,7 @@
  * All agent events flow through a single pure function for consistent state transitions.
  */
 
-import type { Session, Message, PermissionRequest, CredentialRequest, ExtensionUiRequest, TypedError, PermissionMode, SessionStatus, AuthRequest, ToolDisplayMeta, OmpControlStateDto } from '../../shared/types'
+import type { Session, Message, PermissionRequest, CredentialRequest, ExtensionUiRequest, TypedError, PermissionMode, SessionStatus, AuthRequest, ToolDisplayMeta, OmpControlStateDto, OmpCommandResultMeta } from '../../shared/types'
 
 /**
  * Streaming state for a session - replaces streamingTextRef
@@ -227,6 +227,7 @@ export interface InfoEvent {
   message: string
   statusType?: 'compaction_complete'
   level?: 'info' | 'warning' | 'error' | 'success'
+  ompCommand?: OmpCommandResultMeta
   /** Timestamp from main process for consistent ordering */
   timestamp?: number
 }

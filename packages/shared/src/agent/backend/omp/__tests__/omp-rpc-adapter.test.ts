@@ -22,6 +22,7 @@ describe('OmpRpcEventAdapter', () => {
         success: true,
         error: undefined,
         data: { ok: true },
+        raw: { type: 'response', id: 'r1', command: 'prompt', success: true, data: { ok: true } },
       },
     });
 
@@ -120,6 +121,42 @@ describe('OmpRpcEventAdapter', () => {
     }).events).toEqual([
       { type: 'text_complete', text: 'Hello', turnId: 'omp-turn-0', sdkMessageId: 'msg-1' },
     ]);
+  });
+
+  it('maps command output into an OMP command card info event', () => {
+    const adapter = new OmpRpcEventAdapter();
+    adapter.startTurn('/stats');
+
+    expect(adapter.adaptFrame({
+      type: 'command_output',
+      text: '## Stats\n\n```txt\nok\n```',
+    }).events).toEqual([{
+      type: 'info',
+      message: '## Stats\n\n```txt\nok\n```',
+      level: 'info',
+      ompCommand: {
+        command: '/stats',
+        title: 'Oh My Pi Command',
+        level: 'info',
+        format: 'markdown',
+      },
+    }]);
+
+    expect(adapter.adaptFrame({
+      type: 'command_output',
+      level: 'error',
+      output: { message: 'boom' },
+    }).events).toEqual([{
+      type: 'info',
+      message: '```json\n{\n  "message": "boom"\n}\n```',
+      level: 'error',
+      ompCommand: {
+        command: '/stats',
+        title: 'Oh My Pi Command',
+        level: 'error',
+        format: 'json',
+      },
+    }]);
   });
 
   it('falls back to accumulated deltas when message_end has no content', () => {

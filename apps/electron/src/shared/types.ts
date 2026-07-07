@@ -19,6 +19,9 @@ import type {
   SessionMetadata as CoreSessionMetadata,
   StoredAttachment as CoreStoredAttachment,
   ContentBadge,
+  OmpCommandResultLevel,
+  OmpCommandResultFormat,
+  OmpCommandResultMeta,
   ToolDisplayMeta,
   AnnotationV1,
 } from '@craft-agent/core/types';
@@ -43,6 +46,9 @@ export type {
   CoreSessionMetadata as SessionMetadata,
   CoreStoredAttachment as StoredAttachment,
   ContentBadge,
+  OmpCommandResultLevel,
+  OmpCommandResultFormat,
+  OmpCommandResultMeta,
   ToolDisplayMeta,
   AnnotationV1,
 };
