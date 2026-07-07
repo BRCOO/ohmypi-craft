@@ -57,6 +57,8 @@ export interface SessionMeta {
   model?: string
   /** LLM connection slug for this session */
   llmConnection?: string
+  /** OMP-native session identity for OMP-only menu actions. */
+  ompSessionLink?: Session['ompSessionLink']
   /** Token usage stats (from JSONL header, available without loading messages) */
   tokenUsage?: {
     inputTokens: number

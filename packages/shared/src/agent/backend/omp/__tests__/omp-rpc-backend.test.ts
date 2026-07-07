@@ -585,6 +585,47 @@ describe('OmpRpcBackend subprocess lifecycle', () => {
     backend.destroy();
   });
 
+  it('refreshes the OMP session link after handoff', async () => {
+    const links: OmpSessionLink[] = [];
+    const { backend, children } = createHarness({
+      onSessionLink: (link) => links.push(link),
+    });
+    const child = await startReady(backend, children);
+    const handoffPromise = backend.handoffOmpSession('carry the key constraints');
+
+    await waitFor(() => child.frames.some((frame) => frame.type === 'handoff'));
+    const handoffRequest = child.frames.find((frame) => frame.type === 'handoff')!;
+    expect(handoffRequest.customInstructions).toBe('carry the key constraints');
+    child.emitFrame({
+      type: 'response',
+      id: handoffRequest.id,
+      command: 'handoff',
+      success: true,
+      data: { savedPath: 'C:\\sessions\\handoff.md' },
+    });
+
+    await waitFor(() => child.frames.filter((frame) => frame.type === 'get_state').length === 2);
+    const stateRequest = child.frames.filter((frame) => frame.type === 'get_state').at(-1)!;
+    child.emitFrame({
+      type: 'response',
+      id: stateRequest.id,
+      command: 'get_state',
+      success: true,
+      data: sessionState('handoff-session', {
+        sessionFile: 'C:\\sessions\\handoff.jsonl',
+        messageCount: 6,
+      }),
+    });
+
+    await expect(handoffPromise).resolves.toEqual({ savedPath: 'C:\\sessions\\handoff.md' });
+    expect(links.at(-1)).toMatchObject({
+      sessionId: 'handoff-session',
+      sessionFile: 'C:\\sessions\\handoff.jsonl',
+      messageCount: 6,
+    });
+    backend.destroy();
+  });
+
   it('publishes a persisted mismatch when OMP cannot restore its session file', async () => {
     const links: OmpSessionLink[] = [];
     const persistedLink: OmpSessionLink = {

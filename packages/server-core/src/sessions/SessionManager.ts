@@ -87,7 +87,7 @@ import { isParentTaskTool } from '@craft-agent/shared/utils/toolNames'
 import { restoreFiles } from '@craft-agent/shared/utils/bundle-files'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { CraftMcpClient, McpClientPool, McpPoolServer } from '@craft-agent/shared/mcp'
-import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, type OmpControlStateDto, type OmpInterruptMode as OmpInterruptModeDto, type OmpQueueMode as OmpQueueModeDto, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
+import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, type OmpControlStateDto, type OmpInterruptMode as OmpInterruptModeDto, type OmpQueueMode as OmpQueueModeDto, type OmpBranchOptionsResult, type OmpBranchSessionResult, type OmpHandoffSessionResult, type OmpExportHtmlResult, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
 import { messageToStored, storedToMessage, type Message, type StoredAttachment, type ToolDisplayMeta } from '@craft-agent/core/types'
 import { formatPathsToRelative, formatToolInputPaths, perf, encodeIconToDataUrlAsync, getEmojiIcon, resetSummarizationClient, resolveToolIcon, readFileAttachment, selectSpreadMessages, normalizePath } from '@craft-agent/shared/utils'
 import { loadAllSkills, loadSkillBySlug, invalidateSkillsCache, type LoadedSkill } from '@craft-agent/shared/skills'
@@ -103,6 +103,12 @@ import { ensureLabelsExist } from '@craft-agent/shared/labels/crud'
 import { loadStatusConfig } from '@craft-agent/shared/statuses/storage'
 import { AutomationSystem, createPromptHistoryEntry, appendAutomationHistoryEntry, type AutomationSystemMetadataSnapshot } from '@craft-agent/shared/automations'
 import { buildBackendRuntimeSignature, buildRestartRequiredSignature, filterAttachmentsForModelInput } from './runtime-config'
+import {
+  createCraftMessagesFromOmpMessages,
+  mapOmpBranchMessagesToCraftOptions,
+  truncateMessagesBeforeBranch,
+  type OmpBranchMessageLike,
+} from './omp-session-actions'
 
 // Import from server-core domain utilities
 import { sanitizeForTitle, shouldActivateBrowserOverlay, normalizeBrowserToolName, rollbackFailedBranchCreation, releaseBrowserOwnershipOnForcedStop } from '@craft-agent/server-core/domain'
@@ -778,6 +784,10 @@ interface OmpControllableAgent extends AgentBackend {
 interface OmpSessionAgent extends AgentBackend {
   getOmpSessionLink(): OmpSessionLink | null
   getOmpMessages(): Promise<unknown[]>
+  getOmpBranchMessages(): Promise<OmpBranchMessageLike[]>
+  branchOmpSession(entryId: string): Promise<{ text: string; cancelled: boolean }>
+  handoffOmpSession(customInstructions?: string): Promise<{ savedPath?: string } | null>
+  exportOmpSessionHtml(outputPath?: string): Promise<{ path: string }>
   setOmpSessionName(name: string): Promise<void>
 }
 
@@ -798,6 +808,10 @@ function isOmpSessionAgent(agent: AgentInstance | null | undefined): agent is Om
   return !!candidate
     && typeof candidate.getOmpSessionLink === 'function'
     && typeof candidate.getOmpMessages === 'function'
+    && typeof candidate.getOmpBranchMessages === 'function'
+    && typeof candidate.branchOmpSession === 'function'
+    && typeof candidate.handoffOmpSession === 'function'
+    && typeof candidate.exportOmpSessionHtml === 'function'
     && typeof candidate.setOmpSessionName === 'function'
 }
 
@@ -6742,6 +6756,161 @@ export class SessionManager implements ISessionManager {
     } else {
       sessionLog.warn(`Cannot respond to credential - no pending request for ${requestId}`)
       return false
+    }
+  }
+
+  private formatOmpActionError(error: unknown): string {
+    return error instanceof Error ? error.message : String(error)
+  }
+
+  private async getOmpSessionActionContext(sessionId: string): Promise<{
+    managed: ManagedSession
+    agent: OmpSessionAgent
+  }> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+    if (managed.isProcessing) throw new Error('OMP session actions are disabled while the session is processing.')
+
+    await this.ensureMessagesLoaded(managed)
+    await this.getOrCreateAgent(managed)
+
+    const agent = managed.agent
+    if (!isOmpSessionAgent(agent)) {
+      throw new Error('This session is not backed by an OMP session.')
+    }
+
+    return { managed, agent }
+  }
+
+  private refreshDerivedMessageMetadata(managed: ManagedSession): void {
+    managed.messageCount = managed.messages.length
+    const firstUser = managed.messages.find(message => message.role === 'user')
+    managed.preview = firstUser?.content?.slice(0, 150)
+
+    const lastDisplay = [...managed.messages].reverse().find((message) =>
+      message.role === 'user'
+      || message.role === 'assistant'
+      || message.role === 'plan'
+      || message.role === 'tool'
+      || message.role === 'error'
+    )
+    managed.lastMessageRole = lastDisplay?.role as ManagedSession['lastMessageRole'] | undefined
+    managed.lastFinalMessageId = this.getLastFinalAssistantMessageId(managed.messages)
+    managed.lastReadMessageId = managed.lastFinalMessageId
+    managed.hasUnread = false
+  }
+
+  private async persistAndHydrateOmpActionSession(managed: ManagedSession): Promise<void> {
+    this.refreshDerivedMessageMetadata(managed)
+    this.persistSession(managed)
+    await this.flushSession(managed.id)
+    this.sendEvent({ type: 'session_created', sessionId: managed.id }, managed.workspace.id)
+  }
+
+  private async buildOmpBranchOptions(managed: ManagedSession, agent: OmpSessionAgent) {
+    await this.reconcileOmpSessionBeforePrompt(managed)
+    const branchMessages = await agent.getOmpBranchMessages()
+    return mapOmpBranchMessagesToCraftOptions(branchMessages, managed.messages)
+  }
+
+  async getOmpBranchOptions(sessionId: string): Promise<OmpBranchOptionsResult> {
+    try {
+      const { managed, agent } = await this.getOmpSessionActionContext(sessionId)
+      const options = await this.buildOmpBranchOptions(managed, agent)
+      return { success: true, options }
+    } catch (error) {
+      sessionLog.warn(`Failed to get OMP branch options for ${sessionId}: ${this.formatOmpActionError(error)}`)
+      return { success: false, error: this.formatOmpActionError(error) }
+    }
+  }
+
+  async branchOmpSession(
+    sessionId: string,
+    entryId: string,
+    craftMessageId: string,
+  ): Promise<OmpBranchSessionResult> {
+    try {
+      const { managed, agent } = await this.getOmpSessionActionContext(sessionId)
+      const options = await this.buildOmpBranchOptions(managed, agent)
+      const selected = options.find(option =>
+        option.entryId === entryId && option.craftMessageId === craftMessageId
+      )
+      if (!selected) {
+        throw new Error('Selected OMP branch point no longer matches the Craft session. Refresh and try again.')
+      }
+
+      const result = await agent.branchOmpSession(entryId)
+      if (result.cancelled) {
+        return { success: true, cancelled: true }
+      }
+
+      managed.messages = truncateMessagesBeforeBranch(managed.messages, craftMessageId)
+      managed.messageQueue = []
+      managed.lastSentMessage = undefined
+      managed.lastSentAttachments = undefined
+      managed.lastSentStoredAttachments = undefined
+      managed.lastSentOptions = undefined
+      await this.persistAndHydrateOmpActionSession(managed)
+
+      const sessionLink = agent.getOmpSessionLink() ?? managed.ompSessionLink
+      return {
+        success: true,
+        selectedText: result.text,
+        ...(sessionLink ? { sessionLink } : {}),
+      }
+    } catch (error) {
+      sessionLog.warn(`Failed to branch OMP session ${sessionId}: ${this.formatOmpActionError(error)}`)
+      return { success: false, error: this.formatOmpActionError(error) }
+    }
+  }
+
+  private async reloadCraftMessagesFromOmp(managed: ManagedSession, agent: OmpSessionAgent): Promise<void> {
+    const ompMessages = await agent.getOmpMessages()
+    managed.messages = createCraftMessagesFromOmpMessages(
+      ompMessages,
+      () => generateMessageId(),
+      () => this.monotonic(),
+    )
+    managed.messageQueue = []
+    managed.lastSentMessage = undefined
+    managed.lastSentAttachments = undefined
+    managed.lastSentStoredAttachments = undefined
+    managed.lastSentOptions = undefined
+    await this.persistAndHydrateOmpActionSession(managed)
+  }
+
+  async handoffOmpSession(
+    sessionId: string,
+    customInstructions?: string,
+  ): Promise<OmpHandoffSessionResult> {
+    try {
+      const { managed, agent } = await this.getOmpSessionActionContext(sessionId)
+      const result = await agent.handoffOmpSession(customInstructions?.trim() || undefined)
+      if (!result) {
+        return { success: true, cancelled: true }
+      }
+
+      await this.reloadCraftMessagesFromOmp(managed, agent)
+      const sessionLink = agent.getOmpSessionLink() ?? managed.ompSessionLink
+      return {
+        success: true,
+        savedPath: result.savedPath,
+        ...(sessionLink ? { sessionLink } : {}),
+      }
+    } catch (error) {
+      sessionLog.warn(`Failed to handoff OMP session ${sessionId}: ${this.formatOmpActionError(error)}`)
+      return { success: false, error: this.formatOmpActionError(error) }
+    }
+  }
+
+  async exportOmpSessionHtml(sessionId: string, outputPath?: string): Promise<OmpExportHtmlResult> {
+    try {
+      const { agent } = await this.getOmpSessionActionContext(sessionId)
+      const result = await agent.exportOmpSessionHtml(outputPath)
+      return { success: true, outputPath: result.path }
+    } catch (error) {
+      sessionLog.warn(`Failed to export OMP session ${sessionId}: ${this.formatOmpActionError(error)}`)
+      return { success: false, error: this.formatOmpActionError(error) }
     }
   }
 

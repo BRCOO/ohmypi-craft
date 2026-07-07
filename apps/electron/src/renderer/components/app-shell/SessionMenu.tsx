@@ -27,7 +27,10 @@ import {
   AppWindow,
   Columns2,
   CloudUpload,
+  FileCode2,
   RefreshCw,
+  GitBranch,
+  Handshake,
   Tag,
   Send,
 } from 'lucide-react'
@@ -97,6 +100,7 @@ export function SessionMenu({
   const sessionLabels = item.labels ?? []
   const _hasMessages = hasMessagesMeta(item)
   const _hasUnread = hasUnreadMeta(item)
+  const isOmpSession = item.ompSessionLink?.provider === 'omp'
 
   const actions = useSessionMenuActions({ item, onLabelsChange })
 
@@ -139,6 +143,24 @@ export function SessionMenu({
 
       {/* Connect to Messaging — pairing code flow */}
       <MessagingSessionMenuItem sessionId={sessionId} />
+
+      {isOmpSession && (
+        <>
+          <Separator />
+          <MenuItem onClick={actions.branchOmpSession} disabled={item.isProcessing}>
+            <GitBranch className="h-3.5 w-3.5 text-violet-300" />
+            <span className="flex-1">{t("sessionMenu.ompBranch")}</span>
+          </MenuItem>
+          <MenuItem onClick={actions.handoffOmpSession} disabled={item.isProcessing}>
+            <Handshake className="h-3.5 w-3.5 text-sky-300" />
+            <span className="flex-1">{t("sessionMenu.ompHandoff")}</span>
+          </MenuItem>
+          <MenuItem onClick={actions.exportOmpSessionHtml} disabled={item.isProcessing}>
+            <FileCode2 className="h-3.5 w-3.5 text-blue-300" />
+            <span className="flex-1">{t("sessionMenu.ompExportHtml")}</span>
+          </MenuItem>
+        </>
+      )}
 
       <Separator />
 

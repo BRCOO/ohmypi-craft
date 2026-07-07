@@ -37,10 +37,13 @@ import {
   CloudUpload,
   Columns2,
   Copy,
+  FileCode2,
   Flag,
   FlagOff,
   FolderOpen,
+  GitBranch,
   Globe,
+  Handshake,
   Link2Off,
   MailOpen,
   MessageSquare,
@@ -180,6 +183,7 @@ export function CompactSessionMenu({
   const sessionLabels = item.labels ?? []
   const _hasMessages = hasMessagesMeta(item)
   const _hasUnread = hasUnreadMeta(item)
+  const isOmpSession = item.ompSessionLink?.provider === 'omp'
 
   const actions = useSessionMenuActions({ item, onLabelsChange })
 
@@ -299,10 +303,15 @@ export function CompactSessionMenu({
               hasMessages={_hasMessages}
               hasUnread={_hasUnread}
               hasRemoteWorkspaces={hasRemoteWorkspaces}
+              isOmpSession={isOmpSession}
+              isProcessing={item.isProcessing}
               onShare={closeAfter(actions.share)}
               onOpenShareSub={() => setView('share')}
               onSendToWorkspace={closeAfter(onSendToWorkspace)}
               onOpenMessagingSub={() => setView('messaging')}
+              onOmpBranch={closeAfter(actions.branchOmpSession)}
+              onOmpHandoff={closeAfter(actions.handoffOmpSession)}
+              onOmpExportHtml={closeAfter(actions.exportOmpSessionHtml)}
               onOpenStatusSub={() => setView('status')}
               onOpenLabelsSub={() => setView('labels')}
               onFlag={closeAfter(onFlag)}
@@ -372,10 +381,15 @@ interface RootPaneProps {
   hasMessages: boolean
   hasUnread: boolean
   hasRemoteWorkspaces?: boolean
+  isOmpSession?: boolean
+  isProcessing?: boolean
   onShare?: () => void
   onOpenShareSub: () => void
   onSendToWorkspace?: () => void
   onOpenMessagingSub: () => void
+  onOmpBranch?: () => void
+  onOmpHandoff?: () => void
+  onOmpExportHtml?: () => void
   onOpenStatusSub: () => void
   onOpenLabelsSub: () => void
   onFlag?: () => void
@@ -403,10 +417,15 @@ function RootPane({
   hasMessages,
   hasUnread,
   hasRemoteWorkspaces,
+  isOmpSession,
+  isProcessing,
   onShare,
   onOpenShareSub,
   onSendToWorkspace,
   onOpenMessagingSub,
+  onOmpBranch,
+  onOmpHandoff,
+  onOmpExportHtml,
   onOpenStatusSub,
   onOpenLabelsSub,
   onFlag,
@@ -456,6 +475,30 @@ function RootPane({
         chevron
         onTap={onOpenMessagingSub}
       />
+
+      {isOmpSession && (
+        <>
+          <Separator />
+          <Row
+            icon={<GitBranch className="h-4 w-4 text-violet-300" />}
+            label={t('sessionMenu.ompBranch')}
+            onTap={onOmpBranch}
+            disabled={isProcessing}
+          />
+          <Row
+            icon={<Handshake className="h-4 w-4 text-sky-300" />}
+            label={t('sessionMenu.ompHandoff')}
+            onTap={onOmpHandoff}
+            disabled={isProcessing}
+          />
+          <Row
+            icon={<FileCode2 className="h-4 w-4 text-blue-300" />}
+            label={t('sessionMenu.ompExportHtml')}
+            onTap={onOmpExportHtml}
+            disabled={isProcessing}
+          />
+        </>
+      )}
 
       <Separator />
 
@@ -629,6 +672,7 @@ interface RowProps {
   chevron?: boolean
   radioSelected?: boolean
   destructive?: boolean
+  disabled?: boolean
   onTap?: () => void
 }
 
@@ -639,6 +683,7 @@ function Row({
   chevron,
   radioSelected,
   destructive,
+  disabled,
   onTap,
 }: RowProps) {
   if (!onTap) return null
@@ -646,10 +691,12 @@ function Row({
     <button
       type="button"
       onClick={onTap}
+      disabled={disabled}
       className={cn(
         'flex items-center gap-3 w-full px-3 py-3 rounded-[10px] text-left transition-colors',
         'hover:bg-foreground/5 active:bg-foreground/10',
         destructive && 'text-destructive hover:bg-destructive/10 active:bg-destructive/15',
+        disabled && 'opacity-45 pointer-events-none',
       )}
     >
       <span className="shrink-0 inline-flex items-center justify-center h-5 w-5">

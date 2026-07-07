@@ -303,6 +303,10 @@ export type SessionCommand =
   | { type: 'updateShare' }
   | { type: 'revokeShare' }
   | { type: 'refreshTitle' }
+  | { type: 'getOmpBranchOptions' }
+  | { type: 'branchOmpSession'; entryId: string; craftMessageId: string }
+  | { type: 'handoffOmpSession'; customInstructions?: string }
+  | { type: 'exportOmpSessionHtml'; outputPath?: string }
   | { type: 'setConnection'; connectionSlug: string }
   | { type: 'setPendingPlanExecution'; planPath: string; draftInputSnapshot?: string }
   | { type: 'markCompactionComplete' }
@@ -569,6 +573,51 @@ export interface RefreshTitleResult {
   title?: string
   error?: string
 }
+
+export interface OmpBranchOption {
+  entryId: string
+  craftMessageId: string
+  ordinal: number
+  textPreview: string
+}
+
+export interface OmpBranchOptionsResult {
+  success: boolean
+  options?: OmpBranchOption[]
+  error?: string
+}
+
+export interface OmpBranchSessionResult {
+  success: boolean
+  selectedText?: string
+  cancelled?: boolean
+  sessionLink?: OmpSessionLink
+  error?: string
+}
+
+export interface OmpHandoffSessionResult {
+  success: boolean
+  savedPath?: string
+  cancelled?: boolean
+  sessionLink?: OmpSessionLink
+  error?: string
+}
+
+export interface OmpExportHtmlResult {
+  success: boolean
+  outputPath?: string
+  error?: string
+}
+
+export type SessionCommandResult =
+  | void
+  | ShareResult
+  | RefreshTitleResult
+  | { count: number }
+  | OmpBranchOptionsResult
+  | OmpBranchSessionResult
+  | OmpHandoffSessionResult
+  | OmpExportHtmlResult
 
 // ---------------------------------------------------------------------------
 // Plan types

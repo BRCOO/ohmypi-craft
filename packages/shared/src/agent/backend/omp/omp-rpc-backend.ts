@@ -553,6 +553,7 @@ export class OmpRpcBackend extends BaseAgent {
     if (data !== null && data !== undefined && !parsed) {
       throw new Error('OMP handoff returned an invalid result');
     }
+    if (parsed) await this.refreshOmpSessionLink();
     return parsed;
   }
 

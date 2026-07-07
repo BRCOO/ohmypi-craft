@@ -29,7 +29,15 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { navigate, routes } from '@/lib/navigate'
 import { extractLabelId, toggleLabelInList } from '@craft-agent/shared/labels'
+import { dispatchFocusInputEvent } from '@/components/app-shell/input/focus-input-events'
 import type { SessionMeta } from '@/atoms/sessions'
+import type {
+  OmpBranchOption,
+  OmpBranchOptionsResult,
+  OmpBranchSessionResult,
+  OmpExportHtmlResult,
+  OmpHandoffSessionResult,
+} from '../../shared/types'
 
 export interface UseSessionMenuActionsOptions {
   item: SessionMeta
@@ -54,6 +62,9 @@ export interface SessionMenuActions {
   updateShare: () => Promise<void>
   /** Revoke the share. */
   revokeShare: () => Promise<void>
+  branchOmpSession: () => Promise<void>
+  handoffOmpSession: () => Promise<void>
+  exportOmpSessionHtml: () => Promise<void>
 }
 
 // SOH (U+0001) — non-printable so it can't collide with label IDs (which
@@ -64,6 +75,17 @@ function joinLabelKey(labels: readonly string[] | undefined): string {
   return (labels ?? []).join(LABEL_KEY_SEPARATOR)
 }
 
+function chooseOmpBranchOption(options: OmpBranchOption[], title: string): OmpBranchOption | null {
+  const body = options
+    .map(option => `${option.ordinal}. ${option.textPreview}`)
+    .join('\n')
+  const answer = window.prompt(`${title}\n\n${body}\n\n#`, '1')
+  if (answer === null) return null
+  const ordinal = Number.parseInt(answer.trim(), 10)
+  if (!Number.isFinite(ordinal)) return null
+  return options.find(option => option.ordinal === ordinal) ?? null
+}
+
 export function useSessionMenuActions({
   item,
   onLabelsChange,
@@ -72,6 +94,7 @@ export function useSessionMenuActions({
   const sessionId = item.id
   const sharedUrl = item.sharedUrl
   const propLabels = item.labels
+  const isOmpSession = item.ompSessionLink?.provider === 'omp'
 
   const [optimisticLabels, setOptimisticLabels] = React.useState<string[]>(() => propLabels ?? [])
   // Mirror of `optimisticLabels` so toggles can read the latest value
@@ -199,6 +222,118 @@ export function useSessionMenuActions({
     }
   }, [sessionId, t])
 
+  const branchOmpSession = React.useCallback(async () => {
+    if (!isOmpSession) {
+      toast.error(t('sessionMenu.ompUnavailable'))
+      return
+    }
+
+    const optionsResult = await window.electronAPI.sessionCommand(sessionId, {
+      type: 'getOmpBranchOptions',
+    }) as OmpBranchOptionsResult | undefined
+
+    if (!optionsResult?.success) {
+      toast.error(t('sessionMenu.ompBranchFailed'), {
+        description: optionsResult?.error ?? t('toast.unknownError'),
+      })
+      return
+    }
+
+    const options = optionsResult.options ?? []
+    if (options.length === 0) {
+      toast.info(t('sessionMenu.ompNoBranchPoints'))
+      return
+    }
+
+    const selected = chooseOmpBranchOption(options, t('sessionMenu.ompBranchPrompt'))
+    if (!selected) return
+
+    const result = await window.electronAPI.sessionCommand(sessionId, {
+      type: 'branchOmpSession',
+      entryId: selected.entryId,
+      craftMessageId: selected.craftMessageId,
+    }) as OmpBranchSessionResult | undefined
+
+    if (result?.success && result.cancelled) {
+      toast.info(t('sessionMenu.ompBranchCancelled'))
+      return
+    }
+
+    if (result?.success) {
+      const text = result.selectedText ?? ''
+      if (text) {
+        window.dispatchEvent(new CustomEvent('craft:restore-input', {
+          detail: { sessionId, text },
+        }))
+        dispatchFocusInputEvent({ sessionId })
+      }
+      toast.success(t('sessionMenu.ompBranchCreated'))
+    } else {
+      toast.error(t('sessionMenu.ompBranchFailed'), {
+        description: result?.error ?? t('toast.unknownError'),
+      })
+    }
+  }, [isOmpSession, sessionId, t])
+
+  const handoffOmpSession = React.useCallback(async () => {
+    if (!isOmpSession) {
+      toast.error(t('sessionMenu.ompUnavailable'))
+      return
+    }
+
+    const customInstructions = window.prompt(t('sessionMenu.ompHandoffPrompt'), '') ?? null
+    if (customInstructions === null) return
+
+    const result = await window.electronAPI.sessionCommand(sessionId, {
+      type: 'handoffOmpSession',
+      customInstructions,
+    }) as OmpHandoffSessionResult | undefined
+
+    if (result?.success && result.cancelled) {
+      toast.info(t('sessionMenu.ompHandoffCancelled'))
+      return
+    }
+
+    if (result?.success) {
+      toast.success(t('sessionMenu.ompHandoffComplete'), {
+        description: result.savedPath,
+        action: result.savedPath ? {
+          label: t('common.open'),
+          onClick: () => window.electronAPI.openFile(result.savedPath!),
+        } : undefined,
+      })
+    } else {
+      toast.error(t('sessionMenu.ompHandoffFailed'), {
+        description: result?.error ?? t('toast.unknownError'),
+      })
+    }
+  }, [isOmpSession, sessionId, t])
+
+  const exportOmpSessionHtml = React.useCallback(async () => {
+    if (!isOmpSession) {
+      toast.error(t('sessionMenu.ompUnavailable'))
+      return
+    }
+
+    const result = await window.electronAPI.sessionCommand(sessionId, {
+      type: 'exportOmpSessionHtml',
+    }) as OmpExportHtmlResult | undefined
+
+    if (result?.success && result.outputPath) {
+      toast.success(t('sessionMenu.ompExportComplete'), {
+        description: result.outputPath,
+        action: {
+          label: t('common.open'),
+          onClick: () => window.electronAPI.openFile(result.outputPath!),
+        },
+      })
+    } else {
+      toast.error(t('sessionMenu.ompExportFailed'), {
+        description: result?.error ?? t('toast.unknownError'),
+      })
+    }
+  }, [isOmpSession, sessionId, t])
+
   return {
     appliedLabelIds,
     toggleLabel,
@@ -211,5 +346,8 @@ export function useSessionMenuActions({
     copySharedLink,
     updateShare,
     revokeShare,
+    branchOmpSession,
+    handoffOmpSession,
+    exportOmpSessionHtml,
   }
 }

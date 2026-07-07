@@ -152,6 +152,25 @@ export interface ISessionManager {
   revokeShare(sessionId: string): Promise<ShareResult>
 
   // ---------------------------------------------------------------------------
+  // OMP session actions
+  // ---------------------------------------------------------------------------
+
+  getOmpBranchOptions(sessionId: string): Promise<import('@craft-agent/shared/protocol').OmpBranchOptionsResult>
+  branchOmpSession(
+    sessionId: string,
+    entryId: string,
+    craftMessageId: string,
+  ): Promise<import('@craft-agent/shared/protocol').OmpBranchSessionResult>
+  handoffOmpSession(
+    sessionId: string,
+    customInstructions?: string,
+  ): Promise<import('@craft-agent/shared/protocol').OmpHandoffSessionResult>
+  exportOmpSessionHtml(
+    sessionId: string,
+    outputPath?: string,
+  ): Promise<import('@craft-agent/shared/protocol').OmpExportHtmlResult>
+
+  // ---------------------------------------------------------------------------
   // Export / Import
   // ---------------------------------------------------------------------------
 
