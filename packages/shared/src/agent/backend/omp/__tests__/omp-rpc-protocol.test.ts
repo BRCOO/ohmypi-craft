@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
+  craftThinkingLevelToOmp,
+  ompThinkingLevelToCraft,
   parseOmpPromptResponseData,
   parseOmpPromptResult,
   parseOmpRpcResponse,
@@ -21,6 +23,15 @@ const validState = {
 };
 
 describe('OMP RPC protocol parsers', () => {
+  it('maps Craft and OMP thinking levels without overstating max support', () => {
+    expect(craftThinkingLevelToOmp('off')).toBe('off');
+    expect(craftThinkingLevelToOmp('medium')).toBe('medium');
+    expect(craftThinkingLevelToOmp('max')).toBe('xhigh');
+    expect(ompThinkingLevelToCraft('minimal')).toBe('low');
+    expect(ompThinkingLevelToCraft('xhigh')).toBe('xhigh');
+    expect(ompThinkingLevelToCraft('unknown')).toBeUndefined();
+  });
+
   it('parses a response envelope without nesting its data payload', () => {
     expect(parseOmpRpcResponse({
       type: 'response',

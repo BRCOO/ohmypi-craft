@@ -19,7 +19,21 @@ class FakeChild extends EventEmitter {
 
   constructor() {
     super();
-    this.stdin.on('data', (chunk) => this.writes.push(String(chunk)));
+    this.stdin.on('data', (chunk) => {
+      const text = String(chunk);
+      this.writes.push(text);
+      for (const line of text.split('\n').filter(Boolean)) {
+        const frame = JSON.parse(line) as Record<string, unknown>;
+        if (frame.type === 'set_thinking_level') {
+          queueMicrotask(() => this.emitFrame({
+            type: 'response',
+            id: frame.id,
+            command: 'set_thinking_level',
+            success: true,
+          }));
+        }
+      }
+    });
   }
 
   kill(): boolean {
@@ -44,6 +58,7 @@ function createHarness(options: {
   readyTimeoutMs?: number;
   requestTimeoutMs?: number;
   onSessionId?: (id: string) => void;
+  attachmentReadFile?: (path: string) => Buffer;
 } = {}) {
   const children: FakeChild[] = [];
   const spawnProcess = (() => {
@@ -61,6 +76,7 @@ function createHarness(options: {
     spawnProcess,
     readyTimeoutMs: options.readyTimeoutMs,
     requestTimeoutMs: options.requestTimeoutMs,
+    attachmentReadFile: options.attachmentReadFile,
   });
 
   return { backend, children };
@@ -188,6 +204,40 @@ describe('OmpRpcBackend subprocess lifecycle', () => {
     const request = (backend as any).send({ type: 'get_state' }) as Promise<unknown>;
     await expect(request).rejects.toThrow('OMP RPC command timed out: get_state');
     expect((backend as any).pending.size).toBe(0);
+    expect(backend.getDiagnostics().requestTimeouts).toBe(1);
+    backend.destroy();
+  });
+
+  it('records redacted protocol diagnostics for malformed, unknown, orphan, and duplicate traffic', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children);
+    child.stdout.write('malformed-json\n');
+    child.emitFrame({ type: 'future_frame', prompt: 'secret prompt', image: 'secret base64' });
+
+    const request = (backend as any).send({ type: 'get_state' }) as Promise<unknown>;
+    const requestId = child.frames.at(-1)?.id as string;
+    const response = {
+      type: 'response',
+      id: requestId,
+      command: 'get_state',
+      success: true,
+      data: { secret: 'response secret' },
+    };
+    child.emitFrame(response);
+    await request;
+    child.emitFrame(response);
+    child.emitFrame({ ...response, id: 'orphan-id' });
+    await waitFor(() => backend.getDiagnostics().orphanResponses === 1);
+
+    const diagnostics = backend.getDiagnostics();
+    expect(diagnostics.malformedLines).toBe(1);
+    expect(diagnostics.unknownFramesByType.future_frame).toBe(1);
+    expect(diagnostics.duplicateResponses).toBe(1);
+    expect(diagnostics.orphanResponses).toBe(1);
+    expect(diagnostics.requestLatencyByCommand.get_state).toBeDefined();
+    expect(JSON.stringify(diagnostics)).not.toContain('secret prompt');
+    expect(JSON.stringify(diagnostics)).not.toContain('secret base64');
+    expect(JSON.stringify(diagnostics)).not.toContain('response secret');
     backend.destroy();
   });
 
@@ -211,6 +261,7 @@ describe('OmpRpcBackend subprocess lifecycle', () => {
     expect(second.killed).toBe(false);
     expect(sessionIds).toEqual(['session-1', 'session-2']);
     expect(backend.getRecentStderr()).not.toContain('stale stderr');
+    expect(backend.getDiagnostics().lastExit).toBeUndefined();
     backend.destroy();
   });
 
@@ -389,6 +440,96 @@ describe('OmpRpcBackend subprocess lifecycle', () => {
 
     const events = await eventsPromise;
     expect(events.map((event) => event.type)).toEqual(['complete']);
+    backend.destroy();
+  });
+
+  it('sends native images and streaming behavior without embedding base64 in prompt text', async () => {
+    const { backend, children } = createHarness();
+    const eventsPromise = (async () => {
+      const events = [];
+      for await (const event of backend.chat('describe', [{
+        type: 'image',
+        path: 'image.png',
+        name: 'image.png',
+        mimeType: 'image/png',
+        base64: 'AQID',
+        size: 3,
+      }], { streamingBehavior: 'followUp' })) events.push(event);
+      return events;
+    })();
+
+    await waitFor(() => children.length === 1);
+    const child = children[0]!;
+    await respondReady(child, 'session-image');
+    await waitFor(() => child.frames.some((frame) => frame.type === 'prompt'));
+    const prompt = child.frames.find((frame) => frame.type === 'prompt')!;
+    expect(prompt.message).toBe('describe');
+    expect(prompt.streamingBehavior).toBe('followUp');
+    expect(prompt.images).toEqual([{ type: 'image', data: 'AQID', mimeType: 'image/png' }]);
+    expect(String(prompt.message)).not.toContain('AQID');
+    child.emitFrame({
+      type: 'response',
+      id: prompt.id,
+      command: 'prompt',
+      success: true,
+      data: { agentInvoked: false },
+    });
+    await eventsPromise;
+    backend.destroy();
+  });
+
+  it('applies and restores a one-turn thinking override around the prompt', async () => {
+    const { backend, children } = createHarness();
+    const eventsPromise = (async () => {
+      const events = [];
+      for await (const event of backend.chat('think', undefined, { thinkingOverride: 'high' })) events.push(event);
+      return events;
+    })();
+
+    await waitFor(() => children.length === 1);
+    const child = children[0]!;
+    await respondReady(child, 'session-thinking');
+    await waitFor(() => child.frames.some((frame) => frame.type === 'prompt'));
+    const prompt = child.frames.find((frame) => frame.type === 'prompt')!;
+    child.emitFrame({
+      type: 'response',
+      id: prompt.id,
+      command: 'prompt',
+      success: true,
+      data: { agentInvoked: false },
+    });
+    await eventsPromise;
+    await waitFor(() => child.frames.filter((frame) => frame.type === 'set_thinking_level').length === 3);
+
+    expect(child.frames
+      .filter((frame) => frame.type === 'set_thinking_level')
+      .map((frame) => frame.level)).toEqual(['medium', 'high', 'medium']);
+    backend.destroy();
+  });
+
+  it('maps a pre-start Craft max level to OMP xhigh', async () => {
+    const { backend, children } = createHarness();
+    backend.setThinkingLevel('max');
+    const eventsPromise = (async () => {
+      const events = [];
+      for await (const event of backend.chat('max thinking')) events.push(event);
+      return events;
+    })();
+
+    await waitFor(() => children.length === 1);
+    const child = children[0]!;
+    await respondReady(child, 'session-max');
+    await waitFor(() => child.frames.some((frame) => frame.type === 'prompt'));
+    const prompt = child.frames.find((frame) => frame.type === 'prompt')!;
+    expect(child.frames.find((frame) => frame.type === 'set_thinking_level')?.level).toBe('xhigh');
+    child.emitFrame({
+      type: 'response',
+      id: prompt.id,
+      command: 'prompt',
+      success: true,
+      data: { agentInvoked: false },
+    });
+    await eventsPromise;
     backend.destroy();
   });
 

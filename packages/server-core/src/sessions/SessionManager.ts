@@ -1098,6 +1098,7 @@ const DELTA_BATCH_INTERVAL_MS = 50  // Flush batched deltas every 50ms
 interface PendingDelta {
   delta: string
   turnId?: string
+  isThinking?: boolean
 }
 
 export class SessionManager implements ISessionManager {
@@ -6863,7 +6864,7 @@ export class SessionManager implements ISessionManager {
       case 'text_delta':
         managed.streamingText += event.text
         // Queue delta for batched sending (performance: reduces IPC from 50+/sec to ~20/sec)
-        this.queueDelta(sessionId, workspaceId, event.text, event.turnId)
+        this.queueDelta(sessionId, workspaceId, event.text, event.turnId, event.isThinking)
         break
 
       case 'text_complete': {
@@ -6876,6 +6877,7 @@ export class SessionManager implements ISessionManager {
           content: event.text,
           timestamp: this.monotonic(),
           isIntermediate: event.isIntermediate,
+          isThinking: event.isThinking,
           turnId: event.turnId,
           parentToolUseId: event.parentToolUseId,
         }
@@ -6883,7 +6885,7 @@ export class SessionManager implements ISessionManager {
         managed.streamingText = ''
 
         // Update lastMessageRole and lastFinalMessageId for badge/unread display (only for final messages)
-        if (!event.isIntermediate) {
+        if (!event.isIntermediate && !event.isThinking) {
           managed.lastMessageRole = 'assistant'
           managed.lastFinalMessageId = assistantMessage.id
 
@@ -6919,7 +6921,7 @@ export class SessionManager implements ISessionManager {
           }
         }
 
-        this.sendEvent({ type: 'text_complete', sessionId, text: event.text, isIntermediate: event.isIntermediate, turnId: event.turnId, parentToolUseId: event.parentToolUseId, timestamp: assistantMessage.timestamp, messageId: assistantMessage.id }, workspaceId)
+        this.sendEvent({ type: 'text_complete', sessionId, text: event.text, isIntermediate: event.isIntermediate || event.isThinking, isThinking: event.isThinking, turnId: event.turnId, parentToolUseId: event.parentToolUseId, timestamp: assistantMessage.timestamp, messageId: assistantMessage.id }, workspaceId)
 
         // Persist session after complete message to prevent data loss on quit
         this.persistSession(managed)
@@ -7575,8 +7577,12 @@ export class SessionManager implements ISessionManager {
    * Queue a text delta for batched sending (performance optimization)
    * Instead of sending 50+ IPC events per second, batches deltas and flushes every 50ms
    */
-  private queueDelta(sessionId: string, workspaceId: string, delta: string, turnId?: string): void {
-    const existing = this.pendingDeltas.get(sessionId)
+  private queueDelta(sessionId: string, workspaceId: string, delta: string, turnId?: string, isThinking?: boolean): void {
+    let existing = this.pendingDeltas.get(sessionId)
+    if (existing && !!existing.isThinking !== !!isThinking) {
+      this.flushDelta(sessionId, workspaceId)
+      existing = undefined
+    }
     if (existing) {
       // Append to existing batch
       existing.delta += delta
@@ -7584,7 +7590,7 @@ export class SessionManager implements ISessionManager {
       if (turnId) existing.turnId = turnId
     } else {
       // Start new batch
-      this.pendingDeltas.set(sessionId, { delta, turnId })
+      this.pendingDeltas.set(sessionId, { delta, turnId, isThinking })
     }
 
     // Schedule flush if not already scheduled
@@ -7615,7 +7621,8 @@ export class SessionManager implements ISessionManager {
         type: 'text_delta',
         sessionId,
         delta: pending.delta,
-        turnId: pending.turnId
+        turnId: pending.turnId,
+        isThinking: pending.isThinking,
       }, workspaceId)
       this.pendingDeltas.delete(sessionId)
     }

@@ -9,12 +9,28 @@
  * the full OMP protocol. Add shapes only when the Craft backend consumes them.
  */
 
+import type { ThinkingLevel } from '../../thinking-levels.ts';
+
+export type OmpThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
+export interface OmpRpcImageContent {
+  type: 'image';
+  data: string;
+  mimeType: string;
+}
+
 export type OmpRpcCommand =
-  | { type: 'prompt'; message: string }
-  | { type: 'steer'; message: string }
+  | {
+      type: 'prompt';
+      message: string;
+      images?: OmpRpcImageContent[];
+      streamingBehavior?: 'steer' | 'followUp';
+    }
+  | { type: 'steer'; message: string; images?: OmpRpcImageContent[] }
   | { type: 'abort' }
   | { type: 'get_state' }
   | { type: 'set_model'; provider: string; modelId: string }
+  | { type: 'set_thinking_level'; level: OmpThinkingLevel }
   | { type: 'permission_response'; requestId: string; decision: 'approved' | 'denied' };
 
 export type OmpRpcExtensionUiResponse =
@@ -56,6 +72,24 @@ export interface OmpRpcSessionState {
   queuedMessageCount: number;
   todoPhases: unknown[];
   [key: string]: unknown;
+}
+
+export function craftThinkingLevelToOmp(level: ThinkingLevel): OmpThinkingLevel {
+  return level === 'max' ? 'xhigh' : level;
+}
+
+export function ompThinkingLevelToCraft(level: unknown): ThinkingLevel | undefined {
+  if (level === 'minimal') return 'low';
+  if (
+    level === 'off'
+    || level === 'low'
+    || level === 'medium'
+    || level === 'high'
+    || level === 'xhigh'
+  ) {
+    return level;
+  }
+  return undefined;
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {

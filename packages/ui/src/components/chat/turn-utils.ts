@@ -571,7 +571,7 @@ export function groupMessagesByTurn(messages: Message[], options: GroupTurnsOpti
       // Intermediate messages OR pending messages (don't know yet) are activities, not responses
       // Pending: streaming text where we don't yet know if it's intermediate - treat as intermediate
       // until text_complete arrives with the definitive isIntermediate flag
-      if (message.isIntermediate || message.isPending) {
+      if (message.isIntermediate || message.isThinking || message.isPending) {
         if (!currentTurn) {
           // Start a new turn for this intermediate message
           currentTurn = {
@@ -590,7 +590,7 @@ export function groupMessagesByTurn(messages: Message[], options: GroupTurnsOpti
         // Include parentId for intermediate messages to support nesting within subagents
         const intermediateActivity: ActivityItem = {
           id: message.id,
-          type: 'intermediate',
+          type: message.isThinking ? 'thinking' : 'intermediate',
           status: message.isPending ? 'running' : 'completed',
           content: message.content,
           timestamp: message.timestamp,
@@ -747,6 +747,13 @@ export function formatTurnAsMarkdown(turn: AssistantTurn): string {
           lines.push(activity.content)
         }
         lines.push('')
+      } else if (activity.type === 'thinking') {
+        lines.push('### 💭 Thinking')
+        lines.push('')
+        if (activity.content) {
+          lines.push(activity.content)
+        }
+        lines.push('')
       } else if (activity.toolName) {
         // Tool call
         const statusEmoji = activity.status === 'completed' ? '✅' :
@@ -829,6 +836,15 @@ export function formatActivityAsMarkdown(activity: ActivityItem): string {
   if (activity.type === 'intermediate') {
     // Commentary/thinking
     lines.push('# Commentary')
+    lines.push('')
+    if (activity.content) {
+      lines.push(activity.content)
+    }
+    return lines.join('\n')
+  }
+
+  if (activity.type === 'thinking') {
+    lines.push('# Thinking')
     lines.push('')
     if (activity.content) {
       lines.push(activity.content)

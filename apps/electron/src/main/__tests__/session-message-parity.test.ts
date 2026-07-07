@@ -57,6 +57,7 @@ function createFullMessage(): Message {
     isStreaming: false,
     isPending: false,
     isIntermediate: false,
+    isThinking: true,
     turnId: 'turn-abc',
     infoLevel: 'warning',
     errorCode: 'network_error',
@@ -119,7 +120,7 @@ describe('messageToStored/storedToMessage round-trip', () => {
       'parentToolUseId',
       'taskId', 'shellId', 'elapsedSeconds', 'isBackground',
       'isError', 'attachments', 'badges', 'annotations',
-      'isIntermediate', 'turnId', 'infoLevel',
+      'isIntermediate', 'isThinking', 'turnId', 'infoLevel',
       'errorCode', 'errorTitle', 'errorDetails', 'errorOriginal', 'errorCanRetry',
       'planPath',
       'authRequestId', 'authRequestType', 'authSourceSlug', 'authSourceName',
@@ -162,6 +163,7 @@ describe('messageToStored/storedToMessage round-trip', () => {
     expect(restored.badges).toEqual(original.badges)
     expect(restored.annotations).toEqual(original.annotations)
     expect(restored.isIntermediate).toBe(original.isIntermediate)
+    expect(restored.isThinking).toBe(original.isThinking)
     expect(restored.turnId).toBe(original.turnId)
     expect(restored.infoLevel).toBe(original.infoLevel)
     expect(restored.errorCode).toBe(original.errorCode)
@@ -322,19 +324,19 @@ describe('persistence pipeline filtering', () => {
     expect(filtered.map(m => m.role)).toContain('auth-request')
   })
 
-  it('intermediate messages are filtered at write time', () => {
+  it('completed intermediate and thinking messages remain persistable', () => {
     const stored: StoredMessage[] = [
       { id: 'msg-1', type: 'user', content: 'Hello', timestamp: 1 },
-      { id: 'msg-2', type: 'assistant', content: 'Thinking...', timestamp: 2, isIntermediate: true },
+      { id: 'msg-2', type: 'assistant', content: 'Thinking...', timestamp: 2, isIntermediate: true, isThinking: true },
       { id: 'msg-3', type: 'assistant', content: 'Final answer', timestamp: 3, isIntermediate: false },
       { id: 'msg-4', type: 'tool', content: 'Read result', timestamp: 4 },
     ]
 
-    // Mirror: persistence-queue.ts write() filter
-    const persistable = stored.filter(m => !m.isIntermediate)
+    // Mirror: persistence-queue.ts writes every stored message it receives.
+    const persistable = stored
 
-    expect(persistable).toHaveLength(3)
-    expect(persistable.map(m => m.id)).toEqual(['msg-1', 'msg-3', 'msg-4'])
+    expect(persistable).toHaveLength(4)
+    expect(persistable[1]?.isThinking).toBe(true)
   })
 
   it('combined pipeline filters correctly', () => {
@@ -351,11 +353,11 @@ describe('persistence pipeline filtering', () => {
     const afterStatusFilter = messages.filter(m => m.role !== 'status')
     // Stage 2: convert to stored
     const stored = afterStatusFilter.map(messageToStored)
-    // Stage 3: persistence-queue filters intermediate
-    const final = stored.filter(m => !m.isIntermediate)
+    // Stage 3: persistence queue retains completed intermediate activities.
+    const final = stored
 
-    expect(final).toHaveLength(4)
-    expect(final.map(m => m.type)).toEqual(['user', 'tool', 'assistant', 'info'])
-    expect(final.find(m => m.type === 'assistant')?.id).toBe('msg-final')
+    expect(final).toHaveLength(5)
+    expect(final.map(m => m.type)).toEqual(['user', 'assistant', 'tool', 'assistant', 'info'])
+    expect(final.filter(m => m.type === 'assistant').map(m => m.id)).toEqual(['msg-intermediate', 'msg-final'])
   })
 })

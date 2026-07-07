@@ -40,7 +40,7 @@ export function handleTextDelta(
       }
 
   // Find existing streaming message by turnId
-  const streamingIndex = findStreamingMessage(session.messages, event.turnId)
+  const streamingIndex = findStreamingMessage(session.messages, event.turnId, !!event.isThinking)
 
   if (streamingIndex !== -1) {
     // Message exists - update its content
@@ -60,6 +60,8 @@ export function handleTextDelta(
     timestamp: Date.now(),
     isStreaming: true,
     isPending: true,
+    isThinking: event.isThinking,
+    isIntermediate: event.isThinking || undefined,
     turnId: event.turnId,
   }
 
@@ -83,7 +85,7 @@ export function handleTextComplete(
   const { session, streaming } = state
 
   // Find message by turnId (try streaming first, then any assistant)
-  let msgIndex = findStreamingMessage(session.messages, event.turnId)
+  let msgIndex = findStreamingMessage(session.messages, event.turnId, !!event.isThinking)
   if (msgIndex === -1) {
     msgIndex = findAssistantMessage(session.messages, event.turnId)
   }
@@ -114,6 +116,7 @@ export function handleTextComplete(
       isStreaming: false,
       isPending: false,
       isIntermediate: event.isIntermediate,
+      isThinking: event.isThinking,
       turnId: event.turnId,
       parentToolUseId: event.parentToolUseId,
       // Overwrite text_delta's Date.now() with main process monotonic timestamp
@@ -134,6 +137,7 @@ export function handleTextComplete(
     isStreaming: false,
     isPending: false,
     isIntermediate: event.isIntermediate,
+    isThinking: event.isThinking,
     turnId: event.turnId,
     parentToolUseId: event.parentToolUseId,
   }

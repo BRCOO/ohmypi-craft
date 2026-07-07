@@ -299,6 +299,8 @@ export interface ChatOptions {
   isRetry?: boolean;
   /** Override thinking level for this message only */
   thinkingOverride?: ThinkingLevel;
+  /** OMP-compatible behavior when a prompt is submitted during streaming. */
+  streamingBehavior?: 'steer' | 'followUp';
 }
 
 /**

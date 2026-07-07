@@ -17,6 +17,7 @@ import type { Message, ToolDisplayMeta } from '@craft-agent/core'
 interface TextCompleteEvent {
   text: string
   isIntermediate?: boolean
+  isThinking?: boolean
   turnId?: string
   parentToolUseId?: string
   timestamp?: number
@@ -191,6 +192,33 @@ describe('text_complete → assistant Message field parity', () => {
     expect(mainMsg.isIntermediate).toBe(true)
     expect(rendererMsg.isIntermediate).toBe(true)
     expect(mainMsg.parentToolUseId).toBe(rendererMsg.parentToolUseId)
+  })
+
+  it('thinking text preserves its semantic flag on both sides', () => {
+    const event: TextCompleteEvent = {
+      text: 'Model reasoning',
+      isIntermediate: true,
+      isThinking: true,
+      turnId: 'turn-thinking',
+    }
+    const mainMsg: Message = {
+      id: nextId(),
+      role: 'assistant',
+      content: event.text,
+      timestamp: Date.now(),
+      isIntermediate: event.isIntermediate,
+      isThinking: event.isThinking,
+      turnId: event.turnId,
+    }
+    const rendererMsg: Message = {
+      ...mainMsg,
+      id: nextId(),
+      isStreaming: false,
+      isPending: false,
+    }
+    expect(mainMsg.isThinking).toBe(true)
+    expect(rendererMsg.isThinking).toBe(true)
+    expect(mainMsg.isIntermediate).toBe(rendererMsg.isIntermediate)
   })
 })
 

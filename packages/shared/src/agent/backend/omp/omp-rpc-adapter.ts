@@ -5,6 +5,7 @@ import {
   parseOmpRpcResponse,
   type OmpRpcPromptResultFrame,
   type OmpRpcResponseFrame,
+  type OmpThinkingLevel,
 } from './omp-rpc-protocol.ts';
 
 export interface OmpRpcAdaptedFrame {
@@ -13,7 +14,9 @@ export interface OmpRpcAdaptedFrame {
   complete?: boolean;
   response?: OmpRpcResponseFrame;
   promptResult?: OmpRpcPromptResultFrame;
+  thinkingLevel?: OmpThinkingLevel;
   sessionId?: string;
+  unknownFrameType?: string;
 }
 
 const TOOL_NAME_MAP: Record<string, string> = {
@@ -107,6 +110,29 @@ function extractAssistantDelta(raw: Record<string, unknown>): string | undefined
     ?? asString(raw.text);
 }
 
+function assistantMessageEvent(raw: Record<string, unknown>): Record<string, unknown> {
+  return asObject(raw.assistantMessageEvent)
+    ?? asObject(raw.assistant_message_event)
+    ?? {};
+}
+
+function contentIndex(event: Record<string, unknown>): number {
+  return asNumber(event.contentIndex) ?? asNumber(event.content_index) ?? 0;
+}
+
+function extractThinkingBlocks(message: unknown): Array<{ index: number; text: string }> {
+  const content = asObject(message)?.content;
+  if (!Array.isArray(content)) return [];
+  const blocks: Array<{ index: number; text: string }> = [];
+  content.forEach((part, index) => {
+    const block = asObject(part);
+    if (block?.type !== 'thinking') return;
+    const text = asString(block.thinking) ?? asString(block.text) ?? asString(block.content);
+    if (text) blocks.push({ index, text });
+  });
+  return blocks;
+}
+
 function resolveToolName(rawName: unknown): string {
   const name = asString(rawName) ?? 'tool';
   return TOOL_NAME_MAP[name] ?? name;
@@ -187,6 +213,8 @@ export class OmpRpcEventAdapter {
   private currentTurnId: string | undefined;
   private turnIndex = 0;
   private textBuffer = '';
+  private thinkingBuffers = new Map<number, string>();
+  private completedThinkingBlocks = new Set<number>();
   private hasEmittedFinalText = false;
   private toolNames = new Map<string, string>();
   private toolInputs = new Map<string, Record<string, unknown>>();
@@ -194,6 +222,8 @@ export class OmpRpcEventAdapter {
   startTurn(): void {
     this.currentTurnId = `omp-turn-${this.turnIndex++}`;
     this.textBuffer = '';
+    this.thinkingBuffers.clear();
+    this.completedThinkingBlocks.clear();
     this.hasEmittedFinalText = false;
     this.toolNames.clear();
     this.toolInputs.clear();
@@ -232,6 +262,37 @@ export class OmpRpcEventAdapter {
       case 'agent_end':
         return { events: [], complete: true };
 
+      case 'thinking_level_changed': {
+        const level = raw.level ?? raw.thinkingLevel ?? raw.thinking_level;
+        if (
+          level === 'off'
+          || level === 'minimal'
+          || level === 'low'
+          || level === 'medium'
+          || level === 'high'
+          || level === 'xhigh'
+        ) {
+          return { events: [], thinkingLevel: level };
+        }
+        return { events: [] };
+      }
+
+      case 'config_update': {
+        const config = asObject(raw.config) ?? raw;
+        const level = config.thinkingLevel ?? config.thinking_level;
+        if (
+          level === 'off'
+          || level === 'minimal'
+          || level === 'low'
+          || level === 'medium'
+          || level === 'high'
+          || level === 'xhigh'
+        ) {
+          return { events: [], thinkingLevel: level };
+        }
+        return { events: [] };
+      }
+
       case 'turn_start':
         this.currentTurnId = `omp-turn-${this.turnIndex++}`;
         return { events: [] };
@@ -242,6 +303,50 @@ export class OmpRpcEventAdapter {
         return { events: [] };
 
       case 'message_update': {
+        const assistantEvent = assistantMessageEvent(raw);
+        const assistantEventType = asString(assistantEvent.type);
+        const index = contentIndex(assistantEvent);
+
+        if (assistantEventType === 'thinking_start') {
+          this.thinkingBuffers.set(index, '');
+          this.completedThinkingBlocks.delete(index);
+          return { events: [] };
+        }
+
+        if (assistantEventType === 'thinking_delta') {
+          const delta = asString(assistantEvent.delta) ?? asString(raw.delta);
+          if (!delta) return { events: [] };
+          this.thinkingBuffers.set(index, (this.thinkingBuffers.get(index) ?? '') + delta);
+          return {
+            events: [{
+              type: 'text_delta',
+              text: delta,
+              isThinking: true,
+              turnId: this.currentTurnId,
+            }],
+          };
+        }
+
+        if (assistantEventType === 'thinking_end') {
+          const text = asString(assistantEvent.content) ?? this.thinkingBuffers.get(index) ?? '';
+          this.thinkingBuffers.delete(index);
+          if (!text || this.completedThinkingBlocks.has(index)) return { events: [] };
+          this.completedThinkingBlocks.add(index);
+          return {
+            events: [{
+              type: 'text_complete',
+              text,
+              isIntermediate: true,
+              isThinking: true,
+              turnId: this.currentTurnId,
+            }],
+          };
+        }
+
+        if (assistantEventType && assistantEventType !== 'text_delta') {
+          return { events: [] };
+        }
+
         const delta = extractAssistantDelta(raw);
         if (!delta) return { events: [] };
         this.textBuffer += delta;
@@ -265,18 +370,31 @@ export class OmpRpcEventAdapter {
           return { events: [{ type: 'error', message: errorMessage }] };
         }
 
+        const events: AgentEvent[] = [];
+        for (const block of extractThinkingBlocks(raw.message)) {
+          if (this.completedThinkingBlocks.has(block.index)) continue;
+          this.completedThinkingBlocks.add(block.index);
+          events.push({
+            type: 'text_complete',
+            text: block.text,
+            isIntermediate: true,
+            isThinking: true,
+            turnId: this.currentTurnId,
+          });
+        }
+
         const text = extractMessageText(raw.message) ?? this.textBuffer;
-        if (!text || this.hasEmittedFinalText) return { events: [] };
-        this.hasEmittedFinalText = true;
-        this.textBuffer = '';
-        return {
-          events: [{
+        if (text && !this.hasEmittedFinalText) {
+          this.hasEmittedFinalText = true;
+          this.textBuffer = '';
+          events.push({
             type: 'text_complete',
             text,
             turnId: this.currentTurnId,
             sdkMessageId: asString(raw.sdkMessageId) ?? asString(raw.sdk_message_id) ?? asString(message?.id),
-          }],
-        };
+          });
+        }
+        return { events };
       }
 
       case 'tool_execution_start': {
@@ -357,7 +475,11 @@ export class OmpRpcEventAdapter {
 
       case 'permission_resolved':
       case 'available_commands_update':
+        return { events: [] };
+
       case 'message_start':
+        this.thinkingBuffers.clear();
+        this.completedThinkingBlocks.clear();
         return { events: [] };
 
       case 'stderr':
@@ -416,7 +538,7 @@ export class OmpRpcEventAdapter {
       }
 
       default:
-        return { events: [] };
+        return { events: [], unknownFrameType: type };
     }
   }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
-import { handleTextComplete } from '../text'
-import type { SessionState, TextCompleteEvent } from '../../types'
+import { handleTextComplete, handleTextDelta } from '../text'
+import type { SessionState, TextCompleteEvent, TextDeltaEvent } from '../../types'
 
 function makeState(messages: any[]): SessionState {
   return {
@@ -79,5 +79,51 @@ describe('handleTextComplete messageId synchronization', () => {
 
     expect(id.startsWith('msg-')).toBe(true)
     expect(id).not.toBe('')
+  })
+
+  it('keeps thinking streaming separate from final answer streaming', () => {
+    let state = makeState([])
+    const thinkingDelta: TextDeltaEvent = {
+      type: 'text_delta',
+      sessionId: 'session-1',
+      delta: 'Reason',
+      turnId: 'turn-thinking',
+      isThinking: true,
+    }
+    state = handleTextDelta(state, thinkingDelta)
+    expect(state.session.messages[0]).toMatchObject({
+      content: 'Reason',
+      isThinking: true,
+      isIntermediate: true,
+    })
+
+    state = handleTextComplete(state, {
+      type: 'text_complete',
+      sessionId: 'session-1',
+      text: 'Reasoning',
+      turnId: 'turn-thinking',
+      isIntermediate: true,
+      isThinking: true,
+      messageId: 'thinking-main',
+    })
+    state = handleTextDelta(state, {
+      type: 'text_delta',
+      sessionId: 'session-1',
+      delta: 'Answer',
+      turnId: 'turn-thinking',
+    })
+
+    expect(state.session.messages).toHaveLength(2)
+    expect(state.session.messages[0]).toMatchObject({
+      id: 'thinking-main',
+      content: 'Reasoning',
+      isThinking: true,
+      isStreaming: false,
+    })
+    expect(state.session.messages[1]).toMatchObject({
+      content: 'Answer',
+      isThinking: undefined,
+      isStreaming: true,
+    })
   })
 })

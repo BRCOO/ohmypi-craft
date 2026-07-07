@@ -32,6 +32,7 @@ export interface TextDeltaEvent {
   sessionId: string
   delta: string
   turnId?: string
+  isThinking?: boolean
 }
 
 /**
@@ -43,6 +44,7 @@ export interface TextCompleteEvent {
   text: string
   turnId?: string
   isIntermediate?: boolean
+  isThinking?: boolean
   parentToolUseId?: string
   /** Timestamp from main process for consistent ordering with session.jsonl */
   timestamp?: number

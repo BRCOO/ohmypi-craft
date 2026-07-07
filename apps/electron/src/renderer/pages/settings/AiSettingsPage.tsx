@@ -111,7 +111,8 @@ function getOmpStatusDescription(status: OmpRuntimeStatus | null): string {
   const command = status.rawCommand || status.command
   if (status.ok) {
     const models = typeof status.modelCount === 'number' ? `${status.modelCount} models` : 'models available'
-    return `${models} · ${getOmpSourceLabel(status.source)} · ${command}`
+    const version = status.version ? ` · ${status.version}` : ''
+    return `${models}${version} · ${getOmpSourceLabel(status.source)} · ${command}`
   }
   return `${getOmpSourceLabel(status.source)} · ${command} · ${status.error || 'OMP runtime is not reachable'}`
 }

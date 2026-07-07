@@ -12,6 +12,7 @@ import {
   XCircle,
   Circle,
   MessageCircleDashed,
+  BrainCircuit,
   FileText,
   ArrowUpRight,
   Ban,
@@ -735,7 +736,7 @@ function getPreviewText(
   if (isStreaming && !isComplete) {
     const latestIntermediate = [...activities]
       .reverse()
-      .find(a => a.type === 'intermediate' && a.content)
+      .find(a => (a.type === 'intermediate' || a.type === 'thinking') && a.content)
     if (latestIntermediate?.content) {
       return latestIntermediate.content
     }
@@ -950,6 +951,38 @@ function ActivityRow({ activity, onOpenDetails, isLastChild, sessionFolderPath, 
     )
   }
 
+  if (activity.type === 'thinking') {
+    const isRunning = activity.status === 'running'
+    const displayContent = isRunning ? i18n.t('turnCard.processing') : stripMarkdown(activity.content || '')
+    const isComplete = activity.status === 'completed'
+    return (
+      <div className="flex items-stretch">
+        <TreeViewConnector depth={depth} isLastChild={isLastChild} />
+        <div
+          className={cn(
+            "group/row flex items-center gap-2 py-0.5 text-foreground/70 flex-1 min-w-0",
+            SIZE_CONFIG.fontSize
+          )}
+          onClick={onOpenDetails && isComplete ? onOpenDetails : undefined}
+        >
+          {isRunning ? (
+            <div className={cn(SIZE_CONFIG.iconSize, "flex items-center justify-center shrink-0")}>
+              <Spinner className={SIZE_CONFIG.spinnerSize} />
+            </div>
+          ) : (
+            <BrainCircuit className={cn(SIZE_CONFIG.iconSize, "shrink-0 text-primary/70")} />
+          )}
+          <span className={cn("truncate flex-1", onOpenDetails && isComplete && "group-hover/row:underline")}>
+            {displayContent}
+          </span>
+          {onOpenDetails && isComplete && (
+            <ArrowUpRight className={cn(SIZE_CONFIG.iconSize, "opacity-0 group-hover/row:opacity-100 transition-opacity")} />
+          )}
+        </div>
+      </div>
+    )
+  }
+
   // Status activities (e.g., compacting) - system-level with distinct styling
   if (activity.type === 'status') {
     const isRunning = activity.status === 'running'
@@ -981,8 +1014,7 @@ function ActivityRow({ activity, onOpenDetails, isLastChild, sessionFolderPath, 
   // - Intent: For MCP tools (activity.intent), for Bash (toolInput.description)
   // - Params: Remaining tool input summary
   const toolDisplay = formatToolDisplay(activity)
-  const fullDisplayName = toolDisplay.name
-    || (activity.type === 'thinking' ? 'Thinking' : 'Processing')
+  const fullDisplayName = toolDisplay.name || 'Processing'
 
   // Detect MCP/API tools (toolName starts with "mcp__")
   const isMcpOrApiTool = activity.toolName?.startsWith('mcp__') ?? false

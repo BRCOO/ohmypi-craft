@@ -37,17 +37,25 @@ export function findMessageByTurnId(
  */
 export function findStreamingMessage(
   messages: Message[],
-  turnId?: string
+  turnId?: string,
+  isThinking?: boolean,
 ): number {
   if (turnId) {
     const index = messages.findIndex(m =>
-      m.role === 'assistant' && m.turnId === turnId && m.isStreaming
+      m.role === 'assistant'
+      && m.turnId === turnId
+      && m.isStreaming
+      && (isThinking === undefined || !!m.isThinking === isThinking)
     )
     if (index !== -1) return index
   }
   // Fallback: find last streaming assistant message
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'assistant' && messages[i].isStreaming) {
+    if (
+      messages[i].role === 'assistant'
+      && messages[i].isStreaming
+      && (isThinking === undefined || !!messages[i].isThinking === isThinking)
+    ) {
       return i
     }
   }

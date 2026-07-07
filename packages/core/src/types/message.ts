@@ -287,6 +287,8 @@ export interface Message {
   isQueued?: boolean;
   // Intermediate text (commentary between tool calls, not final response)
   isIntermediate?: boolean;
+  /** True when this assistant message contains model reasoning rather than answer text. */
+  isThinking?: boolean;
   // Turn ID: Correlation ID from the API's message.id, groups all messages in an assistant turn
   turnId?: string;
   // Status type for special status messages (e.g., compacting)
@@ -367,6 +369,8 @@ export interface StoredMessage {
   annotations?: AnnotationV1[];
   // Turn grouping - critical for TurnCard rendering after reload
   isIntermediate?: boolean;
+  /** Persisted model reasoning activity; never treated as the final answer. */
+  isThinking?: boolean;
   turnId?: string;
   // Status type for compaction messages (persisted for reload)
   statusType?: 'compacting' | 'compaction_complete';
@@ -593,8 +597,8 @@ export interface AgentEventUsage {
 export type AgentEvent =
   | { type: 'status'; message: string }
   | { type: 'info'; message: string }
-  | { type: 'text_delta'; text: string; turnId?: string; parentToolUseId?: string }
-  | { type: 'text_complete'; text: string; isIntermediate?: boolean; turnId?: string; parentToolUseId?: string; sdkMessageId?: string }
+  | { type: 'text_delta'; text: string; isThinking?: boolean; turnId?: string; parentToolUseId?: string }
+  | { type: 'text_complete'; text: string; isIntermediate?: boolean; isThinking?: boolean; turnId?: string; parentToolUseId?: string; sdkMessageId?: string }
   | { type: 'pi_turn_anchor'; sdkMessageId: string; sdkTurnAnchor: string }
   | { type: 'tool_start'; toolName: string; toolUseId: string; input: Record<string, unknown>; intent?: string; displayName?: string; turnId?: string; parentToolUseId?: string; toolDisplayMeta?: ToolDisplayMeta }
   | { type: 'tool_result'; toolUseId: string; toolName?: string; result: string; isError: boolean; input?: Record<string, unknown>; turnId?: string; parentToolUseId?: string }

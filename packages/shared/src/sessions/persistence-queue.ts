@@ -109,8 +109,9 @@ class SessionPersistenceQueue {
         lastUsedAt: Date.now(),
       }
 
-      // Create JSONL content: header + messages (one per line)
-      // Filter out intermediate messages - they're transient streaming status updates
+      // Create JSONL content: header + messages (one per line). Completed
+      // intermediate/thinking messages are durable turn activities; only temporary
+      // streaming state is excluded earlier by messageToStored().
       const localHeader = createSessionHeader(storageSession)
       const localSig = getHeaderMetadataSignature(localHeader)
       const diskHeader = readSessionHeader(filePath)

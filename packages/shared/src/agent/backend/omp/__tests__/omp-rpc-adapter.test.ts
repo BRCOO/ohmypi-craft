@@ -35,6 +35,22 @@ describe('OmpRpcEventAdapter', () => {
     });
   });
 
+  it('surfaces thinking configuration and unknown frame control metadata', () => {
+    const adapter = new OmpRpcEventAdapter();
+    expect(adapter.adaptFrame({ type: 'thinking_level_changed', level: 'high' })).toEqual({
+      events: [],
+      thinkingLevel: 'high',
+    });
+    expect(adapter.adaptFrame({ type: 'config_update', config: { thinkingLevel: 'minimal' } })).toEqual({
+      events: [],
+      thinkingLevel: 'minimal',
+    });
+    expect(adapter.adaptFrame({ type: 'future_frame', secret: 'not retained' })).toEqual({
+      events: [],
+      unknownFrameType: 'future_frame',
+    });
+  });
+
   it('maps assistant deltas and final assistant text', () => {
     const adapter = new OmpRpcEventAdapter();
     adapter.startTurn();
@@ -69,6 +85,73 @@ describe('OmpRpcEventAdapter', () => {
 
     expect(adapter.adaptFrame({ type: 'message_end' }).events).toEqual([
       { type: 'text_complete', text: 'partial', turnId: 'omp-turn-0', sdkMessageId: undefined },
+    ]);
+  });
+
+  it('keeps thinking blocks separate from answer text and suppresses duplicate fallbacks', () => {
+    const adapter = new OmpRpcEventAdapter();
+    adapter.startTurn();
+
+    expect(adapter.adaptFrame({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'thinking_start', contentIndex: 0 },
+    }).events).toEqual([]);
+    expect(adapter.adaptFrame({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: 'Reason' },
+    }).events).toEqual([
+      { type: 'text_delta', text: 'Reason', isThinking: true, turnId: 'omp-turn-0' },
+    ]);
+    expect(adapter.adaptFrame({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'thinking_end', contentIndex: 0, content: 'Reasoning' },
+    }).events).toEqual([
+      {
+        type: 'text_complete',
+        text: 'Reasoning',
+        isIntermediate: true,
+        isThinking: true,
+        turnId: 'omp-turn-0',
+      },
+    ]);
+
+    expect(adapter.adaptFrame({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', contentIndex: 1, delta: 'Answer' },
+    }).events).toEqual([
+      { type: 'text_delta', text: 'Answer', turnId: 'omp-turn-0' },
+    ]);
+    expect(adapter.adaptFrame({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'Reasoning' },
+          { type: 'text', text: 'Answer' },
+        ],
+      },
+    }).events).toEqual([
+      { type: 'text_complete', text: 'Answer', turnId: 'omp-turn-0', sdkMessageId: undefined },
+    ]);
+  });
+
+  it('uses message_end thinking content as a fallback when no thinking_end arrived', () => {
+    const adapter = new OmpRpcEventAdapter();
+    adapter.startTurn();
+    expect(adapter.adaptFrame({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'thinking', thinking: 'Fallback reasoning' }],
+      },
+    }).events).toEqual([
+      {
+        type: 'text_complete',
+        text: 'Fallback reasoning',
+        isIntermediate: true,
+        isThinking: true,
+        turnId: 'omp-turn-0',
+      },
     ]);
   });
 

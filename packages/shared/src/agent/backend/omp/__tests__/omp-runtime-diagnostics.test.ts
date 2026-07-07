@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import type { spawn } from 'node:child_process';
 
-import { checkOmpRuntime } from '../omp-runtime-diagnostics.ts';
+import { checkOmpRuntime, detectOmpVersion } from '../omp-runtime-diagnostics.ts';
 
 class FakeChild extends EventEmitter {
   stdout = new PassThrough();
@@ -63,6 +63,7 @@ describe('checkOmpRuntime', () => {
     expect(status.rawCommand).toBe('omp-custom');
     expect(status.modelCount).toBe(1);
     expect(status.defaultModel).toBe('deepseek/deepseek-v4-flash');
+    expect(status.protocolVersion).toBe('unversioned');
   });
 
   it('classifies timeout failures without throwing', async () => {
@@ -79,5 +80,25 @@ describe('checkOmpRuntime', () => {
     expect(status.error).toContain('Timed out after 5ms');
     expect(child.killed).toBe(true);
   });
-});
 
+  it('parses the OMP executable version without making it a startup requirement', async () => {
+    const child = new FakeChild();
+    queueMicrotask(() => {
+      child.stdout.write('omp/16.3.0\n');
+      child.emit('exit', 0, null);
+    });
+    await expect(detectOmpVersion('omp', ['--profile', 'test'], {
+      timeoutMs: 100,
+      spawnProcess: spawnFake(child),
+    })).resolves.toBe('16.3.0');
+  });
+
+  it('returns undefined and kills a version probe that times out', async () => {
+    const child = new FakeChild();
+    await expect(detectOmpVersion('omp', [], {
+      timeoutMs: 5,
+      spawnProcess: spawnFake(child),
+    })).resolves.toBeUndefined();
+    expect(child.killed).toBe(true);
+  });
+});

@@ -5,18 +5,27 @@ import type { AgentEvent, ExtensionUiResponse } from '@craft-agent/core/types';
 
 import { BaseAgent } from '../../base-agent.ts';
 import type { LLMQueryRequest, LLMQueryResult } from '../../llm-tool.ts';
+import type { ThinkingLevel } from '../../thinking-levels.ts';
 import type { FileAttachment } from '../../../utils/files.ts';
 import type { ChatOptions, BackendConfig } from '../types.ts';
 import { AbortReason } from '../types.ts';
 import { EventQueue } from '../event-queue.ts';
-import { resolveOmpCommand } from './omp-command.ts';
+import { prepareOmpPrompt } from './omp-rpc-attachments.ts';
+import { resolveOmpRuntimeCommand } from './omp-command.ts';
 import { OmpRpcEventAdapter } from './omp-rpc-adapter.ts';
 import {
+  OmpRpcDiagnostics,
+  type OmpRpcDiagnosticsSnapshot,
+} from './omp-rpc-diagnostics.ts';
+import {
+  craftThinkingLevelToOmp,
+  ompThinkingLevelToCraft,
   parseOmpPromptResponseData,
   parseOmpSessionState,
   type OmpRpcCommand,
   type OmpRpcExtensionUiResponse,
   type OmpRpcSessionState,
+  type OmpThinkingLevel,
 } from './omp-rpc-protocol.ts';
 
 export const DEFAULT_OMP_MODEL = 'omp/default';
@@ -30,6 +39,8 @@ interface PendingRequest {
   resolve(value: unknown): void;
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout>;
+  command: string;
+  startedAt: number;
 }
 
 interface ActiveTurn {
@@ -45,33 +56,8 @@ export interface OmpRpcBackendOptions {
   readyTimeoutMs?: number;
   /** Override correlated RPC response timeout for deterministic tests. */
   requestTimeoutMs?: number;
-}
-
-function attachmentText(attachments?: FileAttachment[]): string {
-  if (!attachments?.length) return '';
-
-  const parts: string[] = [];
-  for (const attachment of attachments) {
-    if (attachment.text) {
-      parts.push([
-        `[Attached text file: ${attachment.name}]`,
-        attachment.text,
-      ].join('\n'));
-      continue;
-    }
-
-    const storedPath = attachment.storedPath ?? attachment.markdownPath ?? attachment.path;
-    if (storedPath) {
-      parts.push(`[Attached file: ${attachment.name}]\n[Path: ${storedPath}]`);
-    }
-  }
-
-  return parts.join('\n\n');
-}
-
-function formatPrompt(message: string, attachments?: FileAttachment[]): string {
-  const attachmentsBlock = attachmentText(attachments);
-  return [attachmentsBlock, message].filter(Boolean).join('\n\n');
+  /** Test seam for path-only image attachments. */
+  attachmentReadFile?: (path: string) => Buffer;
 }
 
 export function resolveOmpModelSelection(model: string | undefined): OmpModelSelection | null {
@@ -124,6 +110,7 @@ export class OmpRpcBackend extends BaseAgent {
   private stdoutReader: readline.Interface | null = null;
   private eventQueue = new EventQueue();
   private adapter = new OmpRpcEventAdapter();
+  private diagnostics = new OmpRpcDiagnostics();
   private pending = new Map<string, PendingRequest>();
   private requestCounter = 0;
   private readyPromise: Promise<void> | null = null;
@@ -137,10 +124,13 @@ export class OmpRpcBackend extends BaseAgent {
   private processGeneration = 0;
   private readySyncGeneration: number | null = null;
   private sessionState: OmpRpcSessionState | null = null;
+  private remoteThinkingLevel: OmpThinkingLevel | null = null;
+  private thinkingLevelUpdate: Promise<void> | null = null;
   private activeTurn: ActiveTurn | null = null;
   private readonly spawnProcess: typeof spawn;
   private readonly readyTimeoutMs: number;
   private readonly requestTimeoutMs: number;
+  private readonly attachmentReadFile?: (path: string) => Buffer;
 
   constructor(config: BackendConfig, options: OmpRpcBackendOptions = {}) {
     super(config, DEFAULT_OMP_MODEL);
@@ -148,21 +138,33 @@ export class OmpRpcBackend extends BaseAgent {
     this.spawnProcess = options.spawnProcess ?? spawn;
     this.readyTimeoutMs = options.readyTimeoutMs ?? 15_000;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
+    this.attachmentReadFile = options.attachmentReadFile;
   }
 
   protected override debug(message: string): void {
     this.onDebug?.(`[omp] ${message}`);
   }
 
+  override setThinkingLevel(level: ThinkingLevel): void {
+    super.setThinkingLevel(level);
+    if (!this.child || this._isProcessing) return;
+    const mapped = craftThinkingLevelToOmp(level);
+    this.setRemoteThinkingLevel(mapped).catch((error) => {
+      this.remoteThinkingLevel = null;
+      this.debug(`Thinking level update failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
+
   protected async *chatImpl(
     message: string,
     attachments?: FileAttachment[],
-    _options?: ChatOptions,
+    options?: ChatOptions,
   ): AsyncGenerator<AgentEvent> {
     this._isProcessing = true;
     this.abortReason = undefined;
     this.eventQueue.reset();
     this.adapter.startTurn();
+    let shouldRestoreThinkingLevel = false;
 
     this.emitAutomationEvent('UserPromptSubmit', {
       hook_event_name: 'UserPromptSubmit',
@@ -170,6 +172,13 @@ export class OmpRpcBackend extends BaseAgent {
     });
 
     try {
+      const prepared = prepareOmpPrompt(message, attachments, {
+        readFile: this.attachmentReadFile,
+      });
+      for (const warning of prepared.warnings) {
+        this.eventQueue.enqueue({ type: 'info', message: warning });
+      }
+
       await this.ensureSubprocess();
       if (!this._isProcessing) {
         for await (const event of this.eventQueue.drain()) yield event;
@@ -180,10 +189,22 @@ export class OmpRpcBackend extends BaseAgent {
         for await (const event of this.eventQueue.drain()) yield event;
         return;
       }
+      const persistentThinkingLevel = craftThinkingLevelToOmp(this.getThinkingLevel());
+      await this.setRemoteThinkingLevel(persistentThinkingLevel);
+      const overrideThinkingLevel = options?.thinkingOverride
+        ? craftThinkingLevelToOmp(options.thinkingOverride)
+        : undefined;
+      shouldRestoreThinkingLevel = !!overrideThinkingLevel
+        && overrideThinkingLevel !== persistentThinkingLevel;
+      if (overrideThinkingLevel) {
+        await this.setRemoteThinkingLevel(overrideThinkingLevel);
+      }
 
       const promptRequest = this.createRequest({
         type: 'prompt',
-        message: formatPrompt(message, attachments),
+        message: prepared.message,
+        ...(prepared.images ? { images: prepared.images } : {}),
+        ...(options?.streamingBehavior ? { streamingBehavior: options.streamingBehavior } : {}),
       });
       const activeTurn: ActiveTurn = {
         requestId: promptRequest.id,
@@ -225,11 +246,20 @@ export class OmpRpcBackend extends BaseAgent {
 
         yield event;
       }
+
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       yield { type: 'error', message: `OMP backend error: ${msg}` };
       yield { type: 'complete' };
     } finally {
+      if (shouldRestoreThinkingLevel && this.child) {
+        try {
+          await this.setRemoteThinkingLevel(craftThinkingLevelToOmp(this.getThinkingLevel()));
+        } catch (error) {
+          this.remoteThinkingLevel = null;
+          this.debug(`Thinking override restore failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
       this._isProcessing = false;
       if (this.activeTurn?.finished) this.activeTurn = null;
     }
@@ -332,6 +362,10 @@ export class OmpRpcBackend extends BaseAgent {
     return this.recentStderr;
   }
 
+  getDiagnostics(): OmpRpcDiagnosticsSnapshot {
+    return this.diagnostics.snapshot(this.recentStderr);
+  }
+
   private async ensureSubprocess(): Promise<void> {
     if (this.child && this.readyPromise) {
       return this.readyPromise;
@@ -357,10 +391,29 @@ export class OmpRpcBackend extends BaseAgent {
     this.debug(`Selected OMP model: ${key}`);
   }
 
+  private async setRemoteThinkingLevel(level: OmpThinkingLevel): Promise<void> {
+    if (this.thinkingLevelUpdate) await this.thinkingLevelUpdate;
+    if (this.remoteThinkingLevel === level) return;
+    const update = this.send({ type: 'set_thinking_level', level }).then(() => {
+      this.remoteThinkingLevel = level;
+      if (this.sessionState) this.sessionState.thinkingLevel = level;
+      this.debug(`Selected OMP thinking level: ${level}`);
+    });
+    this.thinkingLevelUpdate = update;
+    try {
+      await update;
+    } finally {
+      if (this.thinkingLevelUpdate === update) this.thinkingLevelUpdate = null;
+    }
+  }
+
   private spawnSubprocess(): void {
     const generation = ++this.processGeneration;
     const runtime = this.config.runtime ?? {};
-    const resolved = resolveOmpCommand(runtime.ompCommand ?? process.env.OMP_COMMAND);
+    const resolved = resolveOmpRuntimeCommand({
+      configuredCommand: runtime.ompCommand,
+      envCommand: process.env.OMP_COMMAND,
+    });
     const cwd = this.workingDirectory || this.config.workspace.rootPath || process.cwd();
     const env: NodeJS.ProcessEnv = {
       ...process.env,
@@ -368,6 +421,10 @@ export class OmpRpcBackend extends BaseAgent {
     };
 
     this.debug(`Starting OMP RPC: ${resolved.command} ${[...resolved.args, '--mode', 'rpc'].join(' ')}`);
+    this.diagnostics.startProcess(generation, {
+      executable: resolved.command,
+      source: resolved.source,
+    });
 
     const child = this.spawnProcess(resolved.command, [...resolved.args, '--mode', 'rpc'], {
       cwd,
@@ -403,6 +460,8 @@ export class OmpRpcBackend extends BaseAgent {
     });
 
     child.on('exit', (code, signal) => {
+      if (generation !== this.processGeneration || child !== this.child) return;
+      this.diagnostics.recordExit(code, signal);
       const reason = signal ? `signal ${signal}` : `code ${code ?? 0}`;
       this.handleChildFailure(new Error(`OMP exited with ${reason}`), generation, child);
     });
@@ -416,27 +475,46 @@ export class OmpRpcBackend extends BaseAgent {
     try {
       raw = JSON.parse(line) as Record<string, unknown>;
     } catch {
+      this.diagnostics.recordMalformedLine();
       this.debug(`Ignoring non-JSON stdout: ${line.slice(0, 200)}`);
       return;
     }
 
+    this.diagnostics.recordFrame(raw.type);
     const adapted = this.adapter.adaptFrame(raw);
+    if (adapted.unknownFrameType) {
+      const shouldLog = this.diagnostics.recordUnknownFrame(adapted.unknownFrameType, raw);
+      if (shouldLog) {
+        this.debug(
+          `Ignoring unknown OMP frame ${adapted.unknownFrameType} with keys: ${Object.keys(raw).sort().join(', ')}`,
+        );
+      }
+    }
 
     if (adapted.ready) {
       this.beginStateSynchronization(generation);
     }
 
-    if (adapted.response?.id) {
-      const pending = this.pending.get(adapted.response.id);
+    if (adapted.response) {
+      const responseId = adapted.response.id;
+      const pending = responseId ? this.pending.get(responseId) : undefined;
       if (pending) {
-        this.pending.delete(adapted.response.id);
+        this.pending.delete(responseId!);
         clearTimeout(pending.timer);
+        this.diagnostics.recordResponse(responseId!, pending.command, pending.startedAt);
         if (adapted.response.success) {
           pending.resolve(adapted.response.data);
         } else {
           pending.reject(new Error(adapted.response.error ?? 'OMP RPC command failed'));
         }
+      } else {
+        this.diagnostics.recordUnmatchedResponse(responseId);
       }
+    }
+
+    if (adapted.thinkingLevel) {
+      this.remoteThinkingLevel = adapted.thinkingLevel;
+      if (this.sessionState) this.sessionState.thinkingLevel = adapted.thinkingLevel;
     }
 
     for (const event of adapted.events) {
@@ -469,17 +547,27 @@ export class OmpRpcBackend extends BaseAgent {
 
     const id = `omp-${++this.requestCounter}`;
     const frame = { id, ...command };
+    const commandName = command.type;
+    const startedAt = this.diagnostics.recordRequest(commandName);
 
     const promise = new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         const pending = this.pending.get(id);
         if (!pending) return;
         this.pending.delete(id);
+        this.diagnostics.recordTimeout();
         pending.reject(new Error(`OMP RPC command timed out: ${String(command.type ?? 'unknown')}`));
       }, this.requestTimeoutMs);
-      this.pending.set(id, { resolve: (value) => resolve(value as T), reject, timer });
+      this.pending.set(id, {
+        resolve: (value) => resolve(value as T),
+        reject,
+        timer,
+        command: commandName,
+        startedAt,
+      });
       stdin.write(`${JSON.stringify(frame)}\n`, (error) => {
         if (error) {
+          this.diagnostics.recordWriteFailure();
           if (generation === this.processGeneration && child === this.child) {
             const pending = this.pending.get(id);
             if (pending) clearTimeout(pending.timer);
@@ -501,6 +589,7 @@ export class OmpRpcBackend extends BaseAgent {
     return new Promise((resolve, reject) => {
       stdin.write(`${JSON.stringify(frame)}\n`, (error) => {
         if (error) {
+          this.diagnostics.recordWriteFailure();
           reject(error);
         } else {
           resolve();
@@ -570,6 +659,9 @@ export class OmpRpcBackend extends BaseAgent {
     this.readyReject = null;
     this.readySyncGeneration = null;
     this.sessionState = null;
+    this.remoteThinkingLevel = null;
+    this.thinkingLevelUpdate = null;
+    this.diagnostics.clearProcessState(this.processGeneration);
 
     if (child && !child.killed) {
       child.kill();
@@ -608,7 +700,12 @@ export class OmpRpcBackend extends BaseAgent {
       }
 
       this.sessionState = state;
+      this.remoteThinkingLevel = ompThinkingLevelToCraft(state.thinkingLevel)
+        ? state.thinkingLevel as OmpThinkingLevel
+        : null;
       this.config.onSdkSessionIdUpdate?.(state.sessionId);
+      this.diagnostics.setSessionState(state);
+      this.diagnostics.markReady();
       this.debug(`Synchronized OMP session: ${state.sessionId}`);
       this.resolveReady();
     }).catch((error) => {
