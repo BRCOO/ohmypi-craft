@@ -1,8 +1,12 @@
 import type { AgentEvent } from '@craft-agent/core/types';
 import type { PermissionRequestType } from '../types.ts';
 import {
+  parseOmpAvailableCommandsUpdate,
   parseOmpPromptResult,
+  parseOmpQueueControlState,
   parseOmpRpcResponse,
+  type OmpQueueControlState,
+  type OmpRpcAvailableSlashCommand,
   type OmpRpcPromptResultFrame,
   type OmpRpcResponseFrame,
   type OmpThinkingLevel,
@@ -15,6 +19,8 @@ export interface OmpRpcAdaptedFrame {
   response?: OmpRpcResponseFrame;
   promptResult?: OmpRpcPromptResultFrame;
   thinkingLevel?: OmpThinkingLevel;
+  queueState?: Partial<OmpQueueControlState>;
+  availableCommands?: OmpRpcAvailableSlashCommand[];
   sessionId?: string;
   unknownFrameType?: string;
 }
@@ -280,6 +286,7 @@ export class OmpRpcEventAdapter {
       case 'config_update': {
         const config = asObject(raw.config) ?? raw;
         const level = config.thinkingLevel ?? config.thinking_level;
+        const queueState = parseOmpQueueControlState(config);
         if (
           level === 'off'
           || level === 'minimal'
@@ -288,9 +295,9 @@ export class OmpRpcEventAdapter {
           || level === 'high'
           || level === 'xhigh'
         ) {
-          return { events: [], thinkingLevel: level };
+          return { events: [], thinkingLevel: level, ...(queueState ? { queueState } : {}) };
         }
-        return { events: [] };
+        return { events: [], ...(queueState ? { queueState } : {}) };
       }
 
       case 'turn_start':
@@ -473,8 +480,15 @@ export class OmpRpcEventAdapter {
         };
       }
 
+      case 'available_commands_update': {
+        const update = parseOmpAvailableCommandsUpdate(raw);
+        return {
+          events: [],
+          ...(update ? { availableCommands: update.commands } : {}),
+        };
+      }
+
       case 'permission_resolved':
-      case 'available_commands_update':
         return { events: [] };
 
       case 'message_start':

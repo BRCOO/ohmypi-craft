@@ -8,6 +8,7 @@ import { ensureMockElectronAPI } from '../mock-utils'
 import {
   SlashCommandMenu,
   DEFAULT_SLASH_COMMANDS,
+  slashCommandIdKey,
   type SlashCommandId,
 } from '@/components/ui/slash-command-menu'
 
@@ -29,9 +30,10 @@ function SlashCommandDemo() {
 
   // Handle command selection (toggle active state)
   const handleCommandSelect = React.useCallback((commandId: SlashCommandId) => {
+    const selectedKey = slashCommandIdKey(commandId)
     setActiveCommands(prev =>
-      prev.includes(commandId)
-        ? prev.filter(id => id !== commandId)
+      prev.some(id => slashCommandIdKey(id) === selectedKey)
+        ? prev.filter(id => slashCommandIdKey(id) !== selectedKey)
         : [...prev, commandId]
     )
   }, [])
@@ -59,12 +61,13 @@ function SlashCommandDemo() {
         <div className="shrink-0 px-4 py-2 border-b border-border/50 flex flex-wrap gap-2">
           <span className="text-xs text-muted-foreground">Standalone menu active:</span>
           {activeCommands.map(id => {
-            const cmd = DEFAULT_SLASH_COMMANDS.find(c => c.id === id)
+            const idKey = slashCommandIdKey(id)
+            const cmd = DEFAULT_SLASH_COMMANDS.find(c => slashCommandIdKey(c.id) === idKey)
             const color = cmd?.color || '#888'
             return cmd ? (
               <button
-                key={id}
-                onClick={() => setActiveCommands(prev => prev.filter(c => c !== id))}
+                key={idKey}
+                onClick={() => setActiveCommands(prev => prev.filter(c => slashCommandIdKey(c) !== idKey))}
                 className="h-6 px-2 text-[11px] font-medium rounded flex items-center gap-1.5 transition-all border"
                 style={{
                   backgroundColor: `${color}1A`, // 10% opacity

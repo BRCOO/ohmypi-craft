@@ -3,8 +3,12 @@ import { describe, expect, it } from 'bun:test';
 import {
   craftThinkingLevelToOmp,
   ompThinkingLevelToCraft,
+  parseOmpAvailableCommandsResponseData,
+  parseOmpAvailableCommandsUpdate,
+  parseOmpAvailableSlashCommand,
   parseOmpPromptResponseData,
   parseOmpPromptResult,
+  parseOmpQueueControlState,
   parseOmpRpcResponse,
   parseOmpSessionState,
 } from '../omp-rpc-protocol.ts';
@@ -83,5 +87,68 @@ describe('OMP RPC protocol parsers', () => {
     const { sessionId: _sessionId, ...withoutSessionId } = validState;
     expect(parseOmpSessionState(withoutSessionId)).toBeNull();
     expect(parseOmpSessionState({ ...validState, sessionId: '   ' })).toBeNull();
+  });
+
+  it('parses available slash commands while preserving source metadata', () => {
+    expect(parseOmpAvailableSlashCommand({
+      name: 'model',
+      aliases: ['m', 'bad alias'],
+      description: 'Switch model',
+      input: { hint: 'provider/model' },
+      subcommands: [
+        { name: 'list', description: 'List models', usage: '/model list' },
+        { name: 'bad subcommand' },
+      ],
+      source: 'builtin',
+    })).toEqual({
+      name: 'model',
+      aliases: ['m'],
+      description: 'Switch model',
+      input: { hint: 'provider/model' },
+      subcommands: [{ name: 'list', description: 'List models', usage: '/model list' }],
+      source: 'builtin',
+    });
+  });
+
+  it('rejects invalid available slash commands and keeps valid siblings', () => {
+    expect(parseOmpAvailableSlashCommand({ name: 'bad command', source: 'builtin' })).toBeNull();
+    expect(parseOmpAvailableSlashCommand({ name: 'ok', source: 'unknown' })).toBeNull();
+    expect(parseOmpAvailableCommandsResponseData({
+      commands: [
+        { name: 'stats', source: 'builtin' },
+        { name: '', source: 'builtin' },
+      ],
+    })).toEqual({
+      commands: [{ name: 'stats', aliases: undefined, description: undefined, input: undefined, subcommands: undefined, source: 'builtin' }],
+    });
+  });
+
+  it('parses available commands update frames', () => {
+    expect(parseOmpAvailableCommandsUpdate({
+      type: 'available_commands_update',
+      commands: [{ name: 'custom-task', source: 'custom' }],
+    })).toEqual({
+      type: 'available_commands_update',
+      commands: [{ name: 'custom-task', aliases: undefined, description: undefined, input: undefined, subcommands: undefined, source: 'custom' }],
+    });
+    expect(parseOmpAvailableCommandsUpdate({ type: 'available_commands_update', commands: 'nope' })).toBeNull();
+  });
+
+  it('parses partial queue control state from config updates', () => {
+    expect(parseOmpQueueControlState({
+      isStreaming: true,
+      steeringMode: 'one-at-a-time',
+      followUpMode: 'all',
+      interruptMode: 'wait',
+      queuedMessageCount: 2,
+      ignored: 'value',
+    })).toEqual({
+      isStreaming: true,
+      steeringMode: 'one-at-a-time',
+      followUpMode: 'all',
+      interruptMode: 'wait',
+      queuedMessageCount: 2,
+    });
+    expect(parseOmpQueueControlState({ steeringMode: 'bad' })).toBeNull();
   });
 });

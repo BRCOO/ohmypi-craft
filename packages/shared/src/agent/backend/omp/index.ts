@@ -9,5 +9,14 @@ export type { ResolvedOmpCommand, ResolvedOmpRuntimeCommand, OmpCommandSource } 
 export { normalizeOmpModels, resolveOmpServerDefault, DEFAULT_OMP_CONTEXT_WINDOW } from './omp-models.ts';
 export { OmpRpcEventAdapter } from './omp-rpc-adapter.ts';
 export type { OmpRpcAdaptedFrame } from './omp-rpc-adapter.ts';
-export type { OmpRpcResponseFrame } from './omp-rpc-protocol.ts';
+export type {
+  OmpControlState,
+  OmpInterruptMode,
+  OmpQueueMode,
+  OmpQueueControlState,
+  OmpRpcAvailableSlashCommand,
+  OmpRpcAvailableSlashCommandSource,
+  OmpRpcAvailableSlashSubcommand,
+  OmpRpcResponseFrame,
+} from './omp-rpc-protocol.ts';
 export type { OmpRpcDiagnosticsSnapshot } from './omp-rpc-diagnostics.ts';

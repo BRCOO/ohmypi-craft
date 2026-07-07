@@ -334,6 +334,12 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
           throw new Error(`Invalid thinking level: ${command.level}. Valid values: ${VALID_THINKING_LEVELS_LIST}`)
         }
         return sessionManager.setSessionThinkingLevel(sessionId, command.level)
+      case 'setOmpSteeringMode':
+        return sessionManager.setOmpSteeringMode(sessionId, command.mode)
+      case 'setOmpFollowUpMode':
+        return sessionManager.setOmpFollowUpMode(sessionId, command.mode)
+      case 'setOmpInterruptMode':
+        return sessionManager.setOmpInterruptMode(sessionId, command.mode)
       case 'updateWorkingDirectory':
         return sessionManager.updateWorkingDirectory(sessionId, command.dir)
       case 'setSources':

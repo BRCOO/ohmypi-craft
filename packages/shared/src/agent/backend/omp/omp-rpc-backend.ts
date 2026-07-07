@@ -18,10 +18,16 @@ import {
   type OmpRpcDiagnosticsSnapshot,
 } from './omp-rpc-diagnostics.ts';
 import {
+  type OmpControlState,
+  type OmpInterruptMode,
+  type OmpQueueMode,
+  type OmpQueueControlState,
   craftThinkingLevelToOmp,
   ompThinkingLevelToCraft,
+  parseOmpAvailableCommandsResponseData,
   parseOmpPromptResponseData,
   parseOmpSessionState,
+  type OmpRpcAvailableSlashCommand,
   type OmpRpcCommand,
   type OmpRpcExtensionUiResponse,
   type OmpRpcSessionState,
@@ -124,6 +130,8 @@ export class OmpRpcBackend extends BaseAgent {
   private processGeneration = 0;
   private readySyncGeneration: number | null = null;
   private sessionState: OmpRpcSessionState | null = null;
+  private availableCommands: OmpRpcAvailableSlashCommand[] = [];
+  private controlStateUpdatedAt = Date.now();
   private remoteThinkingLevel: OmpThinkingLevel | null = null;
   private thinkingLevelUpdate: Promise<void> | null = null;
   private activeTurn: ActiveTurn | null = null;
@@ -131,6 +139,7 @@ export class OmpRpcBackend extends BaseAgent {
   private readonly readyTimeoutMs: number;
   private readonly requestTimeoutMs: number;
   private readonly attachmentReadFile?: (path: string) => Buffer;
+  onControlStateChange: ((state: OmpControlState) => void) | null = null;
 
   constructor(config: BackendConfig, options: OmpRpcBackendOptions = {}) {
     super(config, DEFAULT_OMP_MODEL);
@@ -288,13 +297,21 @@ export class OmpRpcBackend extends BaseAgent {
     }
   }
 
-  override redirect(message: string): boolean {
+  override redirect(message: string, attachments?: FileAttachment[]): boolean {
     if (!this._isProcessing || !this.child) {
       this.forceAbort(AbortReason.Redirect);
       return false;
     }
 
-    this.send({ type: 'steer', message }).catch((error) => {
+    let command: OmpRpcCommand;
+    try {
+      command = this.createUserControlCommand('steer', message, attachments);
+    } catch (error) {
+      this.debug(`Steer command preparation failed: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+
+    this.send(command).catch((error) => {
       this.debug(`Steer command failed: ${error instanceof Error ? error.message : String(error)}`);
     });
     return true;
@@ -364,6 +381,76 @@ export class OmpRpcBackend extends BaseAgent {
 
   getDiagnostics(): OmpRpcDiagnosticsSnapshot {
     return this.diagnostics.snapshot(this.recentStderr);
+  }
+
+  async getAvailableCommands(): Promise<OmpRpcAvailableSlashCommand[]> {
+    await this.ensureSubprocess();
+    const data = await this.send({ type: 'get_available_commands' });
+    const parsed = parseOmpAvailableCommandsResponseData(data);
+    if (!parsed) throw new Error('OMP get_available_commands returned an invalid command list');
+    this.applyAvailableCommands(parsed.commands);
+    return this.getCachedAvailableCommands();
+  }
+
+  getCachedAvailableCommands(): OmpRpcAvailableSlashCommand[] {
+    return this.availableCommands.map((command) => ({
+      ...command,
+      aliases: command.aliases ? [...command.aliases] : undefined,
+      input: command.input ? { ...command.input } : undefined,
+      subcommands: command.subcommands?.map((subcommand) => ({ ...subcommand })),
+    }));
+  }
+
+  getOmpControlState(): OmpControlState {
+    return {
+      availableCommands: this.getCachedAvailableCommands(),
+      queue: this.currentQueueControlState(),
+      updatedAt: this.controlStateUpdatedAt,
+    };
+  }
+
+  async steer(message: string, attachments?: FileAttachment[]): Promise<boolean> {
+    if (!this._isProcessing || !this.child) return false;
+    this.send(this.createUserControlCommand('steer', message, attachments)).catch((error) => {
+      this.debug(`Steer command failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    return true;
+  }
+
+  async followUp(message: string, attachments?: FileAttachment[]): Promise<boolean> {
+    if (!this._isProcessing || !this.child) return false;
+    this.send(this.createUserControlCommand('follow_up', message, attachments)).catch((error) => {
+      this.debug(`Follow-up command failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    return true;
+  }
+
+  async abortAndPrompt(message: string, attachments?: FileAttachment[]): Promise<boolean> {
+    if (!this.child) return false;
+    this.send(this.createUserControlCommand('abort_and_prompt', message, attachments)).catch((error) => {
+      this.debug(`Abort-and-prompt command failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    this._isProcessing = true;
+    this.touchControlState();
+    return true;
+  }
+
+  async setSteeringMode(mode: OmpQueueMode): Promise<void> {
+    await this.ensureSubprocess();
+    await this.send({ type: 'set_steering_mode', mode });
+    this.patchQueueState({ steeringMode: mode });
+  }
+
+  async setFollowUpMode(mode: OmpQueueMode): Promise<void> {
+    await this.ensureSubprocess();
+    await this.send({ type: 'set_follow_up_mode', mode });
+    this.patchQueueState({ followUpMode: mode });
+  }
+
+  async setInterruptMode(mode: OmpInterruptMode): Promise<void> {
+    await this.ensureSubprocess();
+    await this.send({ type: 'set_interrupt_mode', mode });
+    this.patchQueueState({ interruptMode: mode });
   }
 
   private async ensureSubprocess(): Promise<void> {
@@ -515,6 +602,15 @@ export class OmpRpcBackend extends BaseAgent {
     if (adapted.thinkingLevel) {
       this.remoteThinkingLevel = adapted.thinkingLevel;
       if (this.sessionState) this.sessionState.thinkingLevel = adapted.thinkingLevel;
+      this.touchControlState();
+    }
+
+    if (adapted.queueState) {
+      this.patchQueueState(adapted.queueState);
+    }
+
+    if (adapted.availableCommands) {
+      this.applyAvailableCommands(adapted.availableCommands);
     }
 
     for (const event of adapted.events) {
@@ -659,6 +755,8 @@ export class OmpRpcBackend extends BaseAgent {
     this.readyReject = null;
     this.readySyncGeneration = null;
     this.sessionState = null;
+    this.availableCommands = [];
+    this.touchControlState();
     this.remoteThinkingLevel = null;
     this.thinkingLevelUpdate = null;
     this.diagnostics.clearProcessState(this.processGeneration);
@@ -692,14 +790,14 @@ export class OmpRpcBackend extends BaseAgent {
     this.readySyncGeneration = generation;
     this.clearReadyTimer();
 
-    this.send({ type: 'get_state' }).then((data) => {
+    this.send({ type: 'get_state' }).then(async (data) => {
       if (generation !== this.processGeneration || child !== this.child) return;
       const state = parseOmpSessionState(data);
       if (!state) {
         throw new Error('OMP get_state returned an invalid session state');
       }
 
-      this.sessionState = state;
+      this.applySessionState(state);
       this.remoteThinkingLevel = ompThinkingLevelToCraft(state.thinkingLevel)
         ? state.thinkingLevel as OmpThinkingLevel
         : null;
@@ -708,6 +806,9 @@ export class OmpRpcBackend extends BaseAgent {
       this.diagnostics.markReady();
       this.debug(`Synchronized OMP session: ${state.sessionId}`);
       this.resolveReady();
+      setTimeout(() => {
+        void this.refreshAvailableCommandsForReady(generation, child);
+      }, 0);
     }).catch((error) => {
       if (generation !== this.processGeneration || child !== this.child) return;
       const message = error instanceof Error ? error.message : String(error);
@@ -740,5 +841,87 @@ export class OmpRpcBackend extends BaseAgent {
     if (this.finishTurn() || this.eventQueue.isComplete) return;
     this.eventQueue.enqueue({ type: 'complete' });
     this.eventQueue.complete();
+  }
+
+  private createUserControlCommand(
+    type: 'steer' | 'follow_up' | 'abort_and_prompt',
+    message: string,
+    attachments?: FileAttachment[],
+  ): OmpRpcCommand {
+    const prepared = prepareOmpPrompt(message, attachments, {
+      readFile: this.attachmentReadFile,
+    });
+    for (const warning of prepared.warnings) {
+      if (!this.eventQueue.isComplete) this.eventQueue.enqueue({ type: 'info', message: warning });
+    }
+    return {
+      type,
+      message: prepared.message,
+      ...(prepared.images ? { images: prepared.images } : {}),
+    };
+  }
+
+  private async refreshAvailableCommandsForReady(
+    generation: number,
+    child: ChildProcessWithoutNullStreams,
+  ): Promise<void> {
+    try {
+      const data = await this.send({ type: 'get_available_commands' });
+      if (generation !== this.processGeneration || child !== this.child) return;
+      const parsed = parseOmpAvailableCommandsResponseData(data);
+      if (!parsed) {
+        this.debug('OMP get_available_commands returned an invalid command list');
+        return;
+      }
+      this.applyAvailableCommands(parsed.commands);
+    } catch (error) {
+      if (generation !== this.processGeneration || child !== this.child) return;
+      this.debug(`OMP command discovery failed: ${error instanceof Error ? error.message : String(error)}`);
+      this.touchControlState();
+    }
+  }
+
+  private applyAvailableCommands(commands: OmpRpcAvailableSlashCommand[]): void {
+    this.availableCommands = commands.map((command) => ({
+      ...command,
+      aliases: command.aliases ? [...command.aliases] : undefined,
+      input: command.input ? { ...command.input } : undefined,
+      subcommands: command.subcommands?.map((subcommand) => ({ ...subcommand })),
+    }));
+    this.touchControlState();
+  }
+
+  private applySessionState(state: OmpRpcSessionState): void {
+    this.sessionState = state;
+    this.touchControlState();
+  }
+
+  private patchQueueState(patch: Partial<OmpQueueControlState>): void {
+    const current = this.sessionState;
+    if (!current) {
+      this.touchControlState();
+      return;
+    }
+    this.sessionState = {
+      ...current,
+      ...patch,
+    };
+    this.touchControlState();
+  }
+
+  private currentQueueControlState(): OmpQueueControlState {
+    return {
+      isStreaming: this.sessionState?.isStreaming ?? this._isProcessing,
+      isCompacting: this.sessionState?.isCompacting ?? false,
+      steeringMode: this.sessionState?.steeringMode ?? 'all',
+      followUpMode: this.sessionState?.followUpMode ?? 'all',
+      interruptMode: this.sessionState?.interruptMode ?? 'immediate',
+      queuedMessageCount: this.sessionState?.queuedMessageCount ?? 0,
+    };
+  }
+
+  private touchControlState(): void {
+    this.controlStateUpdatedAt = Date.now();
+    this.onControlStateChange?.(this.getOmpControlState());
   }
 }

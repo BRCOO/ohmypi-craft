@@ -19,6 +19,9 @@ import {
   type AgentBackend,
   type AgentProvider,
   type BackendHostRuntimeContext,
+  type OmpControlState,
+  type OmpInterruptMode,
+  type OmpQueueMode,
   type PostInitResult,
 } from '@craft-agent/shared/agent/backend'
 import { getLlmConnection, getLlmConnections, getDefaultLlmConnection, getDefaultThinkingLevel, resetManagedAnthropicAuthEnvVars, resolveMidStreamBehavior, getPersistedUiLanguage, resolveTitleLanguageName } from '@craft-agent/shared/config'
@@ -82,7 +85,7 @@ import { isParentTaskTool } from '@craft-agent/shared/utils/toolNames'
 import { restoreFiles } from '@craft-agent/shared/utils/bundle-files'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { CraftMcpClient, McpClientPool, McpPoolServer } from '@craft-agent/shared/mcp'
-import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
+import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, type OmpControlStateDto, type OmpInterruptMode as OmpInterruptModeDto, type OmpQueueMode as OmpQueueModeDto, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
 import { messageToStored, storedToMessage, type Message, type StoredAttachment, type ToolDisplayMeta } from '@craft-agent/core/types'
 import { formatPathsToRelative, formatToolInputPaths, perf, encodeIconToDataUrlAsync, getEmojiIcon, resetSummarizationClient, resolveToolIcon, readFileAttachment, selectSpreadMessages, normalizePath } from '@craft-agent/shared/utils'
 import { loadAllSkills, loadSkillBySlug, invalidateSkillsCache, type LoadedSkill } from '@craft-agent/shared/skills'
@@ -759,6 +762,44 @@ async function resolveToolDisplayMeta(
 /** Agent type - unified backend interface for all providers */
 type AgentInstance = AgentBackend
 
+interface OmpControllableAgent extends AgentBackend {
+  onControlStateChange: ((state: OmpControlState) => void) | null
+  getOmpControlState(): OmpControlState
+  steer(message: string, attachments?: FileAttachment[]): Promise<boolean>
+  followUp(message: string, attachments?: FileAttachment[]): Promise<boolean>
+  abortAndPrompt(message: string, attachments?: FileAttachment[]): Promise<boolean>
+  setSteeringMode(mode: OmpQueueMode): Promise<void>
+  setFollowUpMode(mode: OmpQueueMode): Promise<void>
+  setInterruptMode(mode: OmpInterruptMode): Promise<void>
+}
+
+function isOmpControllableAgent(agent: AgentInstance | null | undefined): agent is OmpControllableAgent {
+  const candidate = agent as Partial<OmpControllableAgent> | null | undefined
+  return !!candidate
+    && typeof candidate.getOmpControlState === 'function'
+    && typeof candidate.steer === 'function'
+    && typeof candidate.followUp === 'function'
+    && typeof candidate.abortAndPrompt === 'function'
+    && typeof candidate.setSteeringMode === 'function'
+    && typeof candidate.setFollowUpMode === 'function'
+    && typeof candidate.setInterruptMode === 'function'
+}
+
+function toOmpControlStateDto(state: OmpControlState): OmpControlStateDto {
+  return {
+    availableCommands: state.availableCommands.map((command) => ({
+      name: command.name,
+      aliases: command.aliases ? [...command.aliases] : undefined,
+      description: command.description,
+      input: command.input ? { ...command.input } : undefined,
+      subcommands: command.subcommands?.map((subcommand) => ({ ...subcommand })),
+      source: command.source,
+    })),
+    queue: { ...state.queue },
+    updatedAt: state.updatedAt,
+  }
+}
+
 interface ManagedSession {
   id: string
   workspace: Workspace
@@ -929,6 +970,8 @@ interface ManagedSession {
    * the agent must be disposed + recreated rather than refreshed in place.
    */
   backendRestartSignature?: string
+  // Runtime-only OMP command list / queue controls bridged to the renderer.
+  ompControlState?: OmpControlStateDto
   // Whether the previous turn was interrupted (for context injection on next message).
   // Ephemeral — not persisted to disk. Cleared after one-shot injection.
   wasInterrupted?: boolean
@@ -1088,6 +1131,7 @@ function managedToSession(m: ManagedSession, overrides?: Partial<Session>): Sess
     isProcessing: m.isProcessing,
     sessionFolderPath: getSessionStoragePath(m.workspace.rootPath, m.id),
     supportsBranching: resolveSupportsBranching(m),
+    ompControlState: m.ompControlState,
     ...overrides,
   } as Session
 }
@@ -1181,6 +1225,31 @@ export class SessionManager implements ISessionManager {
     } else if (was && !processing) {
       sessionRuntimeHooks.onSessionStopped()
     }
+  }
+
+  private publishOmpControlState(managed: ManagedSession, state: OmpControlState): void {
+    const dto = toOmpControlStateDto(state)
+    managed.ompControlState = dto
+    this.sendEvent({
+      type: 'omp_control_state_changed',
+      sessionId: managed.id,
+      state: dto,
+    }, managed.workspace.id)
+  }
+
+  private wireOmpControlBridge(managed: ManagedSession): void {
+    const agent = managed.agent
+    if (!isOmpControllableAgent(agent)) {
+      managed.ompControlState = undefined
+      return
+    }
+
+    agent.onControlStateChange = (state) => {
+      const current = this.sessions.get(managed.id)
+      if (!current || current.agent !== agent) return
+      this.publishOmpControlState(current, state)
+    }
+    this.publishOmpControlState(managed, agent.getOmpControlState())
   }
 
   /** Wait until initialize() has completed (sessions loaded from disk).
@@ -3400,6 +3469,7 @@ export class SessionManager implements ISessionManager {
       }) as AgentInstance
 
       sessionLog.info(`Created ${provider} agent for session ${managed.id} (model: ${backendContext.resolvedModel})${managed.sdkSessionId ? ' (resuming)' : ''}`)
+      this.wireOmpControlBridge(managed)
 
       // ============================================================
       // Post-construction: debug callback, auth callback, postInit()
@@ -5504,15 +5574,47 @@ export class SessionManager implements ISessionManager {
       const behavior = connection ? resolveMidStreamBehavior(connection) : 'steer'
 
       const agent = managed.agent
+      const ompDeliveryMode = options?.ompDeliveryMode
       let steered = false
-      if (behavior === 'steer') {
-        steered = agent?.redirect(message) ?? false
+      let effectiveBehavior: string = behavior
+      if (agent && isOmpControllableAgent(agent) && ompDeliveryMode) {
+        effectiveBehavior = `omp:${ompDeliveryMode}`
+        try {
+          if (ompDeliveryMode === 'followUp') {
+            steered = await agent.followUp(message, attachments)
+          } else if (ompDeliveryMode === 'abortAndPrompt') {
+            steered = await agent.abortAndPrompt(message, attachments)
+          } else {
+            steered = await agent.steer(message, attachments)
+          }
+        } catch (error) {
+          sessionLog.warn('OMP mid-stream delivery failed; falling back to local queue', {
+            sessionId,
+            mode: ompDeliveryMode,
+            error: error instanceof Error ? error.message : String(error),
+          })
+          steered = false
+        }
+      } else if (behavior === 'steer') {
+        if (agent && isOmpControllableAgent(agent)) {
+          try {
+            steered = await agent.steer(message, attachments)
+          } catch (error) {
+            sessionLog.warn('OMP steer delivery failed; falling back to local queue', {
+              sessionId,
+              error: error instanceof Error ? error.message : String(error),
+            })
+            steered = false
+          }
+        } else {
+          steered = agent?.redirect(message) ?? false
+        }
       }
       // For 'queue': skip redirect entirely. The current turn is undisturbed.
 
       sessionLog.info('mid-stream send', {
         sessionId,
-        behavior,
+        behavior: effectiveBehavior,
         steered,
         queueLengthBefore: managed.messageQueue.length,
         backend: agent ? agent.constructor.name : 'none',
@@ -6752,6 +6854,36 @@ export class SessionManager implements ISessionManager {
       // Persist to disk
       this.persistSession(managed)
     }
+  }
+
+  async setOmpSteeringMode(sessionId: string, mode: OmpQueueModeDto): Promise<void> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+    if (!isOmpControllableAgent(managed.agent)) {
+      throw new Error('OMP queue controls are only available for OMP sessions')
+    }
+    await managed.agent.setSteeringMode(mode)
+    this.publishOmpControlState(managed, managed.agent.getOmpControlState())
+  }
+
+  async setOmpFollowUpMode(sessionId: string, mode: OmpQueueModeDto): Promise<void> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+    if (!isOmpControllableAgent(managed.agent)) {
+      throw new Error('OMP queue controls are only available for OMP sessions')
+    }
+    await managed.agent.setFollowUpMode(mode)
+    this.publishOmpControlState(managed, managed.agent.getOmpControlState())
+  }
+
+  async setOmpInterruptMode(sessionId: string, mode: OmpInterruptModeDto): Promise<void> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+    if (!isOmpControllableAgent(managed.agent)) {
+      throw new Error('OMP queue controls are only available for OMP sessions')
+    }
+    await managed.agent.setInterruptMode(mode)
+    this.publishOmpControlState(managed, managed.agent.getOmpControlState())
   }
 
   /**

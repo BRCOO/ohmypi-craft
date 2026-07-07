@@ -1,16 +1,33 @@
 import * as React from 'react'
 import { useTranslation } from "react-i18next"
 import { Command as CommandPrimitive } from 'cmdk'
-import { Check, Minimize2 } from 'lucide-react'
+import { Check, Minimize2, Sparkles } from 'lucide-react'
 import { Icon_Folder } from '@craft-agent/ui'
 import { cn } from '@/lib/utils'
 import { PERMISSION_MODE_CONFIG, PERMISSION_MODE_ORDER, type PermissionMode } from '@craft-agent/shared/agent/modes'
+import type { OmpAvailableCommandDto } from '../../../shared/types'
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export type SlashCommandId = PermissionMode | 'compact'
+export interface OmpSlashCommandId {
+  type: 'omp'
+  name: string
+  subcommand?: string
+}
+
+export type SlashCommandId = PermissionMode | 'compact' | OmpSlashCommandId
+
+export function isOmpSlashCommandId(id: SlashCommandId): id is OmpSlashCommandId {
+  return typeof id === 'object' && id?.type === 'omp'
+}
+
+export function slashCommandIdKey(id: SlashCommandId): string {
+  return isOmpSlashCommandId(id)
+    ? `omp:${id.name}${id.subcommand ? `:${id.subcommand}` : ''}`
+    : id
+}
 
 /** Union type for all item types in the slash menu */
 export type SlashItemType = 'command' | 'folder'
@@ -126,7 +143,8 @@ function filterCommands(commands: SlashCommand[], filter: string): SlashCommand[
   return commands.filter(
     cmd =>
       cmd.label.toLowerCase().includes(lowerFilter) ||
-      cmd.id.toLowerCase().includes(lowerFilter)
+      slashCommandIdKey(cmd.id).toLowerCase().includes(lowerFilter) ||
+      cmd.shortcut?.toLowerCase().includes(lowerFilter)
   )
 }
 
@@ -146,7 +164,10 @@ function filterSections(sections: SlashSection[], filter: string): SlashSection[
       ...section,
       items: section.items.filter(item =>
         item.label.toLowerCase().includes(lowerFilter) ||
-        item.id.toLowerCase().includes(lowerFilter) ||
+        (typeof item.id === 'string'
+          ? item.id.toLowerCase()
+          : slashCommandIdKey(item.id).toLowerCase()
+        ).includes(lowerFilter) ||
         item.description?.toLowerCase().includes(lowerFilter)
       ),
     }))
@@ -166,11 +187,16 @@ const MODE_COMMAND_IDS = new Set<string>(['safe', 'ask', 'allow-all'])
 
 function CommandItemContent({ command, isActive }: { command: SlashCommand; isActive: boolean }) {
   const { t } = useTranslation()
-  const label = MODE_COMMAND_IDS.has(command.id) ? t(`mode.${command.id}`, command.label) : command.label
+  const label = typeof command.id === 'string' && MODE_COMMAND_IDS.has(command.id)
+    ? t(`mode.${command.id}`, command.label)
+    : command.label
   return (
     <>
       <div className="shrink-0 text-muted-foreground">{command.icon}</div>
       <div className="flex-1 min-w-0">{label}</div>
+      {command.shortcut && (
+        <div className="shrink-0 text-[11px] text-muted-foreground/70">{command.shortcut}</div>
+      )}
       {isActive && (
         <div className="shrink-0 h-4 w-4 rounded-full bg-current flex items-center justify-center">
           <Check className="h-2.5 w-2.5 text-white dark:text-black" strokeWidth={3} />
@@ -234,7 +260,7 @@ export function SlashCommandMenu({
     : (filteredCommands ?? [])
 
   // Default to the first active command, or first command if none active
-  const defaultValue = activeCommands[0] ?? allFilteredCommands[0]?.id
+  const defaultValue = activeCommands[0] ? slashCommandIdKey(activeCommands[0]) : (allFilteredCommands[0] ? slashCommandIdKey(allFilteredCommands[0].id) : undefined)
 
   React.useEffect(() => {
     // Don't auto-focus the filter on touch devices — it pulls up the virtual keyboard
@@ -248,13 +274,14 @@ export function SlashCommandMenu({
 
   // Render a single command item
   const renderCommandItem = (cmd: SlashCommand) => {
-    const isActive = activeCommands.includes(cmd.id)
+    const cmdKey = slashCommandIdKey(cmd.id)
+    const isActive = activeCommands.some(id => slashCommandIdKey(id) === cmdKey)
     return (
       <CommandPrimitive.Item
-        key={cmd.id}
-        value={cmd.id}
+        key={cmdKey}
+        value={cmdKey}
         onSelect={() => onSelect(cmd.id)}
-        data-tutorial={`permission-mode-${cmd.id}`}
+        data-tutorial={`permission-mode-${cmdKey}`}
         className={cn(
           MENU_ITEM_STYLE,
           'outline-none',
@@ -467,10 +494,11 @@ export function InlineSlashCommand({
                 )
               } else {
                 // Command item
-                const isActive = activeCommands.includes(item.id)
+                const itemKey = slashCommandIdKey(item.id)
+                const isActive = activeCommands.some(id => slashCommandIdKey(id) === itemKey)
                 return (
                   <div
-                    key={item.id}
+                    key={itemKey}
                     data-selected={isSelected}
                     onClick={() => handleSelect(item)}
                     onMouseEnter={() => setSelectedIndex(itemIndex)}
@@ -532,6 +560,7 @@ export interface UseInlineSlashCommandOptions {
   onSelectCommand: (commandId: SlashCommandId) => void
   onSelectFolder: (path: string) => void
   activeCommands?: SlashCommandId[]
+  ompCommands?: OmpAvailableCommandDto[]
   recentFolders?: string[]
   homeDir?: string
 }
@@ -553,6 +582,7 @@ export function useInlineSlashCommand({
   onSelectCommand,
   onSelectFolder,
   activeCommands = [],
+  ompCommands = [],
   recentFolders = [],
   homeDir,
 }: UseInlineSlashCommandOptions): UseInlineSlashCommandReturn {
@@ -562,6 +592,26 @@ export function useInlineSlashCommand({
   const [slashStart, setSlashStart] = React.useState(-1)
   // Store current input state for handleSelect
   const currentInputRef = React.useRef({ value: '', cursorPosition: 0 })
+
+  const ompSlashCommands = React.useMemo((): SlashCommand[] => {
+    return ompCommands.flatMap((command) => {
+      const base: SlashCommand = {
+        id: { type: 'omp', name: command.name },
+        label: `/${command.name}`,
+        description: command.description || command.input?.hint || 'Oh My Pi command',
+        icon: <Sparkles className={MENU_ICON_SIZE} />,
+        shortcut: command.source,
+      }
+      const subcommands = command.subcommands?.map((subcommand): SlashCommand => ({
+        id: { type: 'omp', name: command.name, subcommand: subcommand.name },
+        label: `/${command.name} ${subcommand.name}`,
+        description: subcommand.description || subcommand.usage || command.description || 'Oh My Pi subcommand',
+        icon: <Sparkles className={MENU_ICON_SIZE} />,
+        shortcut: command.source,
+      })) ?? []
+      return [base, ...subcommands]
+    })
+  }, [ompCommands])
 
   // Build sections from commands and folders
   const sections = React.useMemo((): SlashSection[] => {
@@ -580,6 +630,14 @@ export function useInlineSlashCommand({
       label: 'Commands',
       items: [compactCommand],
     })
+
+    if (ompSlashCommands.length > 0) {
+      result.push({
+        id: 'omp',
+        label: 'Oh My Pi',
+        items: ompSlashCommands,
+      })
+    }
 
     // Recent folders section - sorted alphabetically by folder name, show all
     if (recentFolders.length > 0) {
@@ -604,14 +662,14 @@ export function useInlineSlashCommand({
     }
 
     return result
-  }, [recentFolders, homeDir])
+  }, [recentFolders, homeDir, ompSlashCommands])
 
   const handleInputChange = React.useCallback((value: string, cursorPosition: number) => {
     // Store current state for handleSelect
     currentInputRef.current = { value, cursorPosition }
 
     const textBeforeCursor = value.slice(0, cursorPosition)
-    const slashMatch = textBeforeCursor.match(/(?:^|\s)\/(\w*)$/)
+    const slashMatch = textBeforeCursor.match(/(?:^|\s)\/([\w-]*)$/)
 
     // Only show menu if we have sections with items
     const hasItems = sections.some(s => s.items.length > 0)
@@ -672,7 +730,12 @@ export function useInlineSlashCommand({
       const { value: currentValue, cursorPosition } = currentInputRef.current
       const before = currentValue.slice(0, slashStart)
       const after = currentValue.slice(cursorPosition)
-      result = (before + after).trim()
+      if (isOmpSlashCommandId(commandId)) {
+        const inserted = `/${commandId.name}${commandId.subcommand ? ` ${commandId.subcommand}` : ''} `
+        result = before + inserted + after.trimStart()
+      } else {
+        result = (before + after).trim()
+      }
     }
 
     // Now safe to trigger state changes

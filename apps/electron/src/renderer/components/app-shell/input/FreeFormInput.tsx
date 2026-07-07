@@ -13,6 +13,7 @@ import {
   AlertCircle,
   Image as ImageIcon,
   X,
+  Sparkles,
 } from 'lucide-react'
 import { Icon_Home, Icon_Folder, Spinner } from '@craft-agent/ui'
 
@@ -22,6 +23,7 @@ import { ServerDirectoryBrowser } from '@/components/ServerDirectoryBrowser'
 import { Button } from '@/components/ui/button'
 import {
   InlineSlashCommand,
+  isOmpSlashCommandId,
   useInlineSlashCommand,
   type SlashCommandId,
 } from '@/components/ui/slash-command-menu'
@@ -74,7 +76,7 @@ import { CompactWorkingDirectorySelector } from '@/components/ui/CompactWorkingD
 import { ConnectionIcon } from '@/components/icons/ConnectionIcon'
 import { FreeFormInputContextBadge } from './FreeFormInputContextBadge'
 import { derivePickerMode } from './picker-mode'
-import type { FileAttachment, LoadedSource, LoadedSkill } from '../../../../shared/types'
+import type { FileAttachment, LoadedSource, LoadedSkill, OmpControlStateDto, OmpDeliveryMode, OmpInterruptMode, OmpQueueMode } from '../../../../shared/types'
 import type { PermissionMode } from '@craft-agent/shared/agent/modes'
 import { type ThinkingLevel, THINKING_LEVELS, getThinkingLevelNameKey } from '@craft-agent/shared/agent/thinking-levels'
 import { useEscapeInterrupt } from '@/context/EscapeInterruptContext'
@@ -107,6 +109,143 @@ function formatFollowUpChipText(text: string, fallback: string, maxLength = 50):
 }
 
 
+const OMP_DELIVERY_LABEL: Record<OmpDeliveryMode, string> = {
+  steer: 'Steer',
+  followUp: 'Follow-up',
+  abortAndPrompt: 'Abort + prompt',
+}
+
+const OMP_QUEUE_LABEL: Record<OmpQueueMode, string> = {
+  all: 'All',
+  'one-at-a-time': 'One at a time',
+}
+
+const OMP_INTERRUPT_LABEL: Record<OmpInterruptMode, string> = {
+  immediate: 'Immediate',
+  wait: 'Wait',
+}
+
+function OmpQueueControl({
+  sessionId,
+  controlState,
+  deliveryMode,
+  onDeliveryModeChange,
+  disabled,
+}: {
+  sessionId?: string
+  controlState?: OmpControlStateDto
+  deliveryMode: OmpDeliveryMode
+  onDeliveryModeChange: (mode: OmpDeliveryMode) => void
+  disabled?: boolean
+}) {
+  if (!controlState) return null
+
+  const queue = controlState.queue
+  const commandCount = controlState.availableCommands.length
+
+  const updateSteeringMode = (mode: OmpQueueMode) => {
+    if (!sessionId) return
+    void window.electronAPI?.sessionCommand?.(sessionId, { type: 'setOmpSteeringMode', mode })
+  }
+
+  const updateFollowUpMode = (mode: OmpQueueMode) => {
+    if (!sessionId) return
+    void window.electronAPI?.sessionCommand?.(sessionId, { type: 'setOmpFollowUpMode', mode })
+  }
+
+  const updateInterruptMode = (mode: OmpInterruptMode) => {
+    if (!sessionId) return
+    void window.electronAPI?.sessionCommand?.(sessionId, { type: 'setOmpInterruptMode', mode })
+  }
+
+  const renderCheck = (active: boolean) => (
+    <Check className={cn('h-3.5 w-3.5', active ? 'opacity-100' : 'opacity-0')} />
+  )
+
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              disabled={disabled}
+              className={cn(
+                "input-toolbar-btn inline-flex items-center h-7 px-1.5 gap-1 text-[12px] shrink-0 rounded-[6px] transition-colors select-none",
+                "text-violet-300 hover:bg-violet-400/10 disabled:opacity-50 disabled:cursor-not-allowed",
+              )}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">{OMP_DELIVERY_LABEL[deliveryMode]}</span>
+              {queue.queuedMessageCount > 0 && (
+                <span className="rounded-full bg-violet-400/15 px-1.5 py-0.5 text-[10px] text-violet-200">
+                  {queue.queuedMessageCount}
+                </span>
+              )}
+              <ChevronDown className="h-3 w-3 opacity-60" />
+            </button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          OMP controls · {commandCount} commands
+        </TooltipContent>
+      </Tooltip>
+      <StyledDropdownMenuContent side="top" align="end" sideOffset={8} className="min-w-[250px]">
+        <div className="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">Mid-stream delivery</div>
+        {(['steer', 'followUp', 'abortAndPrompt'] as const).map((mode) => (
+          <StyledDropdownMenuItem
+            key={mode}
+            onSelect={() => onDeliveryModeChange(mode)}
+            className="flex cursor-pointer items-center justify-between rounded-lg px-2 py-1.5"
+          >
+            <span>{OMP_DELIVERY_LABEL[mode]}</span>
+            {renderCheck(deliveryMode === mode)}
+          </StyledDropdownMenuItem>
+        ))}
+
+        <StyledDropdownMenuSeparator />
+        <div className="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">Steer queue</div>
+        {(['all', 'one-at-a-time'] as const).map((mode) => (
+          <StyledDropdownMenuItem
+            key={`steer-${mode}`}
+            onSelect={() => updateSteeringMode(mode)}
+            className="flex cursor-pointer items-center justify-between rounded-lg px-2 py-1.5"
+          >
+            <span>{OMP_QUEUE_LABEL[mode]}</span>
+            {renderCheck(queue.steeringMode === mode)}
+          </StyledDropdownMenuItem>
+        ))}
+
+        <StyledDropdownMenuSeparator />
+        <div className="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">Follow-up queue</div>
+        {(['all', 'one-at-a-time'] as const).map((mode) => (
+          <StyledDropdownMenuItem
+            key={`follow-${mode}`}
+            onSelect={() => updateFollowUpMode(mode)}
+            className="flex cursor-pointer items-center justify-between rounded-lg px-2 py-1.5"
+          >
+            <span>{OMP_QUEUE_LABEL[mode]}</span>
+            {renderCheck(queue.followUpMode === mode)}
+          </StyledDropdownMenuItem>
+        ))}
+
+        <StyledDropdownMenuSeparator />
+        <div className="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">Interrupt</div>
+        {(['immediate', 'wait'] as const).map((mode) => (
+          <StyledDropdownMenuItem
+            key={`interrupt-${mode}`}
+            onSelect={() => updateInterruptMode(mode)}
+            className="flex cursor-pointer items-center justify-between rounded-lg px-2 py-1.5"
+          >
+            <span>{OMP_INTERRUPT_LABEL[mode]}</span>
+            {renderCheck(queue.interruptMode === mode)}
+          </StyledDropdownMenuItem>
+        ))}
+      </StyledDropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 /** Platform-specific modifier key for keyboard shortcuts */
 const cmdKey = isMac ? '⌘' : 'Ctrl'
 
@@ -132,6 +271,10 @@ export interface FollowUpInputItem {
   color?: string
 }
 
+export interface FreeFormSubmitOptions {
+  ompDeliveryMode?: OmpDeliveryMode
+}
+
 export interface FreeFormInputProps {
   /** Placeholder text(s) for the textarea - can be array for rotation */
   placeholder?: string | string[]
@@ -140,7 +283,7 @@ export interface FreeFormInputProps {
   /** Whether the session is currently processing */
   isProcessing?: boolean
   /** Callback when message is submitted (skillSlugs from @mentions) */
-  onSubmit: (message: string, attachments?: FileAttachment[], skillSlugs?: string[]) => void
+  onSubmit: (message: string, attachments?: FileAttachment[], skillSlugs?: string[], options?: FreeFormSubmitOptions) => void
   /** Callback to stop processing. Pass silent=true to skip "Response interrupted" message */
   onStop?: (silent?: boolean) => void
   /** External ref for the input */
@@ -216,6 +359,8 @@ export interface FreeFormInputProps {
     /** Model's context window size in tokens */
     contextWindow?: number
   }
+  /** Runtime-only Oh My Pi command list and queue controls. */
+  ompControlState?: OmpControlStateDto
   /** Follow-up annotations shown as context chips above the input */
   followUpItems?: FollowUpInputItem[]
   /** Callback when user clicks a follow-up chip body */
@@ -300,6 +445,7 @@ export function FreeFormInput({
   disableSend = false,
   isEmptySession = false,
   contextStatus,
+  ompControlState,
   followUpItems = [],
   onFollowUpClick,
   onFollowUpIndexClick,
@@ -931,9 +1077,11 @@ export function FreeFormInput({
     else if (permissionMode === 'allow-all') active.push('allow-all')
     return active
   }, [permissionMode])
+  const [ompDeliveryMode, setOmpDeliveryMode] = React.useState<OmpDeliveryMode>('steer')
 
   // Handle slash command selection (mode/feature commands)
   const handleSlashCommand = React.useCallback((commandId: SlashCommandId) => {
+    if (isOmpSlashCommandId(commandId)) return
     if (commandId === 'safe') onPermissionModeChange?.('safe')
     else if (commandId === 'ask') onPermissionModeChange?.('ask')
     else if (commandId === 'allow-all') onPermissionModeChange?.('allow-all')
@@ -965,6 +1113,7 @@ export function FreeFormInput({
     onSelectCommand: handleSlashCommand,
     onSelectFolder: handleSlashFolderSelect,
     activeCommands,
+    ompCommands: ompControlState?.availableCommands ?? [],
     recentFolders,
     homeDir,
   })
@@ -1277,7 +1426,8 @@ export function FreeFormInput({
     onSubmit(
       input.trim(),
       attachmentSnapshot.length > 0 ? attachmentSnapshot : undefined,
-      mentions.skills.length > 0 ? mentions.skills : undefined
+      mentions.skills.length > 0 ? mentions.skills : undefined,
+      isProcessing && ompControlState ? { ompDeliveryMode } : undefined
     )
     setInput('')
     setAttachments([])
@@ -1293,7 +1443,7 @@ export function FreeFormInput({
     })
 
     return true
-  }, [input, attachments, followUpItems, disabled, disableSend, onInputChange, onAttachmentsChange, onSubmit, skills, sources, optimisticSourceSlugs, onSourcesChange, onWorkingDirectoryChange, homeDir])
+  }, [input, attachments, followUpItems, disabled, disableSend, onInputChange, onAttachmentsChange, onSubmit, skills, sources, optimisticSourceSlugs, onSourcesChange, onWorkingDirectoryChange, homeDir, isProcessing, ompControlState, ompDeliveryMode])
 
   // Listen for craft:submit-input events (simulate pressing the Send button)
   React.useEffect(() => {
@@ -2027,6 +2177,13 @@ export function FreeFormInput({
 
           {/* Right side: Model + Send - never shrink so they're always visible */}
           <div className="flex items-center shrink-0">
+          <OmpQueueControl
+            sessionId={sessionId}
+            controlState={ompControlState}
+            deliveryMode={ompDeliveryMode}
+            onDeliveryModeChange={setOmpDeliveryMode}
+            disabled={disabled}
+          />
           {/* 5. Model/Connection Selector - Hidden in compact mode (EditPopover embedding) */}
           {!compactMode && (
           <DropdownMenu open={modelDropdownOpen} onOpenChange={setModelDropdownOpen}>

@@ -39,6 +39,7 @@ import {
   handleTitleRegenerating,
   handleAsyncOperation,
   handleWorkingDirectoryChanged,
+  handleOmpControlStateChanged,
   handlePermissionModeChanged,
   handleSessionModelChanged,
   handleConnectionChanged,
@@ -135,6 +136,9 @@ export function processEvent(
 
     case 'working_directory_changed':
       return handleWorkingDirectoryChanged(state, event)
+
+    case 'omp_control_state_changed':
+      return handleOmpControlStateChanged(state, event)
 
     case 'working_directory_error':
       // No state change — just emit a toast effect

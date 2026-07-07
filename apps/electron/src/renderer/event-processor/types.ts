@@ -5,7 +5,7 @@
  * All agent events flow through a single pure function for consistent state transitions.
  */
 
-import type { Session, Message, PermissionRequest, CredentialRequest, ExtensionUiRequest, TypedError, PermissionMode, SessionStatus, AuthRequest, ToolDisplayMeta } from '../../shared/types'
+import type { Session, Message, PermissionRequest, CredentialRequest, ExtensionUiRequest, TypedError, PermissionMode, SessionStatus, AuthRequest, ToolDisplayMeta, OmpControlStateDto } from '../../shared/types'
 
 /**
  * Streaming state for a session - replaces streamingTextRef
@@ -283,6 +283,15 @@ export interface WorkingDirectoryChangedEvent {
 }
 
 /**
+ * OMP command/queue state changed.
+ */
+export interface OmpControlStateChangedEvent {
+  type: 'omp_control_state_changed'
+  sessionId: string
+  state: OmpControlStateDto
+}
+
+/**
  * Working directory error event - server rejected the path (cross-platform, not found, etc.)
  */
 export interface WorkingDirectoryErrorEvent {
@@ -521,6 +530,7 @@ export type AgentEvent =
   | TitleRegeneratingEvent
   | AsyncOperationEvent
   | WorkingDirectoryChangedEvent
+  | OmpControlStateChangedEvent
   | WorkingDirectoryErrorEvent
   | PermissionModeChangedEvent
   | SessionModelChangedEvent

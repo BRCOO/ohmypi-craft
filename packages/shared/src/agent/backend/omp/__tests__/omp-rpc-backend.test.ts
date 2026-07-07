@@ -32,6 +32,40 @@ class FakeChild extends EventEmitter {
             success: true,
           }));
         }
+        if (frame.type === 'get_available_commands') {
+          queueMicrotask(() => this.emitFrame({
+            type: 'response',
+            id: frame.id,
+            command: 'get_available_commands',
+            success: true,
+            data: {
+              commands: [
+                {
+                  name: 'stats',
+                  description: 'Show session stats',
+                  source: 'builtin',
+                  aliases: ['s'],
+                  input: { hint: 'optional focus' },
+                },
+              ],
+            },
+          }));
+        }
+        if (
+          frame.type === 'set_steering_mode'
+          || frame.type === 'set_follow_up_mode'
+          || frame.type === 'set_interrupt_mode'
+          || frame.type === 'follow_up'
+          || frame.type === 'abort_and_prompt'
+          || frame.type === 'steer'
+        ) {
+          queueMicrotask(() => this.emitFrame({
+            type: 'response',
+            id: frame.id,
+            command: frame.type as string,
+            success: true,
+          }));
+        }
       }
     });
   }
@@ -390,6 +424,8 @@ describe('OmpRpcBackend subprocess lifecycle', () => {
 
     expect(sessionIds).toEqual(['real-session-id']);
     expect((backend as any).sessionState.sessionId).toBe('real-session-id');
+    await waitFor(() => backend.getCachedAvailableCommands()[0]?.name === 'stats');
+    expect(backend.getCachedAvailableCommands().map((command) => command.name)).toEqual(['stats']);
     backend.destroy();
   });
 
@@ -475,6 +511,105 @@ describe('OmpRpcBackend subprocess lifecycle', () => {
       data: { agentInvoked: false },
     });
     await eventsPromise;
+    backend.destroy();
+  });
+
+  it('updates cached available commands from push updates and exposes control state', async () => {
+    const states: unknown[] = [];
+    const { backend, children } = createHarness();
+    backend.onControlStateChange = (state) => states.push(state);
+    const child = await startReady(backend, children);
+
+    await waitFor(() => backend.getOmpControlState().availableCommands[0]?.name === 'stats');
+    expect(backend.getOmpControlState().availableCommands.map((command) => command.name)).toEqual(['stats']);
+    expect(backend.getOmpControlState().queue).toEqual({
+      isStreaming: false,
+      isCompacting: false,
+      steeringMode: 'all',
+      followUpMode: 'all',
+      interruptMode: 'immediate',
+      queuedMessageCount: 0,
+    });
+
+    child.emitFrame({
+      type: 'available_commands_update',
+      commands: [{ name: 'skill-runner', source: 'skill', description: 'Run skill' }],
+    });
+    await waitFor(() => backend.getCachedAvailableCommands()[0]?.name === 'skill-runner');
+
+    expect(backend.getCachedAvailableCommands()).toEqual([{
+      name: 'skill-runner',
+      aliases: undefined,
+      description: 'Run skill',
+      input: undefined,
+      subcommands: undefined,
+      source: 'skill',
+    }]);
+    expect(states.length).toBeGreaterThan(0);
+    backend.destroy();
+  });
+
+  it('sends OMP native follow-up and abort-and-prompt with image attachments', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children);
+    (backend as any)._isProcessing = true;
+
+    await expect(backend.followUp('later', [{
+      type: 'image',
+      path: 'later.png',
+      name: 'later.png',
+      mimeType: 'image/png',
+      base64: 'AQID',
+      size: 3,
+    }])).resolves.toBe(true);
+
+    await expect(backend.abortAndPrompt('now', [{
+      type: 'image',
+      path: 'now.png',
+      name: 'now.png',
+      mimeType: 'image/png',
+      base64: 'BAUG',
+      size: 3,
+    }])).resolves.toBe(true);
+
+    const followUp = child.frames.find((frame) => frame.type === 'follow_up')!;
+    const abortAndPrompt = child.frames.find((frame) => frame.type === 'abort_and_prompt')!;
+    expect(followUp.message).toBe('later');
+    expect(followUp.images).toEqual([{ type: 'image', data: 'AQID', mimeType: 'image/png' }]);
+    expect(abortAndPrompt.message).toBe('now');
+    expect(abortAndPrompt.images).toEqual([{ type: 'image', data: 'BAUG', mimeType: 'image/png' }]);
+    backend.destroy();
+  });
+
+  it('updates queue mode state after native setters and config_update frames', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children);
+
+    await backend.setSteeringMode('one-at-a-time');
+    await backend.setFollowUpMode('one-at-a-time');
+    await backend.setInterruptMode('wait');
+    expect(backend.getOmpControlState().queue).toMatchObject({
+      steeringMode: 'one-at-a-time',
+      followUpMode: 'one-at-a-time',
+      interruptMode: 'wait',
+    });
+
+    child.emitFrame({
+      type: 'config_update',
+      config: {
+        steeringMode: 'all',
+        followUpMode: 'all',
+        interruptMode: 'immediate',
+        queuedMessageCount: 4,
+      },
+    });
+    await waitFor(() => backend.getOmpControlState().queue.queuedMessageCount === 4);
+    expect(backend.getOmpControlState().queue).toMatchObject({
+      steeringMode: 'all',
+      followUpMode: 'all',
+      interruptMode: 'immediate',
+      queuedMessageCount: 4,
+    });
     backend.destroy();
   });
 

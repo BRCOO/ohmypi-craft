@@ -20,6 +20,8 @@ import type {
   PermissionResponseOptions,
   CredentialResponse,
   ExtensionUiResponse,
+  OmpInterruptMode,
+  OmpQueueMode,
   PermissionModeState,
   UnreadSummary,
   ShareResult,
@@ -69,6 +71,9 @@ export interface ISessionManager {
 
   setSessionPermissionMode(sessionId: string, mode: PermissionMode): void
   setSessionThinkingLevel(sessionId: string, level: ThinkingLevel): void
+  setOmpSteeringMode(sessionId: string, mode: OmpQueueMode): Promise<void>
+  setOmpFollowUpMode(sessionId: string, mode: OmpQueueMode): Promise<void>
+  setOmpInterruptMode(sessionId: string, mode: OmpInterruptMode): Promise<void>
   updateWorkingDirectory(sessionId: string, path: string): void
   setSessionSources(sessionId: string, sourceSlugs: string[]): Promise<void>
   setSessionLabels(sessionId: string, labels: string[]): void

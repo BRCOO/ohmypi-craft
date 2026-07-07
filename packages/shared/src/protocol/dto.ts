@@ -41,6 +41,52 @@ export type SessionStatus = string
 
 export type BuiltInStatusId = 'todo' | 'in-progress' | 'needs-review' | 'done' | 'cancelled'
 
+// ---------------------------------------------------------------------------
+// OMP runtime control DTOs (main → renderer, renderer → main)
+// ---------------------------------------------------------------------------
+
+export type OmpQueueMode = 'all' | 'one-at-a-time'
+export type OmpInterruptMode = 'immediate' | 'wait'
+export type OmpDeliveryMode = 'steer' | 'followUp' | 'abortAndPrompt'
+
+export type OmpAvailableCommandSource =
+  | 'builtin'
+  | 'skill'
+  | 'extension'
+  | 'custom'
+  | 'mcp_prompt'
+  | 'file'
+
+export interface OmpAvailableSubcommandDto {
+  name: string
+  description?: string
+  usage?: string
+}
+
+export interface OmpAvailableCommandDto {
+  name: string
+  aliases?: string[]
+  description?: string
+  input?: { hint?: string }
+  subcommands?: OmpAvailableSubcommandDto[]
+  source: OmpAvailableCommandSource
+}
+
+export interface OmpQueueControlStateDto {
+  isStreaming: boolean
+  isCompacting: boolean
+  steeringMode: OmpQueueMode
+  followUpMode: OmpQueueMode
+  interruptMode: OmpInterruptMode
+  queuedMessageCount: number
+}
+
+export interface OmpControlStateDto {
+  availableCommands: OmpAvailableCommandDto[]
+  queue: OmpQueueControlStateDto
+  updatedAt: number
+}
+
 /**
  * Electron-specific Session type (includes runtime state).
  * Extends core Session with messages array and processing state.
@@ -103,6 +149,8 @@ export interface Session {
   isArchived?: boolean
   archivedAt?: number
   supportsBranching?: boolean
+  /** Runtime-only OMP command/queue state. Not persisted in session JSONL. */
+  ompControlState?: OmpControlStateDto
 }
 
 export interface CreateSessionOptions {
@@ -181,6 +229,7 @@ export type SessionEvent =
   | { type: 'title_regenerating'; sessionId: string; isRegenerating: boolean }
   | { type: 'async_operation'; sessionId: string; isOngoing: boolean }
   | { type: 'working_directory_changed'; sessionId: string; workingDirectory: string }
+  | { type: 'omp_control_state_changed'; sessionId: string; state: OmpControlStateDto }
   | { type: 'permission_request'; sessionId: string; request: PermissionRequest }
   | { type: 'credential_request'; sessionId: string; request: CredentialRequest }
   | { type: 'extension_ui_request'; sessionId: string; request: ExtensionUiRequest }
@@ -218,6 +267,8 @@ export interface SendMessageOptions {
   skillSlugs?: string[]
   badges?: ContentBadge[]
   optimisticMessageId?: string
+  /** OMP-only mid-stream delivery preference. Other backends ignore it. */
+  ompDeliveryMode?: OmpDeliveryMode
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +287,9 @@ export type SessionCommand =
   | { type: 'setActiveViewing'; workspaceId: string }
   | { type: 'setPermissionMode'; mode: PermissionMode }
   | { type: 'setThinkingLevel'; level: ThinkingLevel }
+  | { type: 'setOmpSteeringMode'; mode: OmpQueueMode }
+  | { type: 'setOmpFollowUpMode'; mode: OmpQueueMode }
+  | { type: 'setOmpInterruptMode'; mode: OmpInterruptMode }
   | { type: 'updateWorkingDirectory'; dir: string }
   | { type: 'setSources'; sourceSlugs: string[] }
   | { type: 'setLabels'; labels: string[] }

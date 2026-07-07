@@ -31,6 +31,7 @@ import type {
   TitleRegeneratingEvent,
   AsyncOperationEvent,
   WorkingDirectoryChangedEvent,
+  OmpControlStateChangedEvent,
   PermissionModeChangedEvent,
   SessionModelChangedEvent,
   LLMConnectionChangedEvent,
@@ -436,6 +437,24 @@ export function handleWorkingDirectoryChanged(
   return {
     state: {
       session: { ...session, workingDirectory: event.workingDirectory },
+      streaming,
+    },
+    effects: [],
+  }
+}
+
+/**
+ * Handle OMP command/queue state updates.
+ */
+export function handleOmpControlStateChanged(
+  state: SessionState,
+  event: OmpControlStateChangedEvent
+): ProcessResult {
+  const { session, streaming } = state
+
+  return {
+    state: {
+      session: { ...session, ompControlState: event.state },
       streaming,
     },
     effects: [],

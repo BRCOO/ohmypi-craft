@@ -51,6 +51,51 @@ describe('OmpRpcEventAdapter', () => {
     });
   });
 
+  it('surfaces available commands and queue control metadata', () => {
+    const adapter = new OmpRpcEventAdapter();
+    expect(adapter.adaptFrame({
+      type: 'available_commands_update',
+      commands: [
+        {
+          name: 'stats',
+          description: 'Show stats',
+          source: 'builtin',
+          input: { hint: 'optional focus' },
+        },
+      ],
+    })).toEqual({
+      events: [],
+      availableCommands: [{
+        name: 'stats',
+        aliases: undefined,
+        description: 'Show stats',
+        input: { hint: 'optional focus' },
+        subcommands: undefined,
+        source: 'builtin',
+      }],
+    });
+
+    expect(adapter.adaptFrame({
+      type: 'config_update',
+      config: {
+        thinkingLevel: 'high',
+        steeringMode: 'one-at-a-time',
+        followUpMode: 'all',
+        interruptMode: 'wait',
+        queuedMessageCount: 3,
+      },
+    })).toEqual({
+      events: [],
+      thinkingLevel: 'high',
+      queueState: {
+        steeringMode: 'one-at-a-time',
+        followUpMode: 'all',
+        interruptMode: 'wait',
+        queuedMessageCount: 3,
+      },
+    });
+  });
+
   it('maps assistant deltas and final assistant text', () => {
     const adapter = new OmpRpcEventAdapter();
     adapter.startTurn();
