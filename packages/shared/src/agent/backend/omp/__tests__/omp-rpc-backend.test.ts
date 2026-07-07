@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import type { ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import type { OmpSessionLink } from '../../../../sessions/types.ts';
 
 import { createMockBackendConfig } from '../../../__tests__/test-utils.ts';
 import {
@@ -58,6 +59,7 @@ class FakeChild extends EventEmitter {
           || frame.type === 'follow_up'
           || frame.type === 'abort_and_prompt'
           || frame.type === 'steer'
+          || frame.type === 'set_session_name'
         ) {
           queueMicrotask(() => this.emitFrame({
             type: 'response',
@@ -92,6 +94,8 @@ function createHarness(options: {
   readyTimeoutMs?: number;
   requestTimeoutMs?: number;
   onSessionId?: (id: string) => void;
+  sessionLink?: OmpSessionLink;
+  onSessionLink?: (link: OmpSessionLink) => void;
   attachmentReadFile?: (path: string) => Buffer;
 } = {}) {
   const children: FakeChild[] = [];
@@ -101,12 +105,22 @@ function createHarness(options: {
     return child as unknown as ChildProcessWithoutNullStreams;
   }) as unknown as typeof spawn;
 
-  const backend = new OmpRpcBackend(createMockBackendConfig({
+  const config = createMockBackendConfig({
     provider: 'omp',
     model: DEFAULT_OMP_MODEL,
     runtime: { ompCommand: 'omp' },
     onSdkSessionIdUpdate: options.onSessionId,
-  }), {
+    onOmpSessionLinkUpdate: options.onSessionLink,
+  });
+  if (options.sessionLink) {
+    if (!config.session) throw new Error('Mock backend config is missing a session');
+    config.session = {
+      ...config.session,
+      ompSessionLink: options.sessionLink,
+    };
+  }
+
+  const backend = new OmpRpcBackend(config, {
     spawnProcess,
     readyTimeoutMs: options.readyTimeoutMs,
     requestTimeoutMs: options.requestTimeoutMs,
@@ -125,7 +139,10 @@ async function startReady(backend: OmpRpcBackend, children: FakeChild[]): Promis
   return child;
 }
 
-function sessionState(sessionId: string): Record<string, unknown> {
+function sessionState(
+  sessionId: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     sessionId,
     isStreaming: false,
@@ -137,10 +154,15 @@ function sessionState(sessionId: string): Record<string, unknown> {
     messageCount: 0,
     queuedMessageCount: 0,
     todoPhases: [],
+    ...overrides,
   };
 }
 
-async function respondReady(child: FakeChild, sessionId: string): Promise<void> {
+async function respondReady(
+  child: FakeChild,
+  sessionId: string,
+  overrides: Record<string, unknown> = {},
+): Promise<void> {
   child.emitFrame({ type: 'ready' });
   await waitFor(() => child.frames.some((frame) => frame.type === 'get_state'));
   const stateRequest = child.frames.findLast((frame) => frame.type === 'get_state')!;
@@ -149,7 +171,7 @@ async function respondReady(child: FakeChild, sessionId: string): Promise<void> 
     id: stateRequest.id,
     command: 'get_state',
     success: true,
-    data: sessionState(sessionId),
+    data: sessionState(sessionId, overrides),
   });
 }
 
@@ -426,6 +448,187 @@ describe('OmpRpcBackend subprocess lifecycle', () => {
     expect((backend as any).sessionState.sessionId).toBe('real-session-id');
     await waitFor(() => backend.getCachedAvailableCommands()[0]?.name === 'stats');
     expect(backend.getCachedAvailableCommands().map((command) => command.name)).toEqual(['stats']);
+    backend.destroy();
+  });
+
+  it('restores the persisted OMP session file before resolving startup', async () => {
+    const links: OmpSessionLink[] = [];
+    const sessionIds: string[] = [];
+    const persistedLink: OmpSessionLink = {
+      provider: 'omp',
+      sessionId: 'persisted-session',
+      sessionFile: 'C:\\sessions\\persisted.jsonl',
+      messageCount: 8,
+      lastSyncedAt: 1,
+    };
+    const { backend, children } = createHarness({
+      sessionLink: persistedLink,
+      onSessionId: (id) => sessionIds.push(id),
+      onSessionLink: (link) => links.push(link),
+    });
+    const ready = (backend as any).ensureSubprocess() as Promise<void>;
+    const child = children[0]!;
+
+    child.emitFrame({ type: 'ready' });
+    await waitFor(() => child.frames.some((frame) => frame.type === 'get_state'));
+    const initialState = child.frames.find((frame) => frame.type === 'get_state')!;
+    child.emitFrame({
+      type: 'response',
+      id: initialState.id,
+      command: 'get_state',
+      success: true,
+      data: sessionState('fresh-session', {
+        sessionFile: 'C:\\sessions\\fresh.jsonl',
+      }),
+    });
+
+    await waitFor(() => child.frames.some((frame) => frame.type === 'switch_session'));
+    const switchRequest = child.frames.find((frame) => frame.type === 'switch_session')!;
+    expect(switchRequest.sessionPath).toBe(persistedLink.sessionFile);
+    child.emitFrame({
+      type: 'response',
+      id: switchRequest.id,
+      command: 'switch_session',
+      success: true,
+      data: { cancelled: false },
+    });
+
+    await waitFor(() => child.frames.filter((frame) => frame.type === 'get_state').length === 2);
+    const restoredState = child.frames.filter((frame) => frame.type === 'get_state').at(-1)!;
+    child.emitFrame({
+      type: 'response',
+      id: restoredState.id,
+      command: 'get_state',
+      success: true,
+      data: sessionState('persisted-session', {
+        sessionFile: persistedLink.sessionFile,
+        sessionName: 'Restored work',
+        messageCount: 8,
+      }),
+    });
+    await ready;
+
+    expect(sessionIds).toEqual(['persisted-session']);
+    expect(backend.getOmpSessionLink()).toMatchObject({
+      sessionId: 'persisted-session',
+      sessionFile: persistedLink.sessionFile,
+      sessionName: 'Restored work',
+      messageCount: 8,
+    });
+    expect(links.at(-1)?.lastMismatch).toBeUndefined();
+    backend.destroy();
+  });
+
+  it('does not switch sessions when startup already matches the persisted file', async () => {
+    const sessionFile = 'C:\\sessions\\already-restored.jsonl';
+    const { backend, children } = createHarness({
+      sessionLink: {
+        provider: 'omp',
+        sessionId: 'already-restored',
+        sessionFile,
+        lastSyncedAt: 1,
+      },
+    });
+    const ready = (backend as any).ensureSubprocess() as Promise<void>;
+    const child = children[0]!;
+
+    await respondReady(child, 'already-restored', { sessionFile, messageCount: 3 });
+    await ready;
+
+    expect(child.frames.filter((frame) => frame.type === 'switch_session')).toHaveLength(0);
+    expect(backend.getOmpSessionLink()).toMatchObject({
+      sessionId: 'already-restored',
+      sessionFile,
+      messageCount: 3,
+    });
+    backend.destroy();
+  });
+
+  it('refreshes the OMP session link after branching', async () => {
+    const links: OmpSessionLink[] = [];
+    const { backend, children } = createHarness({
+      onSessionLink: (link) => links.push(link),
+    });
+    const child = await startReady(backend, children);
+    const branchPromise = backend.branchOmpSession('entry-42');
+
+    await waitFor(() => child.frames.some((frame) => frame.type === 'branch'));
+    const branchRequest = child.frames.find((frame) => frame.type === 'branch')!;
+    expect(branchRequest.entryId).toBe('entry-42');
+    child.emitFrame({
+      type: 'response',
+      id: branchRequest.id,
+      command: 'branch',
+      success: true,
+      data: { text: 'branched', cancelled: false },
+    });
+
+    await waitFor(() => child.frames.filter((frame) => frame.type === 'get_state').length === 2);
+    const stateRequest = child.frames.filter((frame) => frame.type === 'get_state').at(-1)!;
+    child.emitFrame({
+      type: 'response',
+      id: stateRequest.id,
+      command: 'get_state',
+      success: true,
+      data: sessionState('branched-session', {
+        sessionFile: 'C:\\sessions\\branched.jsonl',
+        messageCount: 4,
+      }),
+    });
+
+    await expect(branchPromise).resolves.toEqual({ text: 'branched', cancelled: false });
+    expect(links.at(-1)).toMatchObject({
+      sessionId: 'branched-session',
+      sessionFile: 'C:\\sessions\\branched.jsonl',
+      messageCount: 4,
+    });
+    backend.destroy();
+  });
+
+  it('publishes a persisted mismatch when OMP cannot restore its session file', async () => {
+    const links: OmpSessionLink[] = [];
+    const persistedLink: OmpSessionLink = {
+      provider: 'omp',
+      sessionId: 'missing-session',
+      sessionFile: 'C:\\sessions\\missing.jsonl',
+      lastSyncedAt: 1,
+    };
+    const { backend, children } = createHarness({
+      sessionLink: persistedLink,
+      onSessionLink: (link) => links.push(link),
+    });
+    const ready = (backend as any).ensureSubprocess() as Promise<void>;
+    const child = children[0]!;
+
+    child.emitFrame({ type: 'ready' });
+    await waitFor(() => child.frames.some((frame) => frame.type === 'get_state'));
+    const initialState = child.frames.find((frame) => frame.type === 'get_state')!;
+    child.emitFrame({
+      type: 'response',
+      id: initialState.id,
+      command: 'get_state',
+      success: true,
+      data: sessionState('fresh-session', {
+        sessionFile: 'C:\\sessions\\fresh.jsonl',
+      }),
+    });
+
+    await waitFor(() => child.frames.some((frame) => frame.type === 'switch_session'));
+    const switchRequest = child.frames.find((frame) => frame.type === 'switch_session')!;
+    child.emitFrame({
+      type: 'response',
+      id: switchRequest.id,
+      command: 'switch_session',
+      success: false,
+      error: 'Session file not found',
+    });
+
+    await expect(ready).rejects.toThrow('Failed to restore OMP session');
+    expect(links.at(-1)?.lastMismatch).toMatchObject({
+      reason: 'missing-session-file',
+    });
+    expect(links.at(-1)?.lastMismatch?.detail).toContain('Session file not found');
+    expect(child.killed).toBe(true);
     backend.destroy();
   });
 

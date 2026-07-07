@@ -47,6 +47,36 @@ export interface OmpRpcAvailableCommandsResponseData {
   commands: OmpRpcAvailableSlashCommand[];
 }
 
+export interface OmpRpcCancellationResult {
+  cancelled: boolean;
+}
+
+export interface OmpRpcBranchMessage {
+  entryId: string;
+  text: string;
+}
+
+export interface OmpRpcBranchMessagesResponseData {
+  messages: OmpRpcBranchMessage[];
+}
+
+export interface OmpRpcBranchResult {
+  text: string;
+  cancelled: boolean;
+}
+
+export interface OmpRpcExportHtmlResponseData {
+  path: string;
+}
+
+export interface OmpRpcHandoffResult {
+  savedPath?: string;
+}
+
+export interface OmpRpcMessagesResponseData {
+  messages: unknown[];
+}
+
 export interface OmpRpcAvailableCommandsUpdateFrame {
   type: 'available_commands_update';
   commands: OmpRpcAvailableSlashCommand[];
@@ -78,8 +108,16 @@ export type OmpRpcCommand =
   | { type: 'follow_up'; message: string; images?: OmpRpcImageContent[] }
   | { type: 'abort_and_prompt'; message: string; images?: OmpRpcImageContent[] }
   | { type: 'abort' }
+  | { type: 'new_session'; parentSession?: string }
   | { type: 'get_state' }
   | { type: 'get_available_commands' }
+  | { type: 'get_messages' }
+  | { type: 'get_branch_messages' }
+  | { type: 'switch_session'; sessionPath: string }
+  | { type: 'branch'; entryId: string }
+  | { type: 'set_session_name'; name: string }
+  | { type: 'handoff'; customInstructions?: string }
+  | { type: 'export_html'; outputPath?: string }
   | { type: 'set_model'; provider: string; modelId: string }
   | { type: 'set_thinking_level'; level: OmpThinkingLevel }
   | { type: 'set_steering_mode'; mode: OmpQueueMode }
@@ -237,6 +275,59 @@ export function parseOmpAvailableCommandsResponseData(value: unknown): OmpRpcAva
       .map(parseOmpAvailableSlashCommand)
       .filter((command): command is OmpRpcAvailableSlashCommand => command !== null),
   };
+}
+
+export function parseOmpCancellationResult(value: unknown): OmpRpcCancellationResult | null {
+  const raw = asObject(value);
+  if (!raw || typeof raw.cancelled !== 'boolean') return null;
+  return { cancelled: raw.cancelled };
+}
+
+export function parseOmpBranchMessagesResponseData(value: unknown): OmpRpcBranchMessagesResponseData | null {
+  const raw = asObject(value);
+  if (!raw || !Array.isArray(raw.messages)) return null;
+  const messages = raw.messages
+    .map((item): OmpRpcBranchMessage | null => {
+      const message = asObject(item);
+      if (!message || !isString(message.entryId) || !isString(message.text)) return null;
+      return {
+        entryId: message.entryId,
+        text: message.text,
+      };
+    })
+    .filter((message): message is OmpRpcBranchMessage => message !== null);
+  if (messages.length !== raw.messages.length) return null;
+  return { messages };
+}
+
+export function parseOmpBranchResult(value: unknown): OmpRpcBranchResult | null {
+  const raw = asObject(value);
+  if (!raw || typeof raw.cancelled !== 'boolean' || !isString(raw.text)) return null;
+  return {
+    text: raw.text,
+    cancelled: raw.cancelled,
+  };
+}
+
+export function parseOmpExportHtmlResponseData(value: unknown): OmpRpcExportHtmlResponseData | null {
+  const raw = asObject(value);
+  if (!raw || !isString(raw.path) || raw.path.trim().length === 0) return null;
+  return { path: raw.path };
+}
+
+export function parseOmpHandoffResult(value: unknown): OmpRpcHandoffResult | null {
+  if (value === null || value === undefined) return null;
+  const raw = asObject(value);
+  if (!raw || (raw.savedPath !== undefined && !isString(raw.savedPath))) return null;
+  return {
+    savedPath: raw.savedPath as string | undefined,
+  };
+}
+
+export function parseOmpMessagesResponseData(value: unknown): OmpRpcMessagesResponseData | null {
+  const raw = asObject(value);
+  if (!raw || !Array.isArray(raw.messages)) return null;
+  return { messages: raw.messages };
 }
 
 export function parseOmpAvailableCommandsUpdate(value: unknown): OmpRpcAvailableCommandsUpdateFrame | null {

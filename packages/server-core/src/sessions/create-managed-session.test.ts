@@ -26,4 +26,25 @@ describe('createManagedSession', () => {
 
     expect(managed.thinkingLevel).toBeUndefined()
   })
+
+  it('hydrates the persisted OMP session link', () => {
+    const managed = createManagedSession({
+      id: 'session_omp',
+      ompSessionLink: {
+        provider: 'omp',
+        sessionId: 'omp-session-1',
+        sessionFile: 'C:\\sessions\\omp-session-1.jsonl',
+        messageCount: 6,
+        lastSyncedAt: 123,
+      },
+    }, workspace as any)
+
+    expect(managed.ompSessionLink).toEqual({
+      provider: 'omp',
+      sessionId: 'omp-session-1',
+      sessionFile: 'C:\\sessions\\omp-session-1.jsonl',
+      messageCount: 6,
+      lastSyncedAt: 123,
+    })
+  })
 })

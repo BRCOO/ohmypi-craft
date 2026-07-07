@@ -17,6 +17,13 @@ export type {
   OmpRpcAvailableSlashCommand,
   OmpRpcAvailableSlashCommandSource,
   OmpRpcAvailableSlashSubcommand,
+  OmpRpcBranchMessage,
+  OmpRpcBranchMessagesResponseData,
+  OmpRpcBranchResult,
+  OmpRpcCancellationResult,
+  OmpRpcExportHtmlResponseData,
+  OmpRpcHandoffResult,
+  OmpRpcMessagesResponseData,
   OmpRpcResponseFrame,
 } from './omp-rpc-protocol.ts';
 export type { OmpRpcDiagnosticsSnapshot } from './omp-rpc-diagnostics.ts';

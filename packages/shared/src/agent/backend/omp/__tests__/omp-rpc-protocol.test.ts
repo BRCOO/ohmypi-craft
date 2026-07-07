@@ -6,6 +6,12 @@ import {
   parseOmpAvailableCommandsResponseData,
   parseOmpAvailableCommandsUpdate,
   parseOmpAvailableSlashCommand,
+  parseOmpBranchMessagesResponseData,
+  parseOmpBranchResult,
+  parseOmpCancellationResult,
+  parseOmpExportHtmlResponseData,
+  parseOmpHandoffResult,
+  parseOmpMessagesResponseData,
   parseOmpPromptResponseData,
   parseOmpPromptResult,
   parseOmpQueueControlState,
@@ -158,5 +164,44 @@ describe('OMP RPC protocol parsers', () => {
       queuedMessageCount: 2,
     });
     expect(parseOmpQueueControlState({ steeringMode: 'bad' })).toBeNull();
+  });
+
+  it('parses session command responses', () => {
+    expect(parseOmpCancellationResult({ cancelled: false })).toEqual({ cancelled: false });
+    expect(parseOmpCancellationResult({ cancelled: 'no' })).toBeNull();
+
+    expect(parseOmpBranchMessagesResponseData({
+      messages: [
+        { entryId: 'entry-1', text: 'First prompt' },
+      ],
+    })).toEqual({
+      messages: [{ entryId: 'entry-1', text: 'First prompt' }],
+    });
+    expect(parseOmpBranchMessagesResponseData({
+      messages: [
+        { entryId: 'entry-1', text: 'First prompt' },
+        { entryId: 2, text: 'bad' },
+      ],
+    })).toBeNull();
+
+    expect(parseOmpBranchResult({ text: 'Selected prompt', cancelled: false })).toEqual({
+      text: 'Selected prompt',
+      cancelled: false,
+    });
+    expect(parseOmpBranchResult({ selectedText: 'wrong shape', cancelled: false })).toBeNull();
+
+    expect(parseOmpExportHtmlResponseData({ path: 'D:/tmp/session.html' })).toEqual({
+      path: 'D:/tmp/session.html',
+    });
+    expect(parseOmpExportHtmlResponseData({ path: '' })).toBeNull();
+
+    expect(parseOmpHandoffResult({ savedPath: 'D:/tmp/handoff.md' })).toEqual({
+      savedPath: 'D:/tmp/handoff.md',
+    });
+    expect(parseOmpHandoffResult(null)).toBeNull();
+
+    const messages = [{ role: 'user', content: 'hello' }];
+    expect(parseOmpMessagesResponseData({ messages })).toEqual({ messages });
+    expect(parseOmpMessagesResponseData({ messages: 'nope' })).toBeNull();
   });
 });

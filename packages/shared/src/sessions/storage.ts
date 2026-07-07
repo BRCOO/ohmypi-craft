@@ -44,7 +44,7 @@ import { readSessionHeader, readSessionJsonl } from './jsonl.ts';
 import { sessionPersistenceQueue } from './persistence-queue.ts';
 
 // Re-export types for convenience
-export type { SessionConfig } from './types.ts';
+export type { OmpSessionLink, OmpSessionMismatch, OmpSessionMismatchReason, SessionConfig } from './types.ts';
 
 // ============================================================
 // Directory Utilities

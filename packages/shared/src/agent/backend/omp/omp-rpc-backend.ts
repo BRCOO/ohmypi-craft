@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import readline from 'node:readline';
 
 import type { AgentEvent, ExtensionUiResponse } from '@craft-agent/core/types';
+import type { OmpSessionLink, OmpSessionMismatchReason } from '../../../sessions/types.ts';
 
 import { BaseAgent } from '../../base-agent.ts';
 import type { LLMQueryRequest, LLMQueryResult } from '../../llm-tool.ts';
@@ -25,11 +26,22 @@ import {
   craftThinkingLevelToOmp,
   ompThinkingLevelToCraft,
   parseOmpAvailableCommandsResponseData,
+  parseOmpBranchMessagesResponseData,
+  parseOmpBranchResult,
+  parseOmpCancellationResult,
+  parseOmpExportHtmlResponseData,
+  parseOmpHandoffResult,
+  parseOmpMessagesResponseData,
   parseOmpPromptResponseData,
   parseOmpSessionState,
   type OmpRpcAvailableSlashCommand,
+  type OmpRpcBranchMessage,
+  type OmpRpcBranchResult,
+  type OmpRpcCancellationResult,
   type OmpRpcCommand,
+  type OmpRpcExportHtmlResponseData,
   type OmpRpcExtensionUiResponse,
+  type OmpRpcHandoffResult,
   type OmpRpcSessionState,
   type OmpThinkingLevel,
 } from './omp-rpc-protocol.ts';
@@ -140,6 +152,7 @@ export class OmpRpcBackend extends BaseAgent {
   private remoteThinkingLevel: OmpThinkingLevel | null = null;
   private thinkingLevelUpdate: Promise<void> | null = null;
   private activeTurn: ActiveTurn | null = null;
+  private sessionLink: OmpSessionLink | null = null;
   private readonly spawnProcess: typeof spawn;
   private readonly readyTimeoutMs: number;
   private readonly requestTimeoutMs: number;
@@ -149,6 +162,7 @@ export class OmpRpcBackend extends BaseAgent {
   constructor(config: BackendConfig, options: OmpRpcBackendOptions = {}) {
     super(config, DEFAULT_OMP_MODEL);
     this._supportsBranching = false;
+    this.sessionLink = config.session?.ompSessionLink ?? null;
     this.spawnProcess = options.spawnProcess ?? spawn;
     this.readyTimeoutMs = options.readyTimeoutMs ?? 15_000;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
@@ -431,6 +445,123 @@ export class OmpRpcBackend extends BaseAgent {
       queue: this.currentQueueControlState(),
       updatedAt: this.controlStateUpdatedAt,
     };
+  }
+
+  getOmpSessionLink(): OmpSessionLink | null {
+    return this.sessionLink ? this.cloneSessionLink(this.sessionLink) : null;
+  }
+
+  async refreshOmpSessionLink(): Promise<OmpSessionLink> {
+    await this.ensureSubprocess();
+    const data = await this.send({ type: 'get_state' });
+    const state = parseOmpSessionState(data);
+    if (!state) throw new Error('OMP get_state returned an invalid session state');
+    this.applySessionState(state);
+    return this.updateSessionLinkFromState(state);
+  }
+
+  async restoreOmpSession(link: OmpSessionLink): Promise<OmpRpcCancellationResult> {
+    this.sessionLink = this.cloneSessionLink(link);
+    await this.ensureSubprocess();
+    if (!link.sessionFile) {
+      throw new Error('Cannot restore OMP session without a session file');
+    }
+
+    const current = this.sessionState;
+    if (current?.sessionFile === link.sessionFile) {
+      this.updateSessionLinkFromState(current);
+      return { cancelled: false };
+    }
+
+    const result = await this.switchSessionFile(link.sessionFile);
+    if (result.cancelled) {
+      this.publishSessionMismatch(link, 'restore-cancelled', 'OMP cancelled session restore');
+      return result;
+    }
+
+    await this.refreshOmpSessionLink();
+    return result;
+  }
+
+  async newOmpSession(parentSession?: string): Promise<OmpRpcCancellationResult> {
+    await this.ensureSubprocess();
+    const data = await this.send({ type: 'new_session', parentSession });
+    const parsed = parseOmpCancellationResult(data);
+    if (!parsed) throw new Error('OMP new_session returned an invalid result');
+    if (!parsed.cancelled) await this.refreshOmpSessionLink();
+    return parsed;
+  }
+
+  async switchOmpSession(sessionPath: string): Promise<OmpRpcCancellationResult> {
+    await this.ensureSubprocess();
+    const result = await this.switchSessionFile(sessionPath);
+    if (!result.cancelled) await this.refreshOmpSessionLink();
+    return result;
+  }
+
+  async getOmpMessages(): Promise<unknown[]> {
+    await this.ensureSubprocess();
+    const data = await this.send({ type: 'get_messages' });
+    const parsed = parseOmpMessagesResponseData(data);
+    if (!parsed) {
+      if (this.sessionLink) {
+        this.publishSessionMismatch(
+          this.sessionLink,
+          'invalid-response',
+          'OMP get_messages returned an invalid message list',
+        );
+      }
+      throw new Error('OMP get_messages returned an invalid message list');
+    }
+    return parsed.messages;
+  }
+
+  async getOmpBranchMessages(): Promise<OmpRpcBranchMessage[]> {
+    await this.ensureSubprocess();
+    const data = await this.send({ type: 'get_branch_messages' });
+    const parsed = parseOmpBranchMessagesResponseData(data);
+    if (!parsed) throw new Error('OMP get_branch_messages returned an invalid message list');
+    return parsed.messages;
+  }
+
+  async branchOmpSession(entryId: string): Promise<OmpRpcBranchResult> {
+    await this.ensureSubprocess();
+    const data = await this.send({ type: 'branch', entryId });
+    const parsed = parseOmpBranchResult(data);
+    if (!parsed) throw new Error('OMP branch returned an invalid result');
+    if (!parsed.cancelled) await this.refreshOmpSessionLink();
+    return parsed;
+  }
+
+  async setOmpSessionName(name: string): Promise<void> {
+    await this.ensureSubprocess();
+    await this.send({ type: 'set_session_name', name });
+    if (this.sessionLink) {
+      this.sessionLink = {
+        ...this.sessionLink,
+        sessionName: name,
+        lastSyncedAt: Date.now(),
+      };
+      this.config.onOmpSessionLinkUpdate?.(this.cloneSessionLink(this.sessionLink));
+    }
+  }
+
+  async handoffOmpSession(customInstructions?: string): Promise<OmpRpcHandoffResult | null> {
+    await this.ensureSubprocess();
+    const data = await this.send({ type: 'handoff', customInstructions });
+    const parsed = parseOmpHandoffResult(data);
+    if (data !== null && data !== undefined && !parsed) {
+      throw new Error('OMP handoff returned an invalid result');
+    }
+    return parsed;
+  }
+
+  async exportOmpSessionHtml(outputPath?: string): Promise<OmpRpcExportHtmlResponseData> {
+    await this.ensureSubprocess();
+    const data = await this.send({ type: 'export_html', outputPath });
+    const parsed = parseOmpExportHtmlResponseData(data);
+    if (!parsed) throw new Error('OMP export_html returned an invalid result');
+    return parsed;
   }
 
   async steer(message: string, attachments?: FileAttachment[]): Promise<boolean> {
@@ -816,12 +947,16 @@ export class OmpRpcBackend extends BaseAgent {
 
     this.send({ type: 'get_state' }).then(async (data) => {
       if (generation !== this.processGeneration || child !== this.child) return;
-      const state = parseOmpSessionState(data);
+      let state = parseOmpSessionState(data);
       if (!state) {
         throw new Error('OMP get_state returned an invalid session state');
       }
 
+      state = await this.restorePersistedSessionIfNeeded(state, generation, child);
+      if (generation !== this.processGeneration || child !== this.child) return;
+
       this.applySessionState(state);
+      this.updateSessionLinkFromState(state);
       this.remoteThinkingLevel = ompThinkingLevelToCraft(state.thinkingLevel)
         ? state.thinkingLevel as OmpThinkingLevel
         : null;
@@ -842,6 +977,91 @@ export class OmpRpcBackend extends BaseAgent {
         child,
       );
     });
+  }
+
+  private async restorePersistedSessionIfNeeded(
+    startupState: OmpRpcSessionState,
+    generation: number,
+    child: ChildProcessWithoutNullStreams,
+  ): Promise<OmpRpcSessionState> {
+    const link = this.sessionLink ?? this.config.session?.ompSessionLink ?? null;
+    if (!link?.sessionFile) return startupState;
+    if (startupState.sessionFile === link.sessionFile) return startupState;
+
+    try {
+      const result = await this.switchSessionFile(link.sessionFile);
+      if (generation !== this.processGeneration || child !== this.child) return startupState;
+      if (result.cancelled) {
+        this.publishSessionMismatch(link, 'restore-cancelled', 'OMP cancelled session restore');
+        throw new Error(`OMP restore was cancelled for ${link.sessionFile}`);
+      }
+
+      const data = await this.send({ type: 'get_state' });
+      if (generation !== this.processGeneration || child !== this.child) return startupState;
+      const restored = parseOmpSessionState(data);
+      if (!restored) {
+        this.publishSessionMismatch(link, 'invalid-response', 'OMP get_state after restore returned an invalid session state');
+        throw new Error('OMP get_state after restore returned an invalid session state');
+      }
+      this.debug(`Restored OMP session file: ${link.sessionFile}`);
+      return restored;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      const existingReason = this.sessionLink?.lastMismatch?.reason;
+      if (existingReason !== 'restore-cancelled' && existingReason !== 'invalid-response') {
+        const reason: OmpSessionMismatchReason = /not found|no such file|enoent/i.test(detail)
+          ? 'missing-session-file'
+          : 'restore-failed';
+        this.publishSessionMismatch(link, reason, detail);
+      }
+      throw new Error(`Failed to restore OMP session ${link.sessionFile}: ${detail}`);
+    }
+  }
+
+  private async switchSessionFile(sessionPath: string): Promise<OmpRpcCancellationResult> {
+    const data = await this.send({ type: 'switch_session', sessionPath });
+    const parsed = parseOmpCancellationResult(data);
+    if (!parsed) throw new Error('OMP switch_session returned an invalid result');
+    return parsed;
+  }
+
+  private updateSessionLinkFromState(state: OmpRpcSessionState): OmpSessionLink {
+    const link: OmpSessionLink = {
+      provider: 'omp',
+      sessionId: state.sessionId,
+      sessionFile: state.sessionFile,
+      sessionName: state.sessionName,
+      messageCount: state.messageCount,
+      lastSyncedAt: Date.now(),
+      lastCheckedAt: this.sessionLink?.lastCheckedAt,
+    };
+    this.sessionLink = link;
+    this.config.onOmpSessionLinkUpdate?.(this.cloneSessionLink(link));
+    return this.cloneSessionLink(link);
+  }
+
+  private publishSessionMismatch(
+    baseLink: OmpSessionLink,
+    reason: OmpSessionMismatchReason,
+    detail: string,
+  ): void {
+    const link: OmpSessionLink = {
+      ...this.cloneSessionLink(baseLink),
+      lastMismatch: {
+        reason,
+        detail,
+        detectedAt: Date.now(),
+      },
+    };
+    this.sessionLink = link;
+    this.config.onOmpSessionLinkUpdate?.(this.cloneSessionLink(link));
+  }
+
+  private cloneSessionLink(link: OmpSessionLink): OmpSessionLink {
+    return {
+      ...link,
+      lastMismatch: link.lastMismatch ? { ...link.lastMismatch } : undefined,
+    };
   }
 
   private finishTurn(expectedRequestId?: string): boolean {

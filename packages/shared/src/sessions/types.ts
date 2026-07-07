@@ -53,6 +53,8 @@ export const SESSION_PERSISTENT_FIELDS = [
   'transferredSessionSummaryApplied',
   // Automation origin
   'triggeredBy',
+  // Provider-native session continuity
+  'ompSessionLink',
 ] as const;
 
 export type SessionPersistentField = typeof SESSION_PERSISTENT_FIELDS[number];
@@ -85,6 +87,32 @@ export interface SessionTokenUsage {
   cacheCreationTokens?: number;
   /** Model's context window size in tokens (from SDK modelUsage) */
   contextWindow?: number;
+}
+
+export type OmpSessionMismatchReason =
+  | 'missing-session-file'
+  | 'message-count'
+  | 'last-message-role'
+  | 'last-message-content'
+  | 'invalid-response'
+  | 'restore-failed'
+  | 'restore-cancelled';
+
+export interface OmpSessionMismatch {
+  reason: OmpSessionMismatchReason;
+  detail: string;
+  detectedAt: number;
+}
+
+export interface OmpSessionLink {
+  provider: 'omp';
+  sessionId: string;
+  sessionFile?: string;
+  sessionName?: string;
+  messageCount?: number;
+  lastSyncedAt: number;
+  lastCheckedAt?: number;
+  lastMismatch?: OmpSessionMismatch;
 }
 
 /**
@@ -197,6 +225,8 @@ export interface SessionConfig {
   transferredSessionSummaryApplied?: boolean;
   /** Metadata for sessions created by automations */
   triggeredBy?: { automationName?: string; event?: string; timestamp?: number };
+  /** OMP-native session identity used to restore the provider transcript. */
+  ompSessionLink?: OmpSessionLink;
 }
 
 /**
@@ -288,6 +318,8 @@ export interface SessionHeader {
   transferredSessionSummaryApplied?: boolean;
   /** Metadata for sessions created by automations */
   triggeredBy?: { automationName?: string; event?: string; timestamp?: number };
+  /** OMP-native session identity used to restore the provider transcript. */
+  ompSessionLink?: OmpSessionLink;
   // Pre-computed fields for fast list loading
   /** Number of messages in session */
   messageCount: number;
@@ -366,4 +398,6 @@ export interface SessionMetadata {
   archivedAt?: number;
   /** Message ID that this session was branched from (hard context cutoff marker). */
   branchFromMessageId?: string;
+  /** OMP-native session identity used to restore the provider transcript. */
+  ompSessionLink?: OmpSessionLink;
 }

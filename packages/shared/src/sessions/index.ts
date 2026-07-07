@@ -18,6 +18,9 @@ export type {
   SessionMetadata,
   SessionHeader,
   SessionPersistentField,
+  OmpSessionLink,
+  OmpSessionMismatch,
+  OmpSessionMismatchReason,
 } from './types.ts';
 
 // Field constants

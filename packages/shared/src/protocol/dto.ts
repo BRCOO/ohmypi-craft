@@ -20,6 +20,7 @@ import type {
 import type { PermissionMode } from '../agent/mode-types'
 import type { ThinkingLevel } from '../agent/thinking-levels'
 import type { CustomEndpointConfig } from '../config/llm-connections'
+import type { OmpSessionLink } from '../sessions/types'
 import type {
   AuthRequest as SharedAuthRequest,
   CredentialInputMode as SharedCredentialInputMode,
@@ -152,6 +153,8 @@ export interface Session {
   supportsBranching?: boolean
   /** Runtime-only OMP command/queue state. Not persisted in session JSONL. */
   ompControlState?: OmpControlStateDto
+  /** Persisted OMP-native session identity for provider transcript continuity. */
+  ompSessionLink?: OmpSessionLink
 }
 
 export interface CreateSessionOptions {

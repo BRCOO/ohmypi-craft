@@ -74,6 +74,8 @@ import {
   type SessionMetadata,
   type SessionStatus,
   type SessionHeader,
+  type OmpSessionLink,
+  type OmpSessionMismatch,
   pickSessionFields,
 } from '@craft-agent/shared/sessions'
 import { loadWorkspaceSources, loadAllSources, getSourcesBySlugs, isSourceUsable, type LoadedSource, type McpServerConfig, getSourcesNeedingAuth, getSourceCredentialManager, getSourceServerBuilder, type SourceWithCredential, isApiOAuthProvider, hasRenewEndpoint, SERVER_BUILD_ERRORS, TokenRefreshManager, createTokenGetter } from '@craft-agent/shared/sources'
@@ -773,6 +775,12 @@ interface OmpControllableAgent extends AgentBackend {
   setInterruptMode(mode: OmpInterruptMode): Promise<void>
 }
 
+interface OmpSessionAgent extends AgentBackend {
+  getOmpSessionLink(): OmpSessionLink | null
+  getOmpMessages(): Promise<unknown[]>
+  setOmpSessionName(name: string): Promise<void>
+}
+
 function isOmpControllableAgent(agent: AgentInstance | null | undefined): agent is OmpControllableAgent {
   const candidate = agent as Partial<OmpControllableAgent> | null | undefined
   return !!candidate
@@ -783,6 +791,51 @@ function isOmpControllableAgent(agent: AgentInstance | null | undefined): agent 
     && typeof candidate.setSteeringMode === 'function'
     && typeof candidate.setFollowUpMode === 'function'
     && typeof candidate.setInterruptMode === 'function'
+}
+
+function isOmpSessionAgent(agent: AgentInstance | null | undefined): agent is OmpSessionAgent {
+  const candidate = agent as Partial<OmpSessionAgent> | null | undefined
+  return !!candidate
+    && typeof candidate.getOmpSessionLink === 'function'
+    && typeof candidate.getOmpMessages === 'function'
+    && typeof candidate.setOmpSessionName === 'function'
+}
+
+interface ComparableConversationMessage {
+  role: 'user' | 'assistant'
+  text: string
+}
+
+function normalizeConversationText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function extractOmpConversation(messages: unknown[]): ComparableConversationMessage[] {
+  const result: ComparableConversationMessage[] = []
+  for (const value of messages) {
+    if (!value || typeof value !== 'object') continue
+    const message = value as Record<string, unknown>
+    if (message.role !== 'user' && message.role !== 'assistant') continue
+
+    let text = ''
+    if (typeof message.content === 'string') {
+      text = message.content
+    } else if (Array.isArray(message.content)) {
+      text = message.content
+        .filter((block): block is Record<string, unknown> => !!block && typeof block === 'object')
+        .filter(block => block.type === 'text' && typeof block.text === 'string')
+        .map(block => block.text as string)
+        .join('\n')
+    }
+    result.push({ role: message.role, text: normalizeConversationText(text) })
+  }
+  return result
+}
+
+function conversationTextsMatch(left: string, right: string): boolean {
+  if (left === right) return true
+  if (!left || !right) return true
+  return left.includes(right) || right.includes(left)
 }
 
 function toOmpControlStateDto(state: OmpControlState): OmpControlStateDto {
@@ -834,6 +887,8 @@ interface ManagedSession {
   poolServer?: McpPoolServer
   // SDK session ID for conversation continuity
   sdkSessionId?: string
+  // OMP-native session identity for provider transcript continuity
+  ompSessionLink?: OmpSessionLink
   // Token usage for display
   tokenUsage?: {
     inputTokens: number
@@ -2029,6 +2084,7 @@ export class SessionManager implements ISessionManager {
       if (managed.sharedId === undefined) managed.sharedId = stored.sharedId
       if (managed.transferredSessionSummary === undefined) managed.transferredSessionSummary = stored.transferredSessionSummary
       if (managed.transferredSessionSummaryApplied === undefined) managed.transferredSessionSummaryApplied = stored.transferredSessionSummaryApplied
+      if (managed.ompSessionLink === undefined) managed.ompSessionLink = stored.ompSessionLink
 
       // Queue recovery: find orphaned queued messages from crash/restart and re-queue them.
       const orphanedQueued = managed.messages.filter(m =>
@@ -2508,6 +2564,7 @@ export class SessionManager implements ISessionManager {
       // Sync transferred session summary state from disk
       managed.transferredSessionSummary = storedSession.transferredSessionSummary
       managed.transferredSessionSummaryApplied = storedSession.transferredSessionSummaryApplied
+      managed.ompSessionLink = storedSession.ompSessionLink
       sessionLog.debug(`Lazy-loaded ${managed.messages.length} messages for session ${managed.id}`)
 
       // Queue recovery: find orphaned queued messages from crash/restart and re-queue them
@@ -3311,6 +3368,7 @@ export class SessionManager implements ISessionManager {
         llmConnection: managed.llmConnection,
         permissionMode: managed.permissionMode,
         previousPermissionMode: managed.previousPermissionMode,
+        ompSessionLink: managed.ompSessionLink,
       }
 
       const onSdkSessionIdUpdate = (sdkSessionId: string) => {
@@ -3324,6 +3382,22 @@ export class SessionManager implements ISessionManager {
         } else {
           sessionLog.info(`SDK session ID captured for ${managed.id}: ${sdkSessionId}`)
         }
+        this.persistSession(managed)
+        sessionPersistenceQueue.flush(managed.id)
+      }
+
+      const onOmpSessionLinkUpdate = (link: OmpSessionLink) => {
+        managed.ompSessionLink = {
+          ...link,
+          lastMismatch: link.lastMismatch ? { ...link.lastMismatch } : undefined,
+        }
+        managed.sdkSessionId = link.sessionId
+        sessionLog.info('OMP session link updated', {
+          sessionId: managed.id,
+          ompSessionId: link.sessionId,
+          ompSessionFile: link.sessionFile,
+          hasMismatch: !!link.lastMismatch,
+        })
         this.persistSession(managed)
         sessionPersistenceQueue.flush(managed.id)
       }
@@ -3419,6 +3493,7 @@ export class SessionManager implements ISessionManager {
         thinkingLevel: managed.thinkingLevel,
         session: sessionConfig,
         onSdkSessionIdUpdate,
+        onOmpSessionLinkUpdate,
         onSdkSessionIdCleared,
         onBranchForkInvalidated,
         getRecoveryMessages,
@@ -4398,6 +4473,7 @@ export class SessionManager implements ISessionManager {
       managed.backendRestartSignature = restartSignature
       end()
     }
+    await this.reconcileOmpSessionBeforePrompt(managed)
     return managed.agent
   }
 
@@ -4991,6 +5067,13 @@ export class SessionManager implements ISessionManager {
     const managed = this.sessions.get(sessionId)
     if (managed) {
       managed.name = name
+      if (isOmpSessionAgent(managed.agent)) {
+        try {
+          await managed.agent.setOmpSessionName(name)
+        } catch (error) {
+          sessionLog.warn(`Failed to synchronize OMP session name for ${sessionId}:`, error)
+        }
+      }
       this.persistSession(managed)
       // Notify renderer of the name change
       this.sendEvent({ type: 'title_generated', sessionId, title: name }, managed.workspace.id)
@@ -6662,6 +6745,104 @@ export class SessionManager implements ISessionManager {
     }
   }
 
+  private async reconcileOmpSessionBeforePrompt(managed: ManagedSession): Promise<void> {
+    const agent = managed.agent
+    if (!isOmpSessionAgent(agent)) return
+
+    const liveLink = agent.getOmpSessionLink()
+    if (managed.name && liveLink?.sessionName !== managed.name) {
+      await agent.setOmpSessionName(managed.name)
+    }
+
+    let mismatch: OmpSessionMismatch | undefined
+    let ompMessages: unknown[]
+    try {
+      ompMessages = await agent.getOmpMessages()
+    } catch (error) {
+      mismatch = agent.getOmpSessionLink()?.lastMismatch ?? {
+        reason: 'invalid-response',
+        detail: `OMP get_messages failed: ${error instanceof Error ? error.message : String(error)}`,
+        detectedAt: Date.now(),
+      }
+      ompMessages = []
+    }
+
+    if (!mismatch) {
+      const ompConversation = extractOmpConversation(ompMessages)
+      const pendingUserMessage = managed.lastSentMessage
+      const craftConversation = managed.messages
+        .filter(message => message.role === 'user' || message.role === 'assistant')
+        .filter(message => !message.isIntermediate && !message.isThinking)
+        .map(message => ({
+          role: message.role as 'user' | 'assistant',
+          text: normalizeConversationText(message.content),
+        }))
+
+      const lastCraft = craftConversation.at(-1)
+      if (
+        pendingUserMessage
+        && lastCraft?.role === 'user'
+        && lastCraft.text === normalizeConversationText(pendingUserMessage)
+      ) {
+        craftConversation.pop()
+      }
+
+      const craftUserCount = craftConversation.filter(message => message.role === 'user').length
+      const ompUserCount = ompConversation.filter(message => message.role === 'user').length
+      const detectedAt = Date.now()
+      if (craftUserCount !== ompUserCount) {
+        mismatch = {
+          reason: 'message-count',
+          detail: `Craft has ${craftUserCount} persisted user messages while OMP has ${ompUserCount}`,
+          detectedAt,
+        }
+      } else {
+        const craftLast = craftConversation.at(-1)
+        const ompLast = ompConversation.at(-1)
+        if (!!craftLast !== !!ompLast) {
+          mismatch = {
+            reason: 'message-count',
+            detail: `Craft has ${craftConversation.length} conversational messages while OMP has ${ompConversation.length}`,
+            detectedAt,
+          }
+        } else if (craftLast && ompLast && craftLast.role !== ompLast.role) {
+          mismatch = {
+            reason: 'last-message-role',
+            detail: `Craft last role is ${craftLast.role} while OMP last role is ${ompLast.role}`,
+            detectedAt,
+          }
+        } else if (craftLast && ompLast && !conversationTextsMatch(craftLast.text, ompLast.text)) {
+          mismatch = {
+            reason: 'last-message-content',
+            detail: 'Craft and OMP last conversational message text do not match',
+            detectedAt,
+          }
+        }
+      }
+    }
+
+    const refreshedLink = agent.getOmpSessionLink() ?? managed.ompSessionLink
+    if (refreshedLink) {
+      managed.ompSessionLink = {
+        ...refreshedLink,
+        lastCheckedAt: Date.now(),
+        lastMismatch: mismatch,
+      }
+      this.persistSession(managed)
+      await this.flushSession(managed.id)
+    }
+
+    if (mismatch) {
+      this.sendEvent({
+        type: 'info',
+        sessionId: managed.id,
+        message: `OMP session continuity check failed: ${mismatch.detail}. Start a new session or restore the original OMP session file before continuing.`,
+        level: 'error',
+      }, managed.workspace.id)
+      throw new Error(`OMP session continuity check failed: ${mismatch.detail}`)
+    }
+  }
+
   /**
    * Respond to a pending backend extension UI request.
    * Returns true if the response was delivered, false if agent/session is gone.
@@ -8112,6 +8293,7 @@ export class SessionManager implements ISessionManager {
       id: sessionId,
       workspaceRootPath,
       sdkSessionId: header.sdkSessionId, // Preserved initially; fork logic below may clear it
+      ompSessionLink: header.ompSessionLink,
       // Always regenerate sdkCwd for the target workspace.
       // The source sdkCwd points to a path on the originating server
       // which doesn't exist here (cross-server transfer).

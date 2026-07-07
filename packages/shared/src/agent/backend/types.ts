@@ -20,7 +20,7 @@ import type { LoadedSource } from '../../sources/types.ts';
 import type { AuthRequest } from '../session-scoped-tools.ts';
 import type { McpClientPool } from '../../mcp/mcp-pool.ts';
 import type { Workspace } from '../../config/storage.ts';
-import type { SessionConfig as Session } from '../../sessions/storage.ts';
+import type { OmpSessionLink, SessionConfig as Session } from '../../sessions/storage.ts';
 import type { SourceManager } from '../core/source-manager.ts';
 
 // Import AbortReason and RecoveryMessage from core module (single source of truth)
@@ -220,6 +220,9 @@ export interface CoreBackendConfig {
 
   /** Callback when SDK session ID is captured/updated */
   onSdkSessionIdUpdate?: (sdkSessionId: string) => void;
+
+  /** Callback when an OMP-native session link is captured/updated. */
+  onOmpSessionLinkUpdate?: (link: OmpSessionLink) => void;
 
   /** Callback when SDK session ID is cleared (e.g., after failed resume) */
   onSdkSessionIdCleared?: () => void;
