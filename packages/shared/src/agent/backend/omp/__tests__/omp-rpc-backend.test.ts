@@ -52,6 +52,17 @@ class FakeChild extends EventEmitter {
             },
           }));
         }
+        if (frame.type === 'set_todos') {
+          queueMicrotask(() => this.emitFrame({
+            type: 'response',
+            id: frame.id,
+            command: 'set_todos',
+            success: true,
+            data: {
+              todoPhases: frame.phases,
+            },
+          }));
+        }
         if (
           frame.type === 'set_steering_mode'
           || frame.type === 'set_follow_up_mode'
@@ -969,6 +980,68 @@ describe('OmpRpcBackend subprocess lifecycle', () => {
     child.emitFrame({ type: 'prompt_result', id: prompt.id, agentInvoked: false });
     const events = await eventsPromise;
     expect(events.filter((event) => event.type === 'complete')).toHaveLength(1);
+    backend.destroy();
+  });
+});
+
+describe('OmpRpcBackend Todo bridge', () => {
+  it('hydrates Todo phases from get_state and writes complete set_todos snapshots', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children);
+    const initial = backend.getOmpTodoState();
+    expect(initial.available).toBe(true);
+    expect(initial.phases).toEqual([]);
+
+    await backend.mutateOmpTodos(initial.revision, {
+      type: 'replace',
+      phases: [
+        {
+          name: 'Desktop',
+          tasks: [
+            { content: 'Show Todo card', status: 'pending' },
+          ],
+        },
+      ],
+    });
+
+    const setTodos = child.frames.findLast((frame) => frame.type === 'set_todos')!;
+    expect(setTodos.phases).toEqual([
+      {
+        name: 'Desktop',
+        tasks: [
+          { content: 'Show Todo card', status: 'pending' },
+        ],
+      },
+    ]);
+    expect(backend.getOmpTodoState().phases).toEqual(setTodos.phases);
+    backend.destroy();
+  });
+
+  it('rejects stale Todo revisions before writing to OMP', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children);
+    const revision = backend.getOmpTodoState().revision;
+
+    await expect(backend.mutateOmpTodos(revision + 1, {
+      type: 'addPhase',
+      name: 'Stale',
+    })).rejects.toThrow('OMP Todo state changed');
+    expect(child.frames.some((frame) => frame.type === 'set_todos')).toBe(false);
+    backend.destroy();
+  });
+
+  it('updates reminder metadata from Todo frames and suppresses unknown-frame logging', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children);
+    child.emitFrame({
+      type: 'todo_reminder',
+      todos: [{ content: 'finish', status: 'pending' }],
+      attempt: 1,
+      maxAttempts: 3,
+    });
+
+    await waitFor(() => backend.getOmpTodoState().reminder?.attempt === 1);
+    expect(backend.getOmpTodoState().reminder?.todos).toEqual([{ content: 'finish', status: 'pending' }]);
     backend.destroy();
   });
 });

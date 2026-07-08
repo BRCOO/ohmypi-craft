@@ -212,6 +212,33 @@ export interface OmpControlState {
   updatedAt: number;
 }
 
+export type OmpTodoStatus = 'pending' | 'in_progress' | 'completed' | 'abandoned';
+
+export interface OmpTodoItem {
+  content: string;
+  status: OmpTodoStatus;
+  details?: string;
+  notes?: string[];
+}
+
+export interface OmpTodoPhase {
+  name: string;
+  tasks: OmpTodoItem[];
+}
+
+export interface OmpRpcSetTodosResponseData {
+  todoPhases: OmpTodoPhase[];
+}
+
+export type OmpTodoEvent =
+  | {
+      type: 'todo_reminder';
+      todos: OmpTodoItem[];
+      attempt: number;
+      maxAttempts: number;
+    }
+  | { type: 'todo_auto_clear' };
+
 export type OmpRpcCommand =
   | {
       type: 'prompt';
@@ -225,6 +252,7 @@ export type OmpRpcCommand =
   | { type: 'abort' }
   | { type: 'new_session'; parentSession?: string }
   | { type: 'get_state' }
+  | { type: 'set_todos'; phases: OmpTodoPhase[] }
   | { type: 'get_available_commands' }
   | { type: 'get_messages' }
   | { type: 'get_branch_messages' }
@@ -283,7 +311,7 @@ export interface OmpRpcSessionState {
   autoCompactionEnabled: boolean;
   messageCount: number;
   queuedMessageCount: number;
-  todoPhases: unknown[];
+  todoPhases: OmpTodoPhase[];
   contextUsage?: OmpContextUsage;
   [key: string]: unknown;
 }
@@ -349,6 +377,13 @@ function isAvailableSlashCommandSource(value: unknown): value is OmpRpcAvailable
     || value === 'file';
 }
 
+function isTodoStatus(value: unknown): value is OmpTodoStatus {
+  return value === 'pending'
+    || value === 'in_progress'
+    || value === 'completed'
+    || value === 'abandoned';
+}
+
 function isCommandName(value: unknown): value is string {
   return isString(value) && value.trim().length > 0 && !/\s/.test(value);
 }
@@ -384,6 +419,52 @@ function parseSubcommands(value: unknown): OmpRpcAvailableSlashSubcommand[] | un
     })
     .filter((item): item is OmpRpcAvailableSlashSubcommand => item !== null);
   return subcommands.length > 0 ? subcommands : undefined;
+}
+
+function parseTodoNotes(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (isString(value)) return [value];
+  if (!Array.isArray(value)) return undefined;
+  const notes = value.filter(isString);
+  return notes.length === value.length ? notes : undefined;
+}
+
+export function parseOmpTodoItem(value: unknown): OmpTodoItem | null {
+  const raw = asObject(value);
+  const notes = parseTodoNotes(raw?.notes);
+  if (
+    !raw
+    || !isString(raw.content)
+    || !isTodoStatus(raw.status)
+    || (raw.details !== undefined && !isString(raw.details))
+    || (raw.notes !== undefined && notes === undefined)
+  ) {
+    return null;
+  }
+  return {
+    content: raw.content,
+    status: raw.status,
+    details: raw.details as string | undefined,
+    notes,
+  };
+}
+
+export function parseOmpTodoPhase(value: unknown): OmpTodoPhase | null {
+  const raw = asObject(value);
+  if (!raw || !isString(raw.name) || !Array.isArray(raw.tasks)) return null;
+  const tasks = raw.tasks.map(parseOmpTodoItem);
+  if (tasks.some(task => task === null)) return null;
+  return {
+    name: raw.name,
+    tasks: tasks as OmpTodoItem[],
+  };
+}
+
+export function parseOmpTodoPhases(value: unknown): OmpTodoPhase[] | null {
+  if (!Array.isArray(value)) return null;
+  const phases = value.map(parseOmpTodoPhase);
+  if (phases.some(phase => phase === null)) return null;
+  return phases as OmpTodoPhase[];
 }
 
 export function parseOmpAvailableSlashCommand(value: unknown): OmpRpcAvailableSlashCommand | null {
@@ -461,6 +542,39 @@ export function parseOmpMessagesResponseData(value: unknown): OmpRpcMessagesResp
   const raw = asObject(value);
   if (!raw || !Array.isArray(raw.messages)) return null;
   return { messages: raw.messages };
+}
+
+export function parseOmpSetTodosResponseData(value: unknown): OmpRpcSetTodosResponseData | null {
+  const raw = asObject(value);
+  const todoPhases = parseOmpTodoPhases(raw?.todoPhases);
+  if (!raw || !todoPhases) return null;
+  return { todoPhases };
+}
+
+export function parseOmpTodoEvent(value: unknown): OmpTodoEvent | null {
+  const raw = asObject(value);
+  if (!raw || !isString(raw.type)) return null;
+
+  if (raw.type === 'todo_auto_clear') {
+    return { type: 'todo_auto_clear' };
+  }
+
+  if (raw.type !== 'todo_reminder') return null;
+  if (
+    !Array.isArray(raw.todos)
+    || !isNonNegativeNumber(raw.attempt)
+    || !isNonNegativeNumber(raw.maxAttempts)
+  ) {
+    return null;
+  }
+  const todos = raw.todos.map(parseOmpTodoItem);
+  if (todos.some(todo => todo === null)) return null;
+  return {
+    type: 'todo_reminder',
+    todos: todos as OmpTodoItem[],
+    attempt: raw.attempt,
+    maxAttempts: raw.maxAttempts,
+  };
 }
 
 export function parseOmpContextUsage(value: unknown): OmpContextUsage | null {
@@ -701,6 +815,7 @@ export function parseOmpSessionState(value: unknown): OmpRpcSessionState | null 
   const contextUsage = raw?.contextUsage === undefined
     ? undefined
     : parseOmpContextUsage(raw.contextUsage);
+  const todoPhases = parseOmpTodoPhases(raw?.todoPhases);
   if (
     !raw
     || !isString(raw.sessionId)
@@ -713,7 +828,7 @@ export function parseOmpSessionState(value: unknown): OmpRpcSessionState | null 
     || typeof raw.autoCompactionEnabled !== 'boolean'
     || !isFiniteNumber(raw.messageCount)
     || !isFiniteNumber(raw.queuedMessageCount)
-    || !Array.isArray(raw.todoPhases)
+    || !todoPhases
     || (raw.contextUsage !== undefined && !contextUsage)
     || (raw.sessionFile !== undefined && !isString(raw.sessionFile))
     || (raw.sessionName !== undefined && !isString(raw.sessionName))
@@ -734,7 +849,7 @@ export function parseOmpSessionState(value: unknown): OmpRpcSessionState | null 
     autoCompactionEnabled: raw.autoCompactionEnabled,
     messageCount: raw.messageCount,
     queuedMessageCount: raw.queuedMessageCount,
-    todoPhases: raw.todoPhases,
+    todoPhases,
     contextUsage: contextUsage ?? undefined,
   };
 }

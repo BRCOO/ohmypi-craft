@@ -19,8 +19,13 @@ import {
   parseOmpQueueControlState,
   parseOmpRpcResponse,
   parseOmpRuntimeEvent,
+  parseOmpSetTodosResponseData,
   parseOmpSessionState,
   parseOmpSessionStats,
+  parseOmpTodoEvent,
+  parseOmpTodoItem,
+  parseOmpTodoPhase,
+  parseOmpTodoPhases,
 } from '../omp-rpc-protocol.ts';
 
 const validState = {
@@ -95,10 +100,36 @@ describe('OMP RPC protocol parsers', () => {
   it('validates session state while preserving future fields', () => {
     expect(parseOmpSessionState({
       ...validState,
+      todoPhases: [
+        {
+          name: 'Build',
+          tasks: [
+            {
+              content: 'Wire Todo bridge',
+              status: 'in_progress',
+              details: 'hidden detail',
+              notes: 'legacy note',
+            },
+          ],
+        },
+      ],
       contextUsage: { tokens: 4000, contextWindow: 10000, percent: 40 },
       futureField: 'kept',
     })).toEqual({
       ...validState,
+      todoPhases: [
+        {
+          name: 'Build',
+          tasks: [
+            {
+              content: 'Wire Todo bridge',
+              status: 'in_progress',
+              details: 'hidden detail',
+              notes: ['legacy note'],
+            },
+          ],
+        },
+      ],
       contextUsage: { tokens: 4000, contextWindow: 10000, percent: 40 },
       futureField: 'kept',
       sessionFile: undefined,
@@ -191,6 +222,35 @@ describe('OMP RPC protocol parsers', () => {
     const { sessionId: _sessionId, ...withoutSessionId } = validState;
     expect(parseOmpSessionState(withoutSessionId)).toBeNull();
     expect(parseOmpSessionState({ ...validState, sessionId: '   ' })).toBeNull();
+  });
+
+  it('parses OMP Todo phases, set_todos responses, and Todo events strictly', () => {
+    const item = {
+      content: 'Ship Todo card',
+      status: 'pending',
+      details: 'preserve me',
+      notes: ['note'],
+    };
+    const phase = { name: 'Desktop', tasks: [item] };
+    expect(parseOmpTodoItem(item)).toEqual(item);
+    expect(parseOmpTodoItem({ ...item, status: 'unknown' })).toBeNull();
+    expect(parseOmpTodoPhase(phase)).toEqual(phase);
+    expect(parseOmpTodoPhases([phase])).toEqual([phase]);
+    expect(parseOmpSetTodosResponseData({ todoPhases: [phase] })).toEqual({ todoPhases: [phase] });
+    expect(parseOmpSetTodosResponseData({ todoPhases: [{ name: 'bad', tasks: [{ content: 'x', status: 'new' }] }] })).toBeNull();
+    expect(parseOmpTodoEvent({
+      type: 'todo_reminder',
+      todos: [item],
+      attempt: 1,
+      maxAttempts: 3,
+    })).toEqual({
+      type: 'todo_reminder',
+      todos: [item],
+      attempt: 1,
+      maxAttempts: 3,
+    });
+    expect(parseOmpTodoEvent({ type: 'todo_auto_clear' })).toEqual({ type: 'todo_auto_clear' });
+    expect(parseOmpTodoEvent({ type: 'todo_reminder', todos: [item], attempt: -1, maxAttempts: 3 })).toBeNull();
   });
 
   it('parses available slash commands while preserving source metadata', () => {

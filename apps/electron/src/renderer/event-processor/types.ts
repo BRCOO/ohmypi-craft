@@ -5,7 +5,7 @@
  * All agent events flow through a single pure function for consistent state transitions.
  */
 
-import type { Session, Message, PermissionRequest, CredentialRequest, ExtensionUiRequest, TypedError, PermissionMode, SessionStatus, AuthRequest, ToolDisplayMeta, OmpControlStateDto, OmpCommandResultMeta } from '../../shared/types'
+import type { Session, Message, PermissionRequest, CredentialRequest, ExtensionUiRequest, TypedError, PermissionMode, SessionStatus, AuthRequest, ToolDisplayMeta, OmpControlStateDto, OmpTodoStateDto, OmpCommandResultMeta } from '../../shared/types'
 
 /**
  * Streaming state for a session - replaces streamingTextRef
@@ -293,6 +293,15 @@ export interface OmpControlStateChangedEvent {
 }
 
 /**
+ * OMP phased Todo state changed.
+ */
+export interface OmpTodoStateChangedEvent {
+  type: 'omp_todo_state_changed'
+  sessionId: string
+  state: OmpTodoStateDto
+}
+
+/**
  * Working directory error event - server rejected the path (cross-platform, not found, etc.)
  */
 export interface WorkingDirectoryErrorEvent {
@@ -532,6 +541,7 @@ export type AgentEvent =
   | AsyncOperationEvent
   | WorkingDirectoryChangedEvent
   | OmpControlStateChangedEvent
+  | OmpTodoStateChangedEvent
   | WorkingDirectoryErrorEvent
   | PermissionModeChangedEvent
   | SessionModelChangedEvent

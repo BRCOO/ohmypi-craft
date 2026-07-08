@@ -9,9 +9,19 @@ export type { ResolvedOmpCommand, ResolvedOmpRuntimeCommand, OmpCommandSource } 
 export { normalizeOmpModels, resolveOmpServerDefault, DEFAULT_OMP_CONTEXT_WINDOW } from './omp-models.ts';
 export { OmpRpcEventAdapter } from './omp-rpc-adapter.ts';
 export type { OmpRpcAdaptedFrame } from './omp-rpc-adapter.ts';
+export {
+  applyOmpTodoMutation,
+  hasOmpTodoHiddenMetadata,
+  parseOmpTodoMarkdown,
+  serializeOmpTodoMarkdown,
+} from './omp-todo.ts';
+export type { OmpTodoMarkdownParseIssue, OmpTodoMarkdownParseResult } from './omp-todo.ts';
 export type {
   OmpControlState,
   OmpRuntimeState,
+  OmpTodoStatus,
+  OmpTodoItem,
+  OmpTodoPhase,
   OmpSessionStats,
   OmpContextUsage,
   OmpCompactionResult,
@@ -30,4 +40,5 @@ export type {
   OmpRpcMessagesResponseData,
   OmpRpcResponseFrame,
 } from './omp-rpc-protocol.ts';
+export type { OmpTodoState, OmpTodoReminderState } from './omp-todo-state.ts';
 export type { OmpRpcDiagnosticsSnapshot } from './omp-rpc-diagnostics.ts';

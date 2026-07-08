@@ -25,6 +25,20 @@ import {
   type OmpRpcDiagnosticsSnapshot,
 } from './omp-rpc-diagnostics.ts';
 import {
+  applyOmpTodoMutation,
+  parseOmpTodoMarkdown,
+  serializeOmpTodoMarkdown,
+  normalizeOmpTodoPhases,
+  type OmpTodoMarkdownParseIssue,
+} from './omp-todo.ts';
+import {
+  cloneOmpTodoState,
+  createOmpTodoState,
+  reduceOmpTodoState,
+  type OmpTodoState,
+  type OmpTodoStateAction,
+} from './omp-todo-state.ts';
+import {
   type OmpControlState,
   type OmpInterruptMode,
   type OmpQueueMode,
@@ -41,8 +55,11 @@ import {
   parseOmpMessagesResponseData,
   parseOmpPromptResponseData,
   parseOmpRuntimeEvent,
+  parseOmpSetTodosResponseData,
   parseOmpSessionState,
   parseOmpSessionStats,
+  parseOmpTodoEvent,
+  type OmpTodoPhase,
   type OmpRpcAvailableSlashCommand,
   type OmpRpcBranchMessage,
   type OmpRpcBranchResult,
@@ -55,6 +72,7 @@ import {
   type OmpRuntimeState,
   type OmpThinkingLevel,
 } from './omp-rpc-protocol.ts';
+import type { OmpTodoMutationDto } from '../../../protocol/dto.ts';
 
 export const DEFAULT_OMP_MODEL = 'omp/default';
 
@@ -110,6 +128,12 @@ function extractSlashCommandLabel(message: string): string | undefined {
   return match ? `/${match[1]}` : undefined;
 }
 
+function isOmpTodoToolName(name: string | undefined): boolean {
+  if (!name) return false;
+  const normalized = name.toLowerCase().replace(/[\s_-]+/g, '');
+  return normalized === 'todo' || normalized === 'todowrite' || normalized === 'todolist';
+}
+
 export function buildOmpExtensionUiResponseFrame(
   requestId: string,
   response: ExtensionUiResponse,
@@ -160,6 +184,9 @@ export class OmpRpcBackend extends BaseAgent {
   private readySyncGeneration: number | null = null;
   private sessionState: OmpRpcSessionState | null = null;
   private runtimeState: OmpRuntimeState = createOmpRuntimeState();
+  private todoState: OmpTodoState = createOmpTodoState();
+  private todoRefresh: Promise<OmpTodoState> | null = null;
+  private todoWrite: Promise<OmpTodoState> | null = null;
   private availableCommands: OmpRpcAvailableSlashCommand[] = [];
   private controlStateUpdatedAt = Date.now();
   private remoteThinkingLevel: OmpThinkingLevel | null = null;
@@ -172,6 +199,7 @@ export class OmpRpcBackend extends BaseAgent {
   private readonly longRequestTimeoutMs: number;
   private readonly attachmentReadFile?: (path: string) => Buffer;
   onControlStateChange: ((state: OmpControlState) => void) | null = null;
+  onTodoStateChange: ((state: OmpTodoState) => void) | null = null;
 
   constructor(config: BackendConfig, options: OmpRpcBackendOptions = {}) {
     super(config, DEFAULT_OMP_MODEL);
@@ -303,6 +331,9 @@ export class OmpRpcBackend extends BaseAgent {
               ? { error: event.result }
               : { tool_response: event.result }),
           });
+          if (!event.isError && isOmpTodoToolName(event.toolName)) {
+            this.scheduleTodoRefresh('Todo tool result');
+          }
         }
 
         yield event;
@@ -461,6 +492,103 @@ export class OmpRpcBackend extends BaseAgent {
       runtime: cloneOmpRuntimeState(this.runtimeState),
       updatedAt: this.controlStateUpdatedAt,
     };
+  }
+
+  getOmpTodoState(): OmpTodoState {
+    return cloneOmpTodoState(this.todoState);
+  }
+
+  async refreshOmpTodos(): Promise<OmpTodoState> {
+    await this.ensureSubprocess();
+    if (this.todoRefresh) return this.todoRefresh;
+
+    let refresh!: Promise<OmpTodoState>;
+    refresh = (async () => {
+      this.updateTodoState({ type: 'pending', action: 'refresh' });
+      try {
+        const data = await this.send({ type: 'get_state' });
+        const state = parseOmpSessionState(data);
+        if (!state) throw new Error('OMP get_state returned an invalid session state');
+        this.applySessionState(state);
+        return cloneOmpTodoState(this.todoState);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.updateTodoState({ type: 'failed', action: 'refresh', error: message });
+        throw error;
+      } finally {
+        if (this.todoRefresh === refresh) this.todoRefresh = null;
+      }
+    })();
+
+    this.todoRefresh = refresh;
+    return refresh;
+  }
+
+  async mutateOmpTodos(
+    expectedRevision: number,
+    mutation: OmpTodoMutationDto,
+  ): Promise<OmpTodoState> {
+    const candidate = applyOmpTodoMutation(this.todoState.phases, mutation);
+    return this.replaceOmpTodos(expectedRevision, candidate);
+  }
+
+  async importOmpTodosMarkdown(
+    expectedRevision: number,
+    markdown: string,
+  ): Promise<OmpTodoState> {
+    const parsed = parseOmpTodoMarkdown(markdown);
+    if (parsed.errors.length > 0) {
+      throw new Error(this.formatTodoMarkdownErrors(parsed.errors));
+    }
+    return this.replaceOmpTodos(expectedRevision, parsed.phases);
+  }
+
+  exportOmpTodosMarkdown(): string {
+    return serializeOmpTodoMarkdown(this.todoState.phases);
+  }
+
+  private async replaceOmpTodos(
+    expectedRevision: number,
+    phases: OmpTodoPhase[],
+  ): Promise<OmpTodoState> {
+    await this.ensureSubprocess();
+    if (this._isProcessing || this.currentQueueControlState().isStreaming) {
+      throw new Error('OMP Todos cannot be edited while the session is processing');
+    }
+    if (this.todoWrite) throw new Error('OMP Todo write already in progress');
+    if (!this.todoState.available) throw new Error('OMP Todo state is not available yet');
+    if (expectedRevision !== this.todoState.revision) {
+      this.scheduleTodoRefresh('stale Todo revision');
+      throw new Error('OMP Todo state changed. Refresh and try again.');
+    }
+
+    const candidate = normalizeOmpTodoPhases(phases);
+    let write!: Promise<OmpTodoState>;
+    write = (async () => {
+      this.updateTodoState({ type: 'pending', action: 'write' });
+      try {
+        const data = await this.send({ type: 'set_todos', phases: candidate });
+        const parsed = parseOmpSetTodosResponseData(data);
+        if (!parsed) throw new Error('OMP set_todos returned an invalid Todo snapshot');
+        if (this.sessionState) {
+          this.sessionState = {
+            ...this.sessionState,
+            todoPhases: parsed.todoPhases,
+          };
+        }
+        this.applyTodoSessionState(this.sessionState?.sessionId, parsed.todoPhases);
+        return cloneOmpTodoState(this.todoState);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.updateTodoState({ type: 'failed', action: 'write', error: message });
+        throw error;
+      } finally {
+        if (this.todoWrite === write) this.todoWrite = null;
+      }
+    })();
+
+    this.todoWrite = write;
+    return write;
   }
 
   async refreshOmpRuntimeState(): Promise<OmpRuntimeState> {
@@ -849,9 +977,24 @@ export class OmpRpcBackend extends BaseAgent {
         }, 0);
       }
     }
+    const todoEvent = parseOmpTodoEvent(raw);
+    if (todoEvent) {
+      if (todoEvent.type === 'todo_reminder') {
+        this.updateTodoState({
+          type: 'reminder',
+          todos: todoEvent.todos,
+          attempt: todoEvent.attempt,
+          maxAttempts: todoEvent.maxAttempts,
+        });
+        this.scheduleTodoRefresh('Todo reminder');
+      } else {
+        this.updateTodoState({ type: 'auto_clear' });
+        this.scheduleTodoRefresh('Todo auto-clear');
+      }
+    }
     const adapted = this.adapter.adaptFrame(raw);
     if (adapted.unknownFrameType) {
-      const shouldLog = this.diagnostics.recordUnknownFrame(adapted.unknownFrameType, raw);
+      const shouldLog = !todoEvent && this.diagnostics.recordUnknownFrame(adapted.unknownFrameType, raw);
       if (shouldLog) {
         this.debug(
           `Ignoring unknown OMP frame ${adapted.unknownFrameType} with keys: ${Object.keys(raw).sort().join(', ')}`,
@@ -1041,6 +1184,7 @@ export class OmpRpcBackend extends BaseAgent {
     this.sessionState = null;
     this.availableCommands = [];
     this.updateRuntimeState({ type: 'unavailable', error: 'OMP runtime is not connected' });
+    this.updateTodoState({ type: 'unavailable', error: 'OMP runtime is not connected' });
     this.remoteThinkingLevel = null;
     this.thinkingLevelUpdate = null;
     this.diagnostics.clearProcessState(this.processGeneration);
@@ -1207,6 +1351,7 @@ export class OmpRpcBackend extends BaseAgent {
     turn.finished = true;
     this.eventQueue.enqueue({ type: 'complete' });
     this.eventQueue.complete();
+    this.scheduleTodoRefresh('turn complete');
     return true;
   }
 
@@ -1267,15 +1412,46 @@ export class OmpRpcBackend extends BaseAgent {
   private applySessionState(state: OmpRpcSessionState): void {
     if (this.sessionState && this.sessionState.sessionId !== state.sessionId) {
       this.runtimeState = createOmpRuntimeState();
+      this.todoState = createOmpTodoState();
     }
     this.sessionState = state;
     this.runtimeState = reduceOmpRuntimeState(this.runtimeState, { type: 'session_state', state });
     this.touchControlState();
+    this.applyTodoSessionState(state.sessionId, state.todoPhases);
   }
 
   private updateRuntimeState(action: OmpRuntimeStateAction): void {
     this.runtimeState = reduceOmpRuntimeState(this.runtimeState, action);
     this.touchControlState();
+  }
+
+  private applyTodoSessionState(sessionId: string | undefined, phases: OmpTodoPhase[]): void {
+    if (!sessionId) {
+      this.updateTodoState({ type: 'unavailable', error: 'OMP session is not synchronized' });
+      return;
+    }
+    this.updateTodoState({ type: 'session_state', sessionId, phases });
+  }
+
+  private updateTodoState(action: OmpTodoStateAction): void {
+    this.todoState = reduceOmpTodoState(this.todoState, action);
+    this.onTodoStateChange?.(this.getOmpTodoState());
+  }
+
+  private scheduleTodoRefresh(reason: string): void {
+    if (!this.child || this.todoRefresh || this.todoWrite) return;
+    setTimeout(() => {
+      void this.refreshOmpTodos().catch((error) => {
+        this.debug(`OMP Todo refresh failed after ${reason}: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }, 0);
+  }
+
+  private formatTodoMarkdownErrors(errors: OmpTodoMarkdownParseIssue[]): string {
+    return errors
+      .slice(0, 5)
+      .map(error => `line ${error.line}: ${error.message}`)
+      .join('; ');
   }
 
   private assertRuntimeActionAvailable(): void {

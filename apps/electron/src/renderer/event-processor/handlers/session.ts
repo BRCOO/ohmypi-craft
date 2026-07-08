@@ -32,6 +32,7 @@ import type {
   AsyncOperationEvent,
   WorkingDirectoryChangedEvent,
   OmpControlStateChangedEvent,
+  OmpTodoStateChangedEvent,
   PermissionModeChangedEvent,
   SessionModelChangedEvent,
   LLMConnectionChangedEvent,
@@ -456,6 +457,24 @@ export function handleOmpControlStateChanged(
   return {
     state: {
       session: { ...session, ompControlState: event.state },
+      streaming,
+    },
+    effects: [],
+  }
+}
+
+/**
+ * Handle OMP phased Todo state updates.
+ */
+export function handleOmpTodoStateChanged(
+  state: SessionState,
+  event: OmpTodoStateChangedEvent
+): ProcessResult {
+  const { session, streaming } = state
+
+  return {
+    state: {
+      session: { ...session, ompTodoState: event.state },
       streaming,
     },
     effects: [],

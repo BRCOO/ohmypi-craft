@@ -97,6 +97,11 @@ export {
 export type {
   OmpControlState,
   OmpRuntimeState,
+  OmpTodoState,
+  OmpTodoStatus,
+  OmpTodoItem,
+  OmpTodoPhase,
+  OmpTodoReminderState,
   OmpInterruptMode,
   OmpQueueMode,
   OmpQueueControlState,

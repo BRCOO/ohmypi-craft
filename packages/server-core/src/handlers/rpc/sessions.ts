@@ -350,6 +350,14 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
         return sessionManager.setOmpAutoRetry(sessionId, command.enabled)
       case 'abortOmpRetry':
         return sessionManager.abortOmpRetry(sessionId)
+      case 'refreshOmpTodos':
+        return sessionManager.refreshOmpTodos(sessionId)
+      case 'mutateOmpTodos':
+        return sessionManager.mutateOmpTodos(sessionId, command.expectedRevision, command.mutation)
+      case 'importOmpTodosMarkdown':
+        return sessionManager.importOmpTodosMarkdown(sessionId, command.expectedRevision, command.markdown)
+      case 'exportOmpTodosMarkdown':
+        return sessionManager.exportOmpTodosMarkdown(sessionId)
       case 'updateWorkingDirectory':
         return sessionManager.updateWorkingDirectory(sessionId, command.dir)
       case 'setSources':

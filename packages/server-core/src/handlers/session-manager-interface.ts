@@ -79,6 +79,18 @@ export interface ISessionManager {
   setOmpAutoCompaction(sessionId: string, enabled: boolean): Promise<void>
   setOmpAutoRetry(sessionId: string, enabled: boolean): Promise<void>
   abortOmpRetry(sessionId: string): Promise<void>
+  refreshOmpTodos(sessionId: string): Promise<void>
+  mutateOmpTodos(
+    sessionId: string,
+    expectedRevision: number,
+    mutation: import('@craft-agent/shared/protocol').OmpTodoMutationDto,
+  ): Promise<void>
+  importOmpTodosMarkdown(
+    sessionId: string,
+    expectedRevision: number,
+    markdown: string,
+  ): Promise<void>
+  exportOmpTodosMarkdown(sessionId: string): Promise<import('@craft-agent/shared/protocol').OmpTodoMarkdownExportResult>
   updateWorkingDirectory(sessionId: string, path: string): void
   setSessionSources(sessionId: string, sourceSlugs: string[]): Promise<void>
   setSessionLabels(sessionId: string, labels: string[]): void

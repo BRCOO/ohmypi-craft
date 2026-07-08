@@ -23,6 +23,7 @@ import {
   type OmpInterruptMode,
   type OmpQueueMode,
   type OmpRuntimeState,
+  type OmpTodoState,
   type PostInitResult,
 } from '@craft-agent/shared/agent/backend'
 import { getLlmConnection, getLlmConnections, getDefaultLlmConnection, getDefaultThinkingLevel, resetManagedAnthropicAuthEnvVars, resolveMidStreamBehavior, getPersistedUiLanguage, resolveTitleLanguageName } from '@craft-agent/shared/config'
@@ -88,7 +89,7 @@ import { isParentTaskTool } from '@craft-agent/shared/utils/toolNames'
 import { restoreFiles } from '@craft-agent/shared/utils/bundle-files'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { CraftMcpClient, McpClientPool, McpPoolServer } from '@craft-agent/shared/mcp'
-import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, type OmpControlStateDto, type OmpInterruptMode as OmpInterruptModeDto, type OmpQueueMode as OmpQueueModeDto, type OmpBranchOptionsResult, type OmpBranchSessionResult, type OmpHandoffSessionResult, type OmpExportHtmlResult, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
+import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, type OmpControlStateDto, type OmpTodoStateDto, type OmpTodoMutationDto, type OmpInterruptMode as OmpInterruptModeDto, type OmpQueueMode as OmpQueueModeDto, type OmpBranchOptionsResult, type OmpBranchSessionResult, type OmpHandoffSessionResult, type OmpExportHtmlResult, type OmpTodoMarkdownExportResult, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
 import { messageToStored, storedToMessage, type Message, type StoredAttachment, type ToolDisplayMeta } from '@craft-agent/core/types'
 import { formatPathsToRelative, formatToolInputPaths, perf, encodeIconToDataUrlAsync, getEmojiIcon, resetSummarizationClient, resolveToolIcon, readFileAttachment, selectSpreadMessages, normalizePath } from '@craft-agent/shared/utils'
 import { loadAllSkills, loadSkillBySlug, invalidateSkillsCache, type LoadedSkill } from '@craft-agent/shared/skills'
@@ -790,6 +791,15 @@ interface OmpRuntimeAgent extends OmpControllableAgent {
   abortRetry(): Promise<OmpRuntimeState>
 }
 
+interface OmpTodoAgent extends AgentBackend {
+  onTodoStateChange: ((state: OmpTodoState) => void) | null
+  getOmpTodoState(): OmpTodoState
+  refreshOmpTodos(): Promise<OmpTodoState>
+  mutateOmpTodos(expectedRevision: number, mutation: OmpTodoMutationDto): Promise<OmpTodoState>
+  importOmpTodosMarkdown(expectedRevision: number, markdown: string): Promise<OmpTodoState>
+  exportOmpTodosMarkdown(): string
+}
+
 interface OmpSessionAgent extends AgentBackend {
   getOmpSessionLink(): OmpSessionLink | null
   getOmpMessages(): Promise<unknown[]>
@@ -820,6 +830,16 @@ function isOmpRuntimeAgent(agent: AgentInstance | null | undefined): agent is Om
     && typeof candidate?.setAutoCompaction === 'function'
     && typeof candidate?.setAutoRetry === 'function'
     && typeof candidate?.abortRetry === 'function'
+}
+
+function isOmpTodoAgent(agent: AgentInstance | null | undefined): agent is OmpTodoAgent {
+  const candidate = agent as Partial<OmpTodoAgent> | null | undefined
+  return !!candidate
+    && typeof candidate.getOmpTodoState === 'function'
+    && typeof candidate.refreshOmpTodos === 'function'
+    && typeof candidate.mutateOmpTodos === 'function'
+    && typeof candidate.importOmpTodosMarkdown === 'function'
+    && typeof candidate.exportOmpTodosMarkdown === 'function'
 }
 
 function isOmpSessionAgent(agent: AgentInstance | null | undefined): agent is OmpSessionAgent {
@@ -902,6 +922,38 @@ function toOmpControlStateDto(state: OmpControlState): OmpControlStateDto {
       retry: { ...state.runtime.retry },
       fallback: state.runtime.fallback ? { ...state.runtime.fallback } : undefined,
     },
+    updatedAt: state.updatedAt,
+  }
+}
+
+function toOmpTodoStateDto(state: OmpTodoState): OmpTodoStateDto {
+  return {
+    available: state.available,
+    sessionId: state.sessionId,
+    phases: state.phases.map((phase) => ({
+      name: phase.name,
+      tasks: phase.tasks.map((task) => ({
+        content: task.content,
+        status: task.status,
+        details: task.details,
+        notes: task.notes ? [...task.notes] : undefined,
+      })),
+    })),
+    revision: state.revision,
+    pendingAction: state.pendingAction,
+    error: state.error,
+    reminder: state.reminder
+      ? {
+          todos: state.reminder.todos.map((task) => ({
+            content: task.content,
+            status: task.status,
+            details: task.details,
+            notes: task.notes ? [...task.notes] : undefined,
+          })),
+          attempt: state.reminder.attempt,
+          maxAttempts: state.reminder.maxAttempts,
+        }
+      : undefined,
     updatedAt: state.updatedAt,
   }
 }
@@ -1080,6 +1132,8 @@ interface ManagedSession {
   backendRestartSignature?: string
   // Runtime-only OMP command list / queue controls bridged to the renderer.
   ompControlState?: OmpControlStateDto
+  // Runtime-only OMP phased Todo snapshot bridged to the renderer.
+  ompTodoState?: OmpTodoStateDto
   // Whether the previous turn was interrupted (for context injection on next message).
   // Ephemeral — not persisted to disk. Cleared after one-shot injection.
   wasInterrupted?: boolean
@@ -1240,6 +1294,7 @@ function managedToSession(m: ManagedSession, overrides?: Partial<Session>): Sess
     sessionFolderPath: getSessionStoragePath(m.workspace.rootPath, m.id),
     supportsBranching: resolveSupportsBranching(m),
     ompControlState: m.ompControlState,
+    ompTodoState: m.ompTodoState,
     ...overrides,
   } as Session
 }
@@ -1372,6 +1427,31 @@ export class SessionManager implements ISessionManager {
       this.publishOmpControlState(current, state)
     }
     this.publishOmpControlState(managed, agent.getOmpControlState())
+  }
+
+  private publishOmpTodoState(managed: ManagedSession, state: OmpTodoState): void {
+    const dto = toOmpTodoStateDto(state)
+    managed.ompTodoState = dto
+    this.sendEvent({
+      type: 'omp_todo_state_changed',
+      sessionId: managed.id,
+      state: dto,
+    }, managed.workspace.id)
+  }
+
+  private wireOmpTodoBridge(managed: ManagedSession): void {
+    const agent = managed.agent
+    if (!isOmpTodoAgent(agent)) {
+      managed.ompTodoState = undefined
+      return
+    }
+
+    agent.onTodoStateChange = (state) => {
+      const current = this.sessions.get(managed.id)
+      if (!current || current.agent !== agent) return
+      this.publishOmpTodoState(current, state)
+    }
+    this.publishOmpTodoState(managed, agent.getOmpTodoState())
   }
 
   /** Wait until initialize() has completed (sessions loaded from disk).
@@ -3612,6 +3692,7 @@ export class SessionManager implements ISessionManager {
 
       sessionLog.info(`Created ${provider} agent for session ${managed.id} (model: ${backendContext.resolvedModel})${managed.sdkSessionId ? ' (resuming)' : ''}`)
       this.wireOmpControlBridge(managed)
+      this.wireOmpTodoBridge(managed)
 
       // ============================================================
       // Post-construction: debug callback, auth callback, postInit()
@@ -7321,6 +7402,43 @@ export class SessionManager implements ISessionManager {
     this.publishOmpControlState(managed, agent.getOmpControlState())
   }
 
+  async refreshOmpTodos(sessionId: string): Promise<void> {
+    const { managed, agent } = await this.getOmpTodoAgent(sessionId)
+    await agent.refreshOmpTodos()
+    this.publishOmpTodoState(managed, agent.getOmpTodoState())
+  }
+
+  async mutateOmpTodos(
+    sessionId: string,
+    expectedRevision: number,
+    mutation: OmpTodoMutationDto,
+  ): Promise<void> {
+    const { managed, agent } = await this.getOmpTodoAgent(sessionId)
+    this.assertOmpTodoMutationAllowed(managed)
+    await agent.mutateOmpTodos(expectedRevision, mutation)
+    this.publishOmpTodoState(managed, agent.getOmpTodoState())
+  }
+
+  async importOmpTodosMarkdown(
+    sessionId: string,
+    expectedRevision: number,
+    markdown: string,
+  ): Promise<void> {
+    const { managed, agent } = await this.getOmpTodoAgent(sessionId)
+    this.assertOmpTodoMutationAllowed(managed)
+    await agent.importOmpTodosMarkdown(expectedRevision, markdown)
+    this.publishOmpTodoState(managed, agent.getOmpTodoState())
+  }
+
+  async exportOmpTodosMarkdown(sessionId: string): Promise<OmpTodoMarkdownExportResult> {
+    try {
+      const { agent } = await this.getOmpTodoAgent(sessionId)
+      return { success: true, markdown: agent.exportOmpTodosMarkdown() }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   private async getOmpRuntimeAgent(sessionId: string): Promise<{
     managed: ManagedSession
     agent: OmpRuntimeAgent
@@ -7332,6 +7450,25 @@ export class SessionManager implements ISessionManager {
       throw new Error('OMP runtime controls are only available for OMP sessions')
     }
     return { managed, agent }
+  }
+
+  private async getOmpTodoAgent(sessionId: string): Promise<{
+    managed: ManagedSession
+    agent: OmpTodoAgent
+  }> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+    const agent = await this.getOrCreateAgent(managed)
+    if (!isOmpTodoAgent(agent)) {
+      throw new Error('OMP Todo controls are only available for OMP sessions')
+    }
+    return { managed, agent }
+  }
+
+  private assertOmpTodoMutationAllowed(managed: ManagedSession): void {
+    if (managed.isProcessing || managed.agent?.isProcessing()) {
+      throw new Error('OMP Todos cannot be edited while the session is processing')
+    }
   }
 
   private async syncOmpRuntimeSettingAcrossLiveAgents(

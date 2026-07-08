@@ -85,6 +85,7 @@ import {
   type AdminApprovalResponse,
   type ExtensionUiStructuredResponse,
 } from "./input"
+import { OmpTodoCard } from "./OmpTodoCard"
 import type { FreeFormSubmitOptions } from "./input/FreeFormInput"
 import type { RichTextInputHandle } from "@/components/ui/rich-text-input"
 import { useBackgroundTasks } from "@/hooks/useBackgroundTasks"
@@ -1997,6 +1998,14 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                 </div>
               ))}
             </div>
+          )}
+
+          {session.ompTodoState && (
+            <OmpTodoCard
+              sessionId={session.id}
+              state={session.ompTodoState}
+              isProcessing={session.isProcessing}
+            />
           )}
 
           {/* === INPUT CONTAINER: FreeForm or Structured Input === */}

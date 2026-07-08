@@ -156,6 +156,50 @@ export interface OmpControlStateDto {
   updatedAt: number
 }
 
+export type OmpTodoStatusDto = 'pending' | 'in_progress' | 'completed' | 'abandoned'
+
+export interface OmpTodoItemDto {
+  content: string
+  status: OmpTodoStatusDto
+  details?: string
+  notes?: string[]
+}
+
+export interface OmpTodoPhaseDto {
+  name: string
+  tasks: OmpTodoItemDto[]
+}
+
+export interface OmpTodoReminderDto {
+  todos: OmpTodoItemDto[]
+  attempt: number
+  maxAttempts: number
+}
+
+export interface OmpTodoStateDto {
+  available: boolean
+  sessionId?: string
+  phases: OmpTodoPhaseDto[]
+  revision: number
+  pendingAction?: 'refresh' | 'write'
+  error?: string
+  reminder?: OmpTodoReminderDto
+  updatedAt: number
+}
+
+export type OmpTodoMutationDto =
+  | { type: 'replace'; phases: OmpTodoPhaseDto[] }
+  | { type: 'addPhase'; name?: string; index?: number }
+  | { type: 'renamePhase'; phaseIndex: number; name: string }
+  | { type: 'removePhase'; phaseIndex: number }
+  | { type: 'addTask'; phaseIndex: number; content: string; index?: number }
+  | { type: 'editTask'; phaseIndex: number; taskIndex: number; content: string }
+  | { type: 'startTask'; phaseIndex: number; taskIndex: number }
+  | { type: 'completeTask'; phaseIndex: number; taskIndex: number }
+  | { type: 'abandonTask'; phaseIndex: number; taskIndex: number }
+  | { type: 'reopenTask'; phaseIndex: number; taskIndex: number }
+  | { type: 'removeTask'; phaseIndex: number; taskIndex: number }
+
 /**
  * Electron-specific Session type (includes runtime state).
  * Extends core Session with messages array and processing state.
@@ -220,6 +264,8 @@ export interface Session {
   supportsBranching?: boolean
   /** Runtime-only OMP command/queue state. Not persisted in session JSONL. */
   ompControlState?: OmpControlStateDto
+  /** Runtime-only OMP phased Todo state. Not persisted in Craft JSONL. */
+  ompTodoState?: OmpTodoStateDto
   /** Persisted OMP-native session identity for provider transcript continuity. */
   ompSessionLink?: OmpSessionLink
 }
@@ -301,6 +347,7 @@ export type SessionEvent =
   | { type: 'async_operation'; sessionId: string; isOngoing: boolean }
   | { type: 'working_directory_changed'; sessionId: string; workingDirectory: string }
   | { type: 'omp_control_state_changed'; sessionId: string; state: OmpControlStateDto }
+  | { type: 'omp_todo_state_changed'; sessionId: string; state: OmpTodoStateDto }
   | { type: 'permission_request'; sessionId: string; request: PermissionRequest }
   | { type: 'credential_request'; sessionId: string; request: CredentialRequest }
   | { type: 'extension_ui_request'; sessionId: string; request: ExtensionUiRequest }
@@ -366,6 +413,10 @@ export type SessionCommand =
   | { type: 'setOmpAutoCompaction'; enabled: boolean }
   | { type: 'setOmpAutoRetry'; enabled: boolean }
   | { type: 'abortOmpRetry' }
+  | { type: 'refreshOmpTodos' }
+  | { type: 'mutateOmpTodos'; expectedRevision: number; mutation: OmpTodoMutationDto }
+  | { type: 'importOmpTodosMarkdown'; expectedRevision: number; markdown: string }
+  | { type: 'exportOmpTodosMarkdown' }
   | { type: 'updateWorkingDirectory'; dir: string }
   | { type: 'setSources'; sourceSlugs: string[] }
   | { type: 'setLabels'; labels: string[] }
@@ -681,6 +732,12 @@ export interface OmpExportHtmlResult {
   error?: string
 }
 
+export interface OmpTodoMarkdownExportResult {
+  success: boolean
+  markdown?: string
+  error?: string
+}
+
 export type SessionCommandResult =
   | void
   | ShareResult
@@ -690,6 +747,7 @@ export type SessionCommandResult =
   | OmpBranchSessionResult
   | OmpHandoffSessionResult
   | OmpExportHtmlResult
+  | OmpTodoMarkdownExportResult
 
 // ---------------------------------------------------------------------------
 // Plan types

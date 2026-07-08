@@ -76,6 +76,47 @@ function createOmpRuntimeAgent(calls: string[]) {
   }
 }
 
+function createOmpTodoAgent(calls: string[]) {
+  let state: any = {
+    available: true,
+    sessionId: 'omp-session-1',
+    phases: [],
+    revision: 1,
+    updatedAt: 1,
+  }
+  return {
+    isProcessing: () => false,
+    onTodoStateChange: null,
+    getOmpTodoState: () => state,
+    refreshOmpTodos: async () => {
+      calls.push('refresh')
+      state = { ...state, revision: state.revision + 1, updatedAt: state.updatedAt + 1 }
+      return state
+    },
+    mutateOmpTodos: async (_expectedRevision: number, mutation: unknown) => {
+      calls.push(`mutate:${(mutation as { type?: string }).type}`)
+      state = {
+        ...state,
+        phases: [{ name: 'Desktop', tasks: [{ content: 'Task', status: 'pending' as const }] }],
+        revision: state.revision + 1,
+        updatedAt: state.updatedAt + 1,
+      }
+      return state
+    },
+    importOmpTodosMarkdown: async (_expectedRevision: number, markdown: string) => {
+      calls.push(`import:${markdown.length}`)
+      state = {
+        ...state,
+        phases: [{ name: 'Imported', tasks: [{ content: 'Task', status: 'completed' as const }] }],
+        revision: state.revision + 1,
+        updatedAt: state.updatedAt + 1,
+      }
+      return state
+    },
+    exportOmpTodosMarkdown: () => '# Desktop\n- [ ] Task',
+  }
+}
+
 function createManagedSession(agent: unknown, overrides: Record<string, unknown> = {}): any {
   return {
     id: 'session-1',
@@ -394,5 +435,36 @@ describe('SessionManager OMP runtime controls', () => {
       'session_model_changed',
     ])
     expect(manager.persisted).toHaveLength(1)
+  })
+})
+
+describe('SessionManager OMP Todo bridge', () => {
+  it('delegates Todo commands and publishes Todo snapshots', async () => {
+    const calls: string[] = []
+    const managed = createManagedSession(createOmpTodoAgent(calls))
+    const manager = createManager(managed)
+
+    await manager.refreshOmpTodos('session-1')
+    await manager.mutateOmpTodos('session-1', managed.ompTodoState?.revision ?? 2, { type: 'addPhase', name: 'Desktop' })
+    const exportResult = await manager.exportOmpTodosMarkdown('session-1')
+
+    expect(calls).toEqual(['refresh', 'mutate:addPhase'])
+    expect(exportResult).toEqual({ success: true, markdown: '# Desktop\n- [ ] Task' })
+    expect(manager.events.map((item: any) => item.event.type)).toEqual([
+      'omp_todo_state_changed',
+      'omp_todo_state_changed',
+    ])
+    expect(managed.ompTodoState.phases[0].name).toBe('Desktop')
+  })
+
+  it('rejects Todo mutations while the session is processing', async () => {
+    const calls: string[] = []
+    const managed = createManagedSession(createOmpTodoAgent(calls), { isProcessing: true })
+    const manager = createManager(managed)
+
+    await expect(manager.mutateOmpTodos('session-1', 1, { type: 'addPhase', name: 'Blocked' })).rejects.toThrow(
+      'OMP Todos cannot be edited while the session is processing',
+    )
+    expect(calls).toEqual([])
   })
 })
