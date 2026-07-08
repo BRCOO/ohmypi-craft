@@ -226,6 +226,123 @@ export interface OmpTodoPhase {
   tasks: OmpTodoItem[];
 }
 
+export type OmpSubagentSource = 'bundled' | 'user' | 'project';
+export type OmpSubagentStatus = 'pending' | 'running' | 'completed' | 'failed' | 'aborted';
+export type OmpSubagentLifecycleStatus = 'started' | 'completed' | 'failed' | 'aborted';
+export type OmpSubagentSubscriptionLevel = 'off' | 'progress' | 'events';
+
+export interface OmpSubagentRecentTool {
+  tool: string;
+  args: string;
+  endMs: number;
+}
+
+export interface OmpSubagentRetryState {
+  attempt: number;
+  maxAttempts: number;
+  delayMs: number;
+  errorMessage: string;
+  startedAtMs: number;
+}
+
+export interface OmpSubagentRetryFailure {
+  attempt: number;
+  errorMessage: string;
+}
+
+export interface OmpSubagentProgress {
+  id: string;
+  index?: number;
+  agent?: string;
+  agentSource?: OmpSubagentSource;
+  status: OmpSubagentStatus;
+  task?: string;
+  assignment?: string;
+  description?: string;
+  lastIntent?: string;
+  currentTool?: string;
+  currentToolArgs?: string;
+  currentToolStartMs?: number;
+  recentTools?: OmpSubagentRecentTool[];
+  recentOutput?: string[];
+  toolCount?: number;
+  requests?: number;
+  tokens?: number;
+  contextTokens?: number;
+  contextWindow?: number;
+  cost?: number;
+  durationMs?: number;
+  modelOverride?: string | string[];
+  resolvedModel?: string;
+  retryState?: OmpSubagentRetryState;
+  retryFailure?: OmpSubagentRetryFailure;
+}
+
+export interface OmpSubagentSnapshot {
+  id: string;
+  index: number;
+  agent: string;
+  agentSource: OmpSubagentSource;
+  description?: string;
+  status: OmpSubagentStatus;
+  task?: string;
+  assignment?: string;
+  sessionFile?: string;
+  lastUpdate: number;
+  progress?: OmpSubagentProgress;
+  parentToolCallId?: string;
+  todoPhases?: OmpTodoPhase[];
+}
+
+export interface OmpRpcSubagentsResponseData {
+  subagents: OmpSubagentSnapshot[];
+}
+
+export interface OmpRpcSubagentMessagesResponseData {
+  sessionFile: string;
+  fromByte: number;
+  nextByte: number;
+  reset: boolean;
+  entries: unknown[];
+  messages: unknown[];
+}
+
+export interface OmpSubagentLifecyclePayload {
+  id: string;
+  agent: string;
+  agentSource: OmpSubagentSource;
+  description?: string;
+  status: OmpSubagentLifecycleStatus;
+  sessionFile?: string;
+  parentToolCallId?: string;
+  index: number;
+  detached?: boolean;
+}
+
+export interface OmpSubagentProgressPayload {
+  index: number;
+  agent: string;
+  agentSource: OmpSubagentSource;
+  task: string;
+  parentToolCallId?: string;
+  assignment?: string;
+  progress: OmpSubagentProgress;
+  sessionFile?: string;
+  detached?: boolean;
+}
+
+export interface OmpSubagentLifecycleFrame {
+  type: 'subagent_lifecycle';
+  payload: OmpSubagentLifecyclePayload;
+}
+
+export interface OmpSubagentProgressFrame {
+  type: 'subagent_progress';
+  payload: OmpSubagentProgressPayload;
+}
+
+export type OmpSubagentFrame = OmpSubagentLifecycleFrame | OmpSubagentProgressFrame;
+
 export interface OmpRpcSetTodosResponseData {
   todoPhases: OmpTodoPhase[];
 }
@@ -253,6 +370,9 @@ export type OmpRpcCommand =
   | { type: 'new_session'; parentSession?: string }
   | { type: 'get_state' }
   | { type: 'set_todos'; phases: OmpTodoPhase[] }
+  | { type: 'set_subagent_subscription'; level: OmpSubagentSubscriptionLevel }
+  | { type: 'get_subagents' }
+  | { type: 'get_subagent_messages'; subagentId?: string; sessionFile?: string; fromByte?: number }
   | { type: 'get_available_commands' }
   | { type: 'get_messages' }
   | { type: 'get_branch_messages' }
@@ -384,6 +504,25 @@ function isTodoStatus(value: unknown): value is OmpTodoStatus {
     || value === 'abandoned';
 }
 
+function isSubagentSource(value: unknown): value is OmpSubagentSource {
+  return value === 'bundled' || value === 'user' || value === 'project';
+}
+
+function isSubagentStatus(value: unknown): value is OmpSubagentStatus {
+  return value === 'pending'
+    || value === 'running'
+    || value === 'completed'
+    || value === 'failed'
+    || value === 'aborted';
+}
+
+function isSubagentLifecycleStatus(value: unknown): value is OmpSubagentLifecycleStatus {
+  return value === 'started'
+    || value === 'completed'
+    || value === 'failed'
+    || value === 'aborted';
+}
+
 function isCommandName(value: unknown): value is string {
   return isString(value) && value.trim().length > 0 && !/\s/.test(value);
 }
@@ -465,6 +604,312 @@ export function parseOmpTodoPhases(value: unknown): OmpTodoPhase[] | null {
   const phases = value.map(parseOmpTodoPhase);
   if (phases.some(phase => phase === null)) return null;
   return phases as OmpTodoPhase[];
+}
+
+function parseStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const strings = value.filter(isString);
+  return strings.length === value.length ? strings : undefined;
+}
+
+function parseModelOverride(value: unknown): string | string[] | undefined {
+  if (isString(value)) return value;
+  return parseStringArray(value);
+}
+
+function parseSubagentRecentTools(value: unknown): OmpSubagentRecentTool[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return undefined;
+  const tools = value.map((item): OmpSubagentRecentTool | null => {
+    const raw = asObject(item);
+    if (
+      !raw
+      || !isString(raw.tool)
+      || !isString(raw.args)
+      || !isFiniteNumber(raw.endMs)
+    ) {
+      return null;
+    }
+    return {
+      tool: raw.tool,
+      args: raw.args,
+      endMs: raw.endMs,
+    };
+  });
+  return tools.some(item => item === null) ? undefined : tools as OmpSubagentRecentTool[];
+}
+
+function parseSubagentRetryState(value: unknown): OmpSubagentRetryState | undefined {
+  if (value === undefined) return undefined;
+  const raw = asObject(value);
+  if (
+    !raw
+    || !isNonNegativeNumber(raw.attempt)
+    || !isNonNegativeNumber(raw.maxAttempts)
+    || !isNonNegativeNumber(raw.delayMs)
+    || !isString(raw.errorMessage)
+    || !isNonNegativeNumber(raw.startedAtMs)
+  ) {
+    return undefined;
+  }
+  return {
+    attempt: raw.attempt,
+    maxAttempts: raw.maxAttempts,
+    delayMs: raw.delayMs,
+    errorMessage: raw.errorMessage,
+    startedAtMs: raw.startedAtMs,
+  };
+}
+
+function parseSubagentRetryFailure(value: unknown): OmpSubagentRetryFailure | undefined {
+  if (value === undefined) return undefined;
+  const raw = asObject(value);
+  if (!raw || !isNonNegativeNumber(raw.attempt) || !isString(raw.errorMessage)) return undefined;
+  return {
+    attempt: raw.attempt,
+    errorMessage: raw.errorMessage,
+  };
+}
+
+export function parseOmpSubagentProgress(value: unknown): OmpSubagentProgress | null {
+  const raw = asObject(value);
+  if (!raw || !isString(raw.id) || !isSubagentStatus(raw.status)) return null;
+
+  const recentTools = parseSubagentRecentTools(raw.recentTools);
+  const recentOutput = parseStringArray(raw.recentOutput);
+  const modelOverride = parseModelOverride(raw.modelOverride);
+  const retryState = parseSubagentRetryState(raw.retryState);
+  const retryFailure = parseSubagentRetryFailure(raw.retryFailure);
+
+  if (
+    (raw.index !== undefined && !isFiniteNumber(raw.index))
+    || (raw.agent !== undefined && !isString(raw.agent))
+    || (raw.agentSource !== undefined && !isSubagentSource(raw.agentSource))
+    || (raw.task !== undefined && !isString(raw.task))
+    || (raw.assignment !== undefined && !isString(raw.assignment))
+    || (raw.description !== undefined && !isString(raw.description))
+    || (raw.lastIntent !== undefined && !isString(raw.lastIntent))
+    || (raw.currentTool !== undefined && !isString(raw.currentTool))
+    || (raw.currentToolArgs !== undefined && !isString(raw.currentToolArgs))
+    || (raw.currentToolStartMs !== undefined && !isFiniteNumber(raw.currentToolStartMs))
+    || (raw.recentTools !== undefined && !recentTools)
+    || (raw.recentOutput !== undefined && !recentOutput)
+    || (raw.toolCount !== undefined && !isNonNegativeNumber(raw.toolCount))
+    || (raw.requests !== undefined && !isNonNegativeNumber(raw.requests))
+    || (raw.tokens !== undefined && !isNonNegativeNumber(raw.tokens))
+    || (raw.contextTokens !== undefined && !isNonNegativeNumber(raw.contextTokens))
+    || (raw.contextWindow !== undefined && !isNonNegativeNumber(raw.contextWindow))
+    || (raw.cost !== undefined && !isNonNegativeNumber(raw.cost))
+    || (raw.durationMs !== undefined && !isNonNegativeNumber(raw.durationMs))
+    || (raw.modelOverride !== undefined && !modelOverride)
+    || (raw.resolvedModel !== undefined && !isString(raw.resolvedModel))
+    || (raw.retryState !== undefined && !retryState)
+    || (raw.retryFailure !== undefined && !retryFailure)
+  ) {
+    return null;
+  }
+
+  return {
+    id: raw.id,
+    index: raw.index as number | undefined,
+    agent: raw.agent as string | undefined,
+    agentSource: raw.agentSource as OmpSubagentSource | undefined,
+    status: raw.status,
+    task: raw.task as string | undefined,
+    assignment: raw.assignment as string | undefined,
+    description: raw.description as string | undefined,
+    lastIntent: raw.lastIntent as string | undefined,
+    currentTool: raw.currentTool as string | undefined,
+    currentToolArgs: raw.currentToolArgs as string | undefined,
+    currentToolStartMs: raw.currentToolStartMs as number | undefined,
+    recentTools,
+    recentOutput,
+    toolCount: raw.toolCount as number | undefined,
+    requests: raw.requests as number | undefined,
+    tokens: raw.tokens as number | undefined,
+    contextTokens: raw.contextTokens as number | undefined,
+    contextWindow: raw.contextWindow as number | undefined,
+    cost: raw.cost as number | undefined,
+    durationMs: raw.durationMs as number | undefined,
+    modelOverride,
+    resolvedModel: raw.resolvedModel as string | undefined,
+    retryState,
+    retryFailure,
+  };
+}
+
+export function parseOmpSubagentSnapshot(value: unknown): OmpSubagentSnapshot | null {
+  const raw = asObject(value);
+  const progress = raw?.progress === undefined ? undefined : parseOmpSubagentProgress(raw.progress);
+  const todoPhases = raw?.todoPhases === undefined ? undefined : parseOmpTodoPhases(raw.todoPhases);
+  if (
+    !raw
+    || !isString(raw.id)
+    || !isFiniteNumber(raw.index)
+    || !isString(raw.agent)
+    || !isSubagentSource(raw.agentSource)
+    || !isSubagentStatus(raw.status)
+    || !isFiniteNumber(raw.lastUpdate)
+    || (raw.description !== undefined && !isString(raw.description))
+    || (raw.task !== undefined && !isString(raw.task))
+    || (raw.assignment !== undefined && !isString(raw.assignment))
+    || (raw.sessionFile !== undefined && !isString(raw.sessionFile))
+    || (raw.parentToolCallId !== undefined && !isString(raw.parentToolCallId))
+    || (raw.progress !== undefined && !progress)
+    || (raw.todoPhases !== undefined && !todoPhases)
+  ) {
+    return null;
+  }
+
+  return {
+    id: raw.id,
+    index: raw.index,
+    agent: raw.agent,
+    agentSource: raw.agentSource,
+    description: raw.description as string | undefined,
+    status: raw.status,
+    task: raw.task as string | undefined,
+    assignment: raw.assignment as string | undefined,
+    sessionFile: raw.sessionFile as string | undefined,
+    lastUpdate: raw.lastUpdate,
+    progress: progress ?? undefined,
+    parentToolCallId: raw.parentToolCallId as string | undefined,
+    todoPhases: todoPhases ?? undefined,
+  };
+}
+
+export function parseOmpSubagentsResponseData(value: unknown): OmpRpcSubagentsResponseData | null {
+  const raw = asObject(value);
+  if (!raw || !Array.isArray(raw.subagents)) return null;
+  const subagents = raw.subagents.map(parseOmpSubagentSnapshot);
+  if (subagents.some(subagent => subagent === null)) return null;
+  return { subagents: subagents as OmpSubagentSnapshot[] };
+}
+
+export function parseOmpSubagentMessagesResponseData(value: unknown): OmpRpcSubagentMessagesResponseData | null {
+  const raw = asObject(value);
+  if (
+    !raw
+    || !isString(raw.sessionFile)
+    || !isNonNegativeNumber(raw.fromByte)
+    || !isNonNegativeNumber(raw.nextByte)
+    || typeof raw.reset !== 'boolean'
+    || !Array.isArray(raw.entries)
+    || !Array.isArray(raw.messages)
+  ) {
+    return null;
+  }
+  return {
+    sessionFile: raw.sessionFile,
+    fromByte: raw.fromByte,
+    nextByte: raw.nextByte,
+    reset: raw.reset,
+    entries: raw.entries,
+    messages: raw.messages,
+  };
+}
+
+export function extractOmpTodoPhasesFromTranscriptEntries(entries: unknown[]): OmpTodoPhase[] | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = asObject(entries[index]);
+    if (!entry) continue;
+
+    if (entry.type === 'custom' && entry.customType === 'user_todo_edit') {
+      const data = asObject(entry.data);
+      const phases = parseOmpTodoPhases(data?.phases);
+      if (phases) return phases;
+      continue;
+    }
+
+    if (entry.type !== 'message') continue;
+    const message = asObject(entry.message);
+    if (
+      !message
+      || message.role !== 'toolResult'
+      || message.toolName !== 'todo'
+      || message.isError === true
+    ) {
+      continue;
+    }
+
+    const details = asObject(message.details);
+    const phases = parseOmpTodoPhases(details?.phases);
+    if (phases) return phases;
+  }
+
+  return null;
+}
+
+export function parseOmpSubagentFrame(value: unknown): OmpSubagentFrame | null {
+  const raw = asObject(value);
+  if (!raw || !isString(raw.type)) return null;
+
+  if (raw.type === 'subagent_lifecycle') {
+    const payload = asObject(raw.payload);
+    if (
+      !payload
+      || !isString(payload.id)
+      || !isString(payload.agent)
+      || !isSubagentSource(payload.agentSource)
+      || !isSubagentLifecycleStatus(payload.status)
+      || !isFiniteNumber(payload.index)
+      || (payload.description !== undefined && !isString(payload.description))
+      || (payload.sessionFile !== undefined && !isString(payload.sessionFile))
+      || (payload.parentToolCallId !== undefined && !isString(payload.parentToolCallId))
+      || (payload.detached !== undefined && typeof payload.detached !== 'boolean')
+    ) {
+      return null;
+    }
+    return {
+      type: 'subagent_lifecycle',
+      payload: {
+        id: payload.id,
+        agent: payload.agent,
+        agentSource: payload.agentSource,
+        description: payload.description as string | undefined,
+        status: payload.status,
+        sessionFile: payload.sessionFile as string | undefined,
+        parentToolCallId: payload.parentToolCallId as string | undefined,
+        index: payload.index,
+        detached: payload.detached as boolean | undefined,
+      },
+    };
+  }
+
+  if (raw.type === 'subagent_progress') {
+    const payload = asObject(raw.payload);
+    const progress = parseOmpSubagentProgress(payload?.progress);
+    if (
+      !payload
+      || !isFiniteNumber(payload.index)
+      || !isString(payload.agent)
+      || !isSubagentSource(payload.agentSource)
+      || !isString(payload.task)
+      || !progress
+      || (payload.parentToolCallId !== undefined && !isString(payload.parentToolCallId))
+      || (payload.assignment !== undefined && !isString(payload.assignment))
+      || (payload.sessionFile !== undefined && !isString(payload.sessionFile))
+      || (payload.detached !== undefined && typeof payload.detached !== 'boolean')
+    ) {
+      return null;
+    }
+    return {
+      type: 'subagent_progress',
+      payload: {
+        index: payload.index,
+        agent: payload.agent,
+        agentSource: payload.agentSource,
+        task: payload.task,
+        parentToolCallId: payload.parentToolCallId as string | undefined,
+        assignment: payload.assignment as string | undefined,
+        progress,
+        sessionFile: payload.sessionFile as string | undefined,
+        detached: payload.detached as boolean | undefined,
+      },
+    };
+  }
+
+  return null;
 }
 
 export function parseOmpAvailableSlashCommand(value: unknown): OmpRpcAvailableSlashCommand | null {

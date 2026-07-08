@@ -17,6 +17,8 @@ class FakeChild extends EventEmitter {
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
   readonly writes: string[] = [];
+  subagents: Array<Record<string, unknown>> = [];
+  subagentEntries = new Map<string, unknown[]>();
   killed = false;
 
   constructor() {
@@ -61,6 +63,41 @@ class FakeChild extends EventEmitter {
             success: true,
             data: {
               todoPhases: frame.phases,
+            },
+          }));
+        }
+        if (frame.type === 'set_subagent_subscription') {
+          queueMicrotask(() => this.emitFrame({
+            type: 'response',
+            id: frame.id,
+            command: 'set_subagent_subscription',
+            success: true,
+            data: { level: frame.level },
+          }));
+        }
+        if (frame.type === 'get_subagents') {
+          queueMicrotask(() => this.emitFrame({
+            type: 'response',
+            id: frame.id,
+            command: 'get_subagents',
+            success: true,
+            data: { subagents: this.subagents },
+          }));
+        }
+        if (frame.type === 'get_subagent_messages') {
+          const subagentId = typeof frame.subagentId === 'string' ? frame.subagentId : 'unknown';
+          queueMicrotask(() => this.emitFrame({
+            type: 'response',
+            id: frame.id,
+            command: 'get_subagent_messages',
+            success: true,
+            data: {
+              sessionFile: typeof frame.sessionFile === 'string' ? frame.sessionFile : `D:/sessions/${subagentId}.jsonl`,
+              fromByte: typeof frame.fromByte === 'number' ? frame.fromByte : 0,
+              nextByte: 100,
+              reset: false,
+              entries: this.subagentEntries.get(subagentId) ?? [],
+              messages: [],
             },
           }));
         }
@@ -1043,6 +1080,77 @@ describe('OmpRpcBackend Todo bridge', () => {
 
     await waitFor(() => backend.getOmpTodoState().reminder?.attempt === 1);
     expect(backend.getOmpTodoState().reminder?.todos).toEqual([{ content: 'finish', status: 'pending' }]);
+    backend.destroy();
+  });
+
+  it('subscribes to OMP subagents and hydrates read-only subagent Todo phases from transcripts', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children);
+    const subagentTodo: OmpTodoPhase = {
+      name: 'Worker',
+      tasks: [{ content: 'Inspect protocol', status: 'completed' }],
+    };
+    child.subagents = [
+      {
+        id: 'sub-1',
+        index: 0,
+        agent: 'reviewer',
+        agentSource: 'project',
+        description: 'Protocol reviewer',
+        status: 'running',
+        task: 'Review subagent Todo bridge',
+        assignment: 'Check protocol coverage',
+        sessionFile: 'D:/sessions/sub-1.jsonl',
+        lastUpdate: 123,
+      },
+    ];
+    child.subagentEntries.set('sub-1', [
+      {
+        type: 'message',
+        message: {
+          role: 'toolResult',
+          toolName: 'todo',
+          details: { phases: [subagentTodo] },
+        },
+      },
+    ]);
+
+    child.emitFrame({
+      type: 'subagent_progress',
+      payload: {
+        index: 0,
+        agent: 'reviewer',
+        agentSource: 'project',
+        task: 'Review subagent Todo bridge',
+        assignment: 'Check protocol coverage',
+        sessionFile: 'D:/sessions/sub-1.jsonl',
+        progress: {
+          id: 'sub-1',
+          status: 'running',
+          currentTool: 'todo',
+          requests: 2,
+          tokens: 1500,
+        },
+      },
+    });
+    await waitFor(() => backend.getOmpTodoState().subagents[0]?.progress?.currentTool === 'todo');
+
+    await (backend as any).refreshOmpSubagents();
+    await waitFor(() => child.frames.some((frame) => frame.type === 'set_subagent_subscription'));
+    expect(child.frames.some((frame) => frame.type === 'get_subagent_messages')).toBe(true);
+    expect(backend.getOmpTodoState().subagents[0]?.todoPhases).toEqual([subagentTodo]);
+
+    child.emitFrame({
+      type: 'subagent_lifecycle',
+      payload: {
+        id: 'sub-1',
+        index: 0,
+        agent: 'reviewer',
+        agentSource: 'project',
+        status: 'completed',
+      },
+    });
+    await waitFor(() => backend.getOmpTodoState().subagents.length === 0);
     backend.destroy();
   });
 });

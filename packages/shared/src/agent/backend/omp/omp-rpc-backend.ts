@@ -58,7 +58,13 @@ import {
   parseOmpSetTodosResponseData,
   parseOmpSessionState,
   parseOmpSessionStats,
+  parseOmpSubagentFrame,
+  parseOmpSubagentMessagesResponseData,
+  parseOmpSubagentsResponseData,
   parseOmpTodoEvent,
+  extractOmpTodoPhasesFromTranscriptEntries,
+  type OmpSubagentFrame,
+  type OmpSubagentSnapshot,
   type OmpTodoPhase,
   type OmpRpcAvailableSlashCommand,
   type OmpRpcBranchMessage,
@@ -187,6 +193,8 @@ export class OmpRpcBackend extends BaseAgent {
   private todoState: OmpTodoState = createOmpTodoState();
   private todoRefresh: Promise<OmpTodoState> | null = null;
   private todoWrite: Promise<OmpTodoState> | null = null;
+  private subagentRefresh: Promise<void> | null = null;
+  private subagentRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private availableCommands: OmpRpcAvailableSlashCommand[] = [];
   private controlStateUpdatedAt = Date.now();
   private remoteThinkingLevel: OmpThinkingLevel | null = null;
@@ -992,9 +1000,14 @@ export class OmpRpcBackend extends BaseAgent {
         this.scheduleTodoRefresh('Todo auto-clear');
       }
     }
+    const subagentFrame = parseOmpSubagentFrame(raw);
+    if (subagentFrame) {
+      this.applySubagentFrame(subagentFrame);
+      this.scheduleSubagentRefresh('subagent frame');
+    }
     const adapted = this.adapter.adaptFrame(raw);
     if (adapted.unknownFrameType) {
-      const shouldLog = !todoEvent && this.diagnostics.recordUnknownFrame(adapted.unknownFrameType, raw);
+      const shouldLog = !todoEvent && !subagentFrame && this.diagnostics.recordUnknownFrame(adapted.unknownFrameType, raw);
       if (shouldLog) {
         this.debug(
           `Ignoring unknown OMP frame ${adapted.unknownFrameType} with keys: ${Object.keys(raw).sort().join(', ')}`,
@@ -1174,6 +1187,10 @@ export class OmpRpcBackend extends BaseAgent {
     this.clearReadyTimer();
     this.stdoutReader?.close();
     this.stdoutReader = null;
+    if (this.subagentRefreshTimer) {
+      clearTimeout(this.subagentRefreshTimer);
+      this.subagentRefreshTimer = null;
+    }
 
     const child = this.child;
     this.child = null;
@@ -1183,6 +1200,7 @@ export class OmpRpcBackend extends BaseAgent {
     this.readySyncGeneration = null;
     this.sessionState = null;
     this.availableCommands = [];
+    this.subagentRefresh = null;
     this.updateRuntimeState({ type: 'unavailable', error: 'OMP runtime is not connected' });
     this.updateTodoState({ type: 'unavailable', error: 'OMP runtime is not connected' });
     this.remoteThinkingLevel = null;
@@ -1240,6 +1258,9 @@ export class OmpRpcBackend extends BaseAgent {
       this.resolveReady();
       setTimeout(() => {
         void this.refreshAvailableCommandsForReady(generation, child);
+      }, 0);
+      setTimeout(() => {
+        void this.refreshSubagentsForReady(generation, child);
       }, 0);
     }).catch((error) => {
       if (generation !== this.processGeneration || child !== this.child) return;
@@ -1377,6 +1398,152 @@ export class OmpRpcBackend extends BaseAgent {
       message: prepared.message,
       ...(prepared.images ? { images: prepared.images } : {}),
     };
+  }
+
+  private async refreshSubagentsForReady(
+    generation: number,
+    child: ChildProcessWithoutNullStreams,
+  ): Promise<void> {
+    try {
+      await this.send({ type: 'set_subagent_subscription', level: 'progress' });
+      if (generation !== this.processGeneration || child !== this.child) return;
+      await this.refreshOmpSubagents(generation, child);
+    } catch (error) {
+      if (generation !== this.processGeneration || child !== this.child) return;
+      this.debug(`OMP subagent discovery failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async refreshOmpSubagents(
+    generation = this.processGeneration,
+    child = this.child,
+  ): Promise<void> {
+    if (!child || generation !== this.processGeneration || child !== this.child) return;
+    if (this.subagentRefresh) return this.subagentRefresh;
+
+    let refresh!: Promise<void>;
+    refresh = (async () => {
+      try {
+        const data = await this.send({ type: 'get_subagents' });
+        if (generation !== this.processGeneration || child !== this.child) return;
+        const parsed = parseOmpSubagentsResponseData(data);
+        if (!parsed) {
+          this.debug('OMP get_subagents returned an invalid subagent list');
+          return;
+        }
+
+        const hydrated = await Promise.all(parsed.subagents.map((subagent) => (
+          this.hydrateSubagentTodos(subagent, generation, child)
+        )));
+        if (generation !== this.processGeneration || child !== this.child) return;
+        this.updateTodoState({ type: 'subagents_snapshot', subagents: hydrated });
+      } catch (error) {
+        if (generation !== this.processGeneration || child !== this.child) return;
+        this.debug(`OMP subagent refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        if (this.subagentRefresh === refresh) this.subagentRefresh = null;
+      }
+    })();
+
+    this.subagentRefresh = refresh;
+    return refresh;
+  }
+
+  private async hydrateSubagentTodos(
+    subagent: OmpSubagentSnapshot,
+    generation: number,
+    child: ChildProcessWithoutNullStreams,
+  ): Promise<OmpSubagentSnapshot> {
+    if (!subagent.sessionFile) return this.mergeSubagentSnapshot(subagent);
+
+    try {
+      const data = await this.send({
+        type: 'get_subagent_messages',
+        subagentId: subagent.id,
+      });
+      if (generation !== this.processGeneration || child !== this.child) return this.mergeSubagentSnapshot(subagent);
+      const parsed = parseOmpSubagentMessagesResponseData(data);
+      if (!parsed) return this.mergeSubagentSnapshot(subagent);
+      const todoPhases = extractOmpTodoPhasesFromTranscriptEntries(parsed.entries);
+      return this.mergeSubagentSnapshot({
+        ...subagent,
+        ...(todoPhases ? { todoPhases } : {}),
+      });
+    } catch (error) {
+      if (generation === this.processGeneration && child === this.child) {
+        this.debug(`OMP subagent Todo transcript read failed for ${subagent.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return this.mergeSubagentSnapshot(subagent);
+    }
+  }
+
+  private mergeSubagentSnapshot(next: OmpSubagentSnapshot): OmpSubagentSnapshot {
+    const existing = this.todoState.subagents.find((subagent) => subagent.id === next.id);
+    return {
+      ...next,
+      todoPhases: next.todoPhases ?? existing?.todoPhases,
+    };
+  }
+
+  private applySubagentFrame(frame: OmpSubagentFrame): void {
+    if (frame.type === 'subagent_lifecycle') {
+      if (frame.payload.status !== 'started') {
+        this.updateTodoState({ type: 'subagent_remove', id: frame.payload.id });
+        return;
+      }
+
+      const existing = this.todoState.subagents.find((subagent) => subagent.id === frame.payload.id);
+      this.updateTodoState({
+        type: 'subagent_upsert',
+        subagent: this.mergeSubagentSnapshot({
+          id: frame.payload.id,
+          index: frame.payload.index,
+          agent: frame.payload.agent,
+          agentSource: frame.payload.agentSource,
+          description: frame.payload.description ?? existing?.description,
+          status: 'running',
+          task: existing?.task,
+          assignment: existing?.assignment,
+          sessionFile: frame.payload.sessionFile ?? existing?.sessionFile,
+          parentToolCallId: frame.payload.parentToolCallId ?? existing?.parentToolCallId,
+          lastUpdate: Date.now(),
+          progress: existing?.progress,
+        }),
+      });
+      return;
+    }
+
+    const progress = frame.payload.progress;
+    const existing = this.todoState.subagents.find((subagent) => subagent.id === progress.id);
+    this.updateTodoState({
+      type: 'subagent_upsert',
+      subagent: this.mergeSubagentSnapshot({
+        id: progress.id,
+        index: frame.payload.index,
+        agent: frame.payload.agent,
+        agentSource: frame.payload.agentSource,
+        description: progress.description ?? existing?.description,
+        status: progress.status,
+        task: frame.payload.task,
+        assignment: frame.payload.assignment,
+        sessionFile: frame.payload.sessionFile ?? existing?.sessionFile,
+        parentToolCallId: frame.payload.parentToolCallId ?? existing?.parentToolCallId,
+        lastUpdate: Date.now(),
+        progress,
+      }),
+    });
+  }
+
+  private scheduleSubagentRefresh(reason: string): void {
+    if (!this.child || this.subagentRefresh || this.subagentRefreshTimer) return;
+    const generation = this.processGeneration;
+    const child = this.child;
+    this.subagentRefreshTimer = setTimeout(() => {
+      this.subagentRefreshTimer = null;
+      void this.refreshOmpSubagents(generation, child).catch((error) => {
+        this.debug(`OMP subagent refresh failed after ${reason}: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }, 250);
   }
 
   private async refreshAvailableCommandsForReady(

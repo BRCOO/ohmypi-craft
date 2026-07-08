@@ -1,5 +1,7 @@
 import * as React from 'react'
 import {
+  Activity,
+  Bot,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -30,6 +32,8 @@ import { OmpTodoMarkdownImportDialog } from './OmpTodoMarkdownImportDialog'
 import type {
   OmpTodoMutationDto,
   OmpTodoPhaseDto,
+  OmpSubagentSnapshotDto,
+  OmpSubagentStatusDto,
   OmpTodoStateDto,
   OmpTodoStatusDto,
 } from '../../../shared/types'
@@ -45,6 +49,14 @@ const STATUS_LABEL: Record<OmpTodoStatusDto, string> = {
   in_progress: 'Now',
   completed: 'Done',
   abandoned: 'Dropped',
+}
+
+const SUBAGENT_STATUS_LABEL: Record<OmpSubagentStatusDto, string> = {
+  pending: 'Pending',
+  running: 'Running',
+  completed: 'Done',
+  failed: 'Failed',
+  aborted: 'Aborted',
 }
 
 function actionableCount(phases: OmpTodoPhaseDto[]): { done: number; total: number } {
@@ -66,6 +78,11 @@ function currentTask(phases: OmpTodoPhaseDto[]): string | undefined {
     if (task) return task.content
   }
   return undefined
+}
+
+function subagentTodoCount(subagents: OmpSubagentSnapshotDto[]): { done: number; total: number } {
+  const phases = subagents.flatMap(subagent => subagent.todoPhases ?? [])
+  return actionableCount(phases)
 }
 
 function hasHiddenMetadata(phases: OmpTodoPhaseDto[]): boolean {
@@ -102,6 +119,155 @@ function statusDotClass(status: OmpTodoStatusDto): string {
   }
 }
 
+function subagentStatusClass(status: OmpSubagentStatusDto): string {
+  switch (status) {
+    case 'running':
+      return 'border-blue-300/25 bg-blue-500/10 text-blue-100'
+    case 'completed':
+      return 'border-violet-300/20 bg-violet-500/10 text-violet-100'
+    case 'failed':
+    case 'aborted':
+      return 'border-destructive/20 bg-destructive/10 text-destructive'
+    case 'pending':
+    default:
+      return 'border-foreground/10 bg-foreground/[0.03] text-muted-foreground'
+  }
+}
+
+function formatCompactNumber(value: number | undefined): string | undefined {
+  if (value === undefined) return undefined
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`
+  return String(value)
+}
+
+function SubagentTodoPreview({ phases }: { phases: OmpTodoPhaseDto[] }) {
+  return (
+    <div className="space-y-1.5">
+      {phases.map((phase, phaseIndex) => (
+        <div key={`${phaseIndex}-${phase.name}`} className="rounded-lg border border-violet-300/10 bg-background/[0.04] px-2 py-2">
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <span className="truncate text-[11px] font-medium text-violet-100/85">{phase.name}</span>
+            <span className="shrink-0 text-[10px] text-muted-foreground">
+              {phase.tasks.filter(task => task.status === 'completed').length}/{phase.tasks.length}
+            </span>
+          </div>
+          <div className="space-y-1">
+            {phase.tasks.length === 0 ? (
+              <div className="text-[11px] text-muted-foreground">Empty phase</div>
+            ) : (
+              phase.tasks.slice(0, 4).map((task, taskIndex) => (
+                <div
+                  key={`${phaseIndex}-${taskIndex}-${task.content}`}
+                  className={cn('flex items-center gap-2 rounded-md border px-2 py-1 text-[11px]', taskStatusClass(task.status))}
+                >
+                  <span className={cn('size-1.5 rounded-full', statusDotClass(task.status))} />
+                  <span className="min-w-0 flex-1 truncate" title={task.content}>{task.content}</span>
+                  <span className="shrink-0 text-[9px] uppercase tracking-wide text-muted-foreground">
+                    {STATUS_LABEL[task.status]}
+                  </span>
+                </div>
+              ))
+            )}
+            {phase.tasks.length > 4 && (
+              <div className="px-2 text-[10px] text-muted-foreground">+{phase.tasks.length - 4} more</div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function OmpSubagentsSection({ subagents }: { subagents: OmpSubagentSnapshotDto[] }) {
+  if (subagents.length === 0) return null
+
+  return (
+    <div className="rounded-xl border border-violet-300/10 bg-violet-500/[0.035] p-2">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="flex size-6 items-center justify-center rounded-lg bg-violet-400/10 text-violet-100 ring-1 ring-violet-300/15">
+          <Bot className="size-3.5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-semibold uppercase tracking-[0.14em] text-violet-100/80">Subagents</div>
+          <div className="text-[11px] text-muted-foreground">Read-only OMP subagent work, kept separate from the main Todo list</div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {subagents.map((subagent) => {
+          const phases = subagent.todoPhases ?? []
+          const progress = subagent.progress
+          const compactTokens = formatCompactNumber(progress?.tokens)
+          const compactRequests = formatCompactNumber(progress?.requests)
+          const recentOutput = progress?.recentOutput?.filter(Boolean).slice(-2) ?? []
+          return (
+            <div key={subagent.id} className="rounded-xl border border-blue-300/10 bg-[#0B0D1D]/70 p-2">
+              <div className="flex items-start gap-2">
+                <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500/15 to-violet-500/20 text-blue-100 ring-1 ring-blue-300/15">
+                  <Activity className="size-3.5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-xs font-medium text-blue-100/90">
+                      {subagent.description || subagent.agent}
+                    </span>
+                    <span className={cn('shrink-0 rounded-full border px-1.5 py-0.5 text-[10px]', subagentStatusClass(subagent.status))}>
+                      {SUBAGENT_STATUS_LABEL[subagent.status]}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 truncate text-[11px] text-muted-foreground" title={subagent.assignment || subagent.task}>
+                    {subagent.assignment || subagent.task || subagent.agent}
+                  </div>
+                  {(progress?.currentTool || compactTokens || compactRequests) && (
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-blue-100/60">
+                      {progress?.currentTool && (
+                        <span className="rounded-full bg-blue-400/10 px-1.5 py-0.5">
+                          tool: {progress.currentTool}
+                        </span>
+                      )}
+                      {compactRequests && (
+                        <span className="rounded-full bg-violet-400/10 px-1.5 py-0.5">
+                          {compactRequests} requests
+                        </span>
+                      )}
+                      {compactTokens && (
+                        <span className="rounded-full bg-violet-400/10 px-1.5 py-0.5">
+                          {compactTokens} tokens
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {phases.length > 0 ? (
+                <div className="mt-2">
+                  <SubagentTodoPreview phases={phases} />
+                </div>
+              ) : (
+                <div className="mt-2 rounded-lg border border-dashed border-violet-300/10 px-2 py-2 text-[11px] text-muted-foreground">
+                  No Todo snapshot found in this subagent transcript yet.
+                </div>
+              )}
+
+              {recentOutput.length > 0 && (
+                <div className="mt-2 space-y-1 rounded-lg bg-foreground/[0.025] px-2 py-2">
+                  {recentOutput.map((line, index) => (
+                    <div key={`${subagent.id}-out-${index}`} className="truncate text-[10px] text-muted-foreground" title={line}>
+                      {line}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps) {
   const [expanded, setExpanded] = React.useState(false)
   const [importOpen, setImportOpen] = React.useState(false)
@@ -109,6 +275,8 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
   const progress = actionableCount(state.phases)
   const activeTask = currentTask(state.phases)
   const hasTodos = state.phases.some(phase => phase.tasks.length > 0)
+  const subagents = state.subagents ?? []
+  const subagentProgress = subagentTodoCount(subagents)
 
   const runMutation = React.useCallback(async (mutation: OmpTodoMutationDto) => {
     try {
@@ -215,6 +383,10 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
                   ? `Now: ${activeTask}`
                   : hasTodos
                     ? `${progress.done}/${progress.total} actionable tasks complete`
+                    : subagents.length > 0
+                      ? `${subagents.length} OMP subagent${subagents.length === 1 ? '' : 's'} active${
+                          subagentProgress.total > 0 ? ` · ${subagentProgress.done}/${subagentProgress.total} subagent tasks done` : ''
+                        }`
                     : state.available
                       ? 'No OMP Todo items yet'
                       : 'Waiting for OMP Todo state'}
@@ -361,6 +533,8 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
                 </div>
               ))
             )}
+
+            <OmpSubagentsSection subagents={subagents} />
           </div>
         )}
       </div>

@@ -81,6 +81,7 @@ function createOmpTodoAgent(calls: string[]) {
     available: true,
     sessionId: 'omp-session-1',
     phases: [],
+    subagents: [],
     revision: 1,
     updatedAt: 1,
   }

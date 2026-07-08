@@ -170,6 +170,68 @@ export interface OmpTodoPhaseDto {
   tasks: OmpTodoItemDto[]
 }
 
+export type OmpSubagentSourceDto = 'bundled' | 'user' | 'project'
+export type OmpSubagentStatusDto = 'pending' | 'running' | 'completed' | 'failed' | 'aborted'
+
+export interface OmpSubagentRecentToolDto {
+  tool: string
+  args: string
+  endMs: number
+}
+
+export interface OmpSubagentProgressDto {
+  id: string
+  index?: number
+  agent?: string
+  agentSource?: OmpSubagentSourceDto
+  status: OmpSubagentStatusDto
+  task?: string
+  assignment?: string
+  description?: string
+  lastIntent?: string
+  currentTool?: string
+  currentToolArgs?: string
+  currentToolStartMs?: number
+  recentTools?: OmpSubagentRecentToolDto[]
+  recentOutput?: string[]
+  toolCount?: number
+  requests?: number
+  tokens?: number
+  contextTokens?: number
+  contextWindow?: number
+  cost?: number
+  durationMs?: number
+  modelOverride?: string | string[]
+  resolvedModel?: string
+  retryState?: {
+    attempt: number
+    maxAttempts: number
+    delayMs: number
+    errorMessage: string
+    startedAtMs: number
+  }
+  retryFailure?: {
+    attempt: number
+    errorMessage: string
+  }
+}
+
+export interface OmpSubagentSnapshotDto {
+  id: string
+  index: number
+  agent: string
+  agentSource: OmpSubagentSourceDto
+  description?: string
+  status: OmpSubagentStatusDto
+  task?: string
+  assignment?: string
+  sessionFile?: string
+  lastUpdate: number
+  progress?: OmpSubagentProgressDto
+  parentToolCallId?: string
+  todoPhases?: OmpTodoPhaseDto[]
+}
+
 export interface OmpTodoReminderDto {
   todos: OmpTodoItemDto[]
   attempt: number
@@ -180,6 +242,7 @@ export interface OmpTodoStateDto {
   available: boolean
   sessionId?: string
   phases: OmpTodoPhaseDto[]
+  subagents: OmpSubagentSnapshotDto[]
   revision: number
   pendingAction?: 'refresh' | 'write'
   error?: string

@@ -927,17 +927,45 @@ function toOmpControlStateDto(state: OmpControlState): OmpControlStateDto {
 }
 
 function toOmpTodoStateDto(state: OmpTodoState): OmpTodoStateDto {
+  const toTodoPhaseDto = (phase: OmpTodoState['phases'][number]) => ({
+    name: phase.name,
+    tasks: phase.tasks.map((task) => ({
+      content: task.content,
+      status: task.status,
+      details: task.details,
+      notes: task.notes ? [...task.notes] : undefined,
+    })),
+  })
+
   return {
     available: state.available,
     sessionId: state.sessionId,
-    phases: state.phases.map((phase) => ({
-      name: phase.name,
-      tasks: phase.tasks.map((task) => ({
-        content: task.content,
-        status: task.status,
-        details: task.details,
-        notes: task.notes ? [...task.notes] : undefined,
-      })),
+    phases: state.phases.map(toTodoPhaseDto),
+    subagents: state.subagents.map((subagent) => ({
+      id: subagent.id,
+      index: subagent.index,
+      agent: subagent.agent,
+      agentSource: subagent.agentSource,
+      description: subagent.description,
+      status: subagent.status,
+      task: subagent.task,
+      assignment: subagent.assignment,
+      sessionFile: subagent.sessionFile,
+      lastUpdate: subagent.lastUpdate,
+      progress: subagent.progress
+        ? {
+            ...subagent.progress,
+            recentTools: subagent.progress.recentTools?.map((tool) => ({ ...tool })),
+            recentOutput: subagent.progress.recentOutput ? [...subagent.progress.recentOutput] : undefined,
+            modelOverride: Array.isArray(subagent.progress.modelOverride)
+              ? [...subagent.progress.modelOverride]
+              : subagent.progress.modelOverride,
+            retryState: subagent.progress.retryState ? { ...subagent.progress.retryState } : undefined,
+            retryFailure: subagent.progress.retryFailure ? { ...subagent.progress.retryFailure } : undefined,
+          }
+        : undefined,
+      parentToolCallId: subagent.parentToolCallId,
+      todoPhases: subagent.todoPhases?.map(toTodoPhaseDto),
     })),
     revision: state.revision,
     pendingAction: state.pendingAction,

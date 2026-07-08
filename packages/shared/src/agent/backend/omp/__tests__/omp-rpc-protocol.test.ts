@@ -22,6 +22,11 @@ import {
   parseOmpSetTodosResponseData,
   parseOmpSessionState,
   parseOmpSessionStats,
+  parseOmpSubagentFrame,
+  parseOmpSubagentMessagesResponseData,
+  parseOmpSubagentSnapshot,
+  parseOmpSubagentsResponseData,
+  extractOmpTodoPhasesFromTranscriptEntries,
   parseOmpTodoEvent,
   parseOmpTodoItem,
   parseOmpTodoPhase,
@@ -251,6 +256,99 @@ describe('OMP RPC protocol parsers', () => {
     });
     expect(parseOmpTodoEvent({ type: 'todo_auto_clear' })).toEqual({ type: 'todo_auto_clear' });
     expect(parseOmpTodoEvent({ type: 'todo_reminder', todos: [item], attempt: -1, maxAttempts: 3 })).toBeNull();
+  });
+
+  it('parses OMP subagent snapshots, progress frames, and transcript Todo snapshots', () => {
+    const phase = {
+      name: 'Subagent batch',
+      tasks: [{ content: 'Inspect worker', status: 'completed' as const }],
+    };
+    const snapshot = {
+      id: 'sub-1',
+      index: 0,
+      agent: 'reviewer',
+      agentSource: 'project' as const,
+      description: 'Reviewer',
+      status: 'running' as const,
+      task: 'Review Todo bridge',
+      assignment: 'Look for missing protocol pieces',
+      sessionFile: 'D:/sessions/sub-1.jsonl',
+      lastUpdate: 123,
+      progress: {
+        id: 'sub-1',
+        status: 'running' as const,
+        currentTool: 'todo',
+        recentOutput: ['checking'],
+        requests: 2,
+        tokens: 1500,
+      },
+      todoPhases: [phase],
+    };
+    expect(parseOmpSubagentSnapshot(snapshot)).toEqual(snapshot);
+    expect(parseOmpSubagentsResponseData({ subagents: [snapshot] })).toEqual({ subagents: [snapshot] });
+    expect(parseOmpSubagentSnapshot({ ...snapshot, status: 'started' })).toBeNull();
+
+    expect(parseOmpSubagentFrame({
+      type: 'subagent_progress',
+      payload: {
+        index: 0,
+        agent: 'reviewer',
+        agentSource: 'project',
+        task: 'Review Todo bridge',
+        assignment: 'Look for missing protocol pieces',
+        sessionFile: 'D:/sessions/sub-1.jsonl',
+        progress: {
+          id: 'sub-1',
+          status: 'running',
+          currentTool: 'read',
+        },
+      },
+    })).toEqual({
+      type: 'subagent_progress',
+      payload: {
+        index: 0,
+        agent: 'reviewer',
+        agentSource: 'project',
+        task: 'Review Todo bridge',
+        assignment: 'Look for missing protocol pieces',
+        sessionFile: 'D:/sessions/sub-1.jsonl',
+        detached: undefined,
+        parentToolCallId: undefined,
+        progress: {
+          id: 'sub-1',
+          status: 'running',
+          currentTool: 'read',
+        },
+      },
+    });
+
+    const transcript = {
+      sessionFile: 'D:/sessions/sub-1.jsonl',
+      fromByte: 0,
+      nextByte: 12,
+      reset: false,
+      entries: [
+        {
+          type: 'message',
+          message: {
+            role: 'toolResult',
+            toolName: 'todo',
+            details: { phases: [phase] },
+          },
+        },
+      ],
+      messages: [],
+    };
+    expect(parseOmpSubagentMessagesResponseData(transcript)).toEqual(transcript);
+    expect(extractOmpTodoPhasesFromTranscriptEntries(transcript.entries)).toEqual([phase]);
+    expect(extractOmpTodoPhasesFromTranscriptEntries([
+      {
+        type: 'custom',
+        customType: 'user_todo_edit',
+        data: { phases: [{ name: 'Manual', tasks: [] }] },
+      },
+      ...transcript.entries,
+    ])).toEqual([phase]);
   });
 
   it('parses available slash commands while preserving source metadata', () => {
