@@ -26,6 +26,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
+import { OmpTodoMarkdownImportDialog } from './OmpTodoMarkdownImportDialog'
 import type {
   OmpTodoMutationDto,
   OmpTodoPhaseDto,
@@ -103,6 +104,7 @@ function statusDotClass(status: OmpTodoStatusDto): string {
 
 export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps) {
   const [expanded, setExpanded] = React.useState(false)
+  const [importOpen, setImportOpen] = React.useState(false)
   const disabled = isProcessing || !!state.pendingAction || !state.available
   const progress = actionableCount(state.phases)
   const activeTask = currentTask(state.phases)
@@ -175,24 +177,9 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
     }
   }, [sessionId])
 
-  const importMarkdown = React.useCallback(async () => {
-    const warning = hasHiddenMetadata(state.phases)
-      ? '\n\nCurrent Todos contain hidden details/notes. Markdown import will drop those fields.'
-      : ''
-    if (!window.confirm(`Importing Markdown will replace the current OMP Todo list.${warning}`)) return
-    const markdown = window.prompt('Paste OMP Todo Markdown')
-    if (markdown === null) return
-    try {
-      await window.electronAPI.sessionCommand(sessionId, {
-        type: 'importOmpTodosMarkdown',
-        expectedRevision: state.revision,
-        markdown,
-      })
-      toast.success('OMP Todos imported')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error))
-    }
-  }, [sessionId, state.phases, state.revision])
+  const openImportDialog = React.useCallback(() => {
+    setImportOpen(true)
+  }, [])
 
   return (
     <div className="px-3 pb-2">
@@ -255,7 +242,7 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
                   <ClipboardCopy className="size-4" />
                   Copy Markdown
                 </DropdownMenuItem>
-                <DropdownMenuItem disabled={disabled} onSelect={importMarkdown}>
+                <DropdownMenuItem disabled={disabled} onSelect={openImportDialog}>
                   <RotateCcw className="size-4" />
                   Import Markdown
                 </DropdownMenuItem>
@@ -312,7 +299,7 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
                         onClick={() => addTask(phaseIndex)}
                         className="w-full rounded-lg border border-dashed border-foreground/10 px-2 py-2 text-left text-xs text-muted-foreground hover:bg-foreground/[0.03] disabled:pointer-events-none disabled:opacity-50"
                       >
-                        Add the first task…
+                        Add the first task...
                       </button>
                     ) : (
                       phase.tasks.map((task, taskIndex) => (
@@ -377,6 +364,13 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
           </div>
         )}
       </div>
+      <OmpTodoMarkdownImportDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        sessionId={sessionId}
+        expectedRevision={state.revision}
+        hasHiddenMetadata={hasHiddenMetadata(state.phases)}
+      />
     </div>
   )
 }

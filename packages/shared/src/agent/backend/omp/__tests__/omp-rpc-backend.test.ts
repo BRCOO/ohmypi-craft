@@ -10,6 +10,7 @@ import {
   OmpRpcBackend,
   resolveOmpModelSelection,
 } from '../omp-rpc-backend.ts';
+import type { OmpTodoPhase } from '../omp-rpc-protocol.ts';
 
 class FakeChild extends EventEmitter {
   readonly stdin = new PassThrough();
@@ -1013,7 +1014,7 @@ describe('OmpRpcBackend Todo bridge', () => {
         ],
       },
     ]);
-    expect(backend.getOmpTodoState().phases).toEqual(setTodos.phases);
+    expect(backend.getOmpTodoState().phases).toEqual(setTodos.phases as OmpTodoPhase[]);
     backend.destroy();
   });
 

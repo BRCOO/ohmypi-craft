@@ -227,7 +227,7 @@ describe('OMP RPC protocol parsers', () => {
   it('parses OMP Todo phases, set_todos responses, and Todo events strictly', () => {
     const item = {
       content: 'Ship Todo card',
-      status: 'pending',
+      status: 'pending' as const,
       details: 'preserve me',
       notes: ['note'],
     };
