@@ -9,6 +9,8 @@ import {
   parseOmpBranchMessagesResponseData,
   parseOmpBranchResult,
   parseOmpCancellationResult,
+  parseOmpCompactionResult,
+  parseOmpContextUsage,
   parseOmpExportHtmlResponseData,
   parseOmpHandoffResult,
   parseOmpMessagesResponseData,
@@ -16,7 +18,9 @@ import {
   parseOmpPromptResult,
   parseOmpQueueControlState,
   parseOmpRpcResponse,
+  parseOmpRuntimeEvent,
   parseOmpSessionState,
+  parseOmpSessionStats,
 } from '../omp-rpc-protocol.ts';
 
 const validState = {
@@ -89,12 +93,98 @@ describe('OMP RPC protocol parsers', () => {
   });
 
   it('validates session state while preserving future fields', () => {
-    expect(parseOmpSessionState({ ...validState, futureField: 'kept' })).toEqual({
+    expect(parseOmpSessionState({
       ...validState,
+      contextUsage: { tokens: 4000, contextWindow: 10000, percent: 40 },
+      futureField: 'kept',
+    })).toEqual({
+      ...validState,
+      contextUsage: { tokens: 4000, contextWindow: 10000, percent: 40 },
       futureField: 'kept',
       sessionFile: undefined,
       sessionName: undefined,
     });
+  });
+
+  it('parses context usage, statistics, and compaction results', () => {
+    expect(parseOmpContextUsage({ tokens: 4000, contextWindow: 10000, percent: 40 })).toEqual({
+      tokens: 4000,
+      contextWindow: 10000,
+      percent: 40,
+    });
+    expect(parseOmpContextUsage({ tokens: -1, contextWindow: 10000, percent: 0 })).toBeNull();
+
+    const stats = {
+      sessionId: 'session-1',
+      sessionFile: 'D:/sessions/one.jsonl',
+      userMessages: 2,
+      assistantMessages: 2,
+      toolCalls: 3,
+      toolResults: 3,
+      totalMessages: 10,
+      tokens: {
+        input: 100,
+        output: 50,
+        reasoning: 25,
+        cacheRead: 30,
+        cacheWrite: 10,
+        total: 215,
+      },
+      premiumRequests: 1,
+      cost: 0.125,
+    };
+    expect(parseOmpSessionStats(stats)).toEqual(stats);
+    expect(parseOmpSessionStats({ ...stats, tokens: { ...stats.tokens, total: '215' } })).toBeNull();
+
+    const compaction = {
+      summary: 'summary',
+      shortSummary: 'short',
+      firstKeptEntryId: 'entry-2',
+      tokensBefore: 9000,
+      details: { strategy: 'snapcompact' },
+      preserveData: { key: true },
+    };
+    expect(parseOmpCompactionResult(compaction)).toEqual(compaction);
+    expect(parseOmpCompactionResult({ ...compaction, tokensBefore: -1 })).toBeNull();
+  });
+
+  it('parses compaction, retry, and fallback runtime events', () => {
+    expect(parseOmpRuntimeEvent({
+      type: 'auto_compaction_start',
+      reason: 'threshold',
+      action: 'snapcompact',
+    })).toEqual({
+      type: 'auto_compaction_start',
+      reason: 'threshold',
+      action: 'snapcompact',
+    });
+    expect(parseOmpRuntimeEvent({
+      type: 'auto_retry_start',
+      attempt: 2,
+      maxAttempts: 4,
+      delayMs: 1500,
+      errorMessage: 'rate limited',
+      errorId: 429,
+    })).toEqual({
+      type: 'auto_retry_start',
+      attempt: 2,
+      maxAttempts: 4,
+      delayMs: 1500,
+      errorMessage: 'rate limited',
+      errorId: 429,
+    });
+    expect(parseOmpRuntimeEvent({
+      type: 'retry_fallback_applied',
+      from: 'provider/a',
+      to: 'provider/b',
+      role: 'default',
+    })).toEqual({
+      type: 'retry_fallback_applied',
+      from: 'provider/a',
+      to: 'provider/b',
+      role: 'default',
+    });
+    expect(parseOmpRuntimeEvent({ type: 'auto_retry_start', attempt: '2' })).toBeNull();
   });
 
   it('rejects session state with a missing or empty session id', () => {

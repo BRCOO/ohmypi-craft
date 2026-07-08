@@ -83,9 +83,76 @@ export interface OmpQueueControlStateDto {
   queuedMessageCount: number
 }
 
+export interface OmpContextUsageDto {
+  tokens: number
+  contextWindow: number
+  percent: number
+}
+
+export interface OmpSessionStatsDto {
+  sessionFile?: string
+  sessionId: string
+  userMessages: number
+  assistantMessages: number
+  toolCalls: number
+  toolResults: number
+  totalMessages: number
+  tokens: {
+    input: number
+    output: number
+    reasoning: number
+    cacheRead: number
+    cacheWrite: number
+    total: number
+  }
+  premiumRequests: number
+  cost: number
+}
+
+export interface OmpCompactionResultDto {
+  summary: string
+  shortSummary?: string
+  firstKeptEntryId: string
+  tokensBefore: number
+}
+
+export interface OmpRuntimeStateDto {
+  contextUsage?: OmpContextUsageDto
+  stats?: OmpSessionStatsDto
+  autoCompactionEnabled?: boolean
+  autoRetryEnabled?: boolean
+  compaction: {
+    phase: 'idle' | 'running' | 'succeeded' | 'failed' | 'aborted' | 'skipped'
+    manual?: boolean
+    reason?: 'threshold' | 'overflow' | 'idle' | 'incomplete'
+    action?: 'context-full' | 'handoff' | 'shake' | 'snapcompact'
+    result?: OmpCompactionResultDto
+    willRetry?: boolean
+    error?: string
+  }
+  retry: {
+    phase: 'idle' | 'waiting' | 'succeeded' | 'failed' | 'cancelled'
+    attempt?: number
+    maxAttempts?: number
+    delayMs?: number
+    error?: string
+  }
+  fallback?: {
+    phase: 'applied' | 'succeeded'
+    from?: string
+    to: string
+    role: string
+  }
+  pendingAction?: 'refresh' | 'compact' | 'set-auto-compaction' | 'set-auto-retry' | 'abort-retry'
+  error?: string
+  available: boolean
+  updatedAt: number
+}
+
 export interface OmpControlStateDto {
   availableCommands: OmpAvailableCommandDto[]
   queue: OmpQueueControlStateDto
+  runtime: OmpRuntimeStateDto
   updatedAt: number
 }
 
@@ -294,6 +361,11 @@ export type SessionCommand =
   | { type: 'setOmpSteeringMode'; mode: OmpQueueMode }
   | { type: 'setOmpFollowUpMode'; mode: OmpQueueMode }
   | { type: 'setOmpInterruptMode'; mode: OmpInterruptMode }
+  | { type: 'refreshOmpRuntime' }
+  | { type: 'compactOmpRuntime' }
+  | { type: 'setOmpAutoCompaction'; enabled: boolean }
+  | { type: 'setOmpAutoRetry'; enabled: boolean }
+  | { type: 'abortOmpRetry' }
   | { type: 'updateWorkingDirectory'; dir: string }
   | { type: 'setSources'; sourceSlugs: string[] }
   | { type: 'setLabels'; labels: string[] }

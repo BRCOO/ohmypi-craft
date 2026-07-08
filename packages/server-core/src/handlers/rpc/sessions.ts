@@ -340,6 +340,16 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
         return sessionManager.setOmpFollowUpMode(sessionId, command.mode)
       case 'setOmpInterruptMode':
         return sessionManager.setOmpInterruptMode(sessionId, command.mode)
+      case 'refreshOmpRuntime':
+        return sessionManager.refreshOmpRuntime(sessionId)
+      case 'compactOmpRuntime':
+        return sessionManager.compactOmpRuntime(sessionId)
+      case 'setOmpAutoCompaction':
+        return sessionManager.setOmpAutoCompaction(sessionId, command.enabled)
+      case 'setOmpAutoRetry':
+        return sessionManager.setOmpAutoRetry(sessionId, command.enabled)
+      case 'abortOmpRetry':
+        return sessionManager.abortOmpRetry(sessionId)
       case 'updateWorkingDirectory':
         return sessionManager.updateWorkingDirectory(sessionId, command.dir)
       case 'setSources':

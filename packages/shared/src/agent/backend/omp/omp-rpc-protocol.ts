@@ -77,6 +77,120 @@ export interface OmpRpcMessagesResponseData {
   messages: unknown[];
 }
 
+export interface OmpContextUsage {
+  tokens: number;
+  contextWindow: number;
+  percent: number;
+}
+
+export interface OmpSessionTokenUsage {
+  input: number;
+  output: number;
+  reasoning: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
+}
+
+export interface OmpSessionStats {
+  sessionFile?: string;
+  sessionId: string;
+  userMessages: number;
+  assistantMessages: number;
+  toolCalls: number;
+  toolResults: number;
+  totalMessages: number;
+  tokens: OmpSessionTokenUsage;
+  premiumRequests: number;
+  cost: number;
+}
+
+export interface OmpCompactionResult {
+  summary: string;
+  shortSummary?: string;
+  firstKeptEntryId: string;
+  tokensBefore: number;
+  details?: unknown;
+  preserveData?: Record<string, unknown>;
+}
+
+export type OmpCompactionReason = 'threshold' | 'overflow' | 'idle' | 'incomplete';
+export type OmpCompactionAction = 'context-full' | 'handoff' | 'shake' | 'snapcompact';
+
+export type OmpRuntimeEvent =
+  | {
+      type: 'auto_compaction_start';
+      reason: OmpCompactionReason;
+      action: OmpCompactionAction;
+    }
+  | {
+      type: 'auto_compaction_end';
+      action: OmpCompactionAction;
+      result?: OmpCompactionResult;
+      aborted: boolean;
+      willRetry: boolean;
+      errorMessage?: string;
+      skipped?: boolean;
+    }
+  | {
+      type: 'auto_retry_start';
+      attempt: number;
+      maxAttempts: number;
+      delayMs: number;
+      errorMessage: string;
+      errorId?: number;
+    }
+  | {
+      type: 'auto_retry_end';
+      success: boolean;
+      attempt: number;
+      finalError?: string;
+    }
+  | { type: 'retry_fallback_applied'; from: string; to: string; role: string }
+  | { type: 'retry_fallback_succeeded'; model: string; role: string };
+
+export type OmpCompactionPhase = 'idle' | 'running' | 'succeeded' | 'failed' | 'aborted' | 'skipped';
+export type OmpRetryPhase = 'idle' | 'waiting' | 'succeeded' | 'failed' | 'cancelled';
+export type OmpRuntimePendingAction =
+  | 'refresh'
+  | 'compact'
+  | 'set-auto-compaction'
+  | 'set-auto-retry'
+  | 'abort-retry';
+
+export interface OmpRuntimeState {
+  contextUsage?: OmpContextUsage;
+  stats?: OmpSessionStats;
+  autoCompactionEnabled?: boolean;
+  autoRetryEnabled?: boolean;
+  compaction: {
+    phase: OmpCompactionPhase;
+    manual?: boolean;
+    reason?: OmpCompactionReason;
+    action?: OmpCompactionAction;
+    result?: OmpCompactionResult;
+    willRetry?: boolean;
+    error?: string;
+  };
+  retry: {
+    phase: OmpRetryPhase;
+    attempt?: number;
+    maxAttempts?: number;
+    delayMs?: number;
+    error?: string;
+  };
+  fallback?: {
+    phase: 'applied' | 'succeeded';
+    from?: string;
+    to: string;
+    role: string;
+  };
+  pendingAction?: OmpRuntimePendingAction;
+  error?: string;
+  available: boolean;
+  updatedAt: number;
+}
+
 export interface OmpRpcAvailableCommandsUpdateFrame {
   type: 'available_commands_update';
   commands: OmpRpcAvailableSlashCommand[];
@@ -94,6 +208,7 @@ export interface OmpQueueControlState {
 export interface OmpControlState {
   availableCommands: OmpRpcAvailableSlashCommand[];
   queue: OmpQueueControlState;
+  runtime: OmpRuntimeState;
   updatedAt: number;
 }
 
@@ -118,6 +233,11 @@ export type OmpRpcCommand =
   | { type: 'set_session_name'; name: string }
   | { type: 'handoff'; customInstructions?: string }
   | { type: 'export_html'; outputPath?: string }
+  | { type: 'get_session_stats' }
+  | { type: 'compact'; customInstructions?: string }
+  | { type: 'set_auto_compaction'; enabled: boolean }
+  | { type: 'set_auto_retry'; enabled: boolean }
+  | { type: 'abort_retry' }
   | { type: 'set_model'; provider: string; modelId: string }
   | { type: 'set_thinking_level'; level: OmpThinkingLevel }
   | { type: 'set_steering_mode'; mode: OmpQueueMode }
@@ -164,6 +284,7 @@ export interface OmpRpcSessionState {
   messageCount: number;
   queuedMessageCount: number;
   todoPhases: unknown[];
+  contextUsage?: OmpContextUsage;
   [key: string]: unknown;
 }
 
@@ -199,12 +320,24 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+function isNonNegativeNumber(value: unknown): value is number {
+  return isFiniteNumber(value) && value >= 0;
+}
+
 function isQueueMode(value: unknown): value is OmpQueueMode {
   return value === 'all' || value === 'one-at-a-time';
 }
 
 function isInterruptMode(value: unknown): value is OmpInterruptMode {
   return value === 'immediate' || value === 'wait';
+}
+
+function isCompactionReason(value: unknown): value is OmpCompactionReason {
+  return value === 'threshold' || value === 'overflow' || value === 'idle' || value === 'incomplete';
+}
+
+function isCompactionAction(value: unknown): value is OmpCompactionAction {
+  return value === 'context-full' || value === 'handoff' || value === 'shake' || value === 'snapcompact';
 }
 
 function isAvailableSlashCommandSource(value: unknown): value is OmpRpcAvailableSlashCommandSource {
@@ -330,6 +463,167 @@ export function parseOmpMessagesResponseData(value: unknown): OmpRpcMessagesResp
   return { messages: raw.messages };
 }
 
+export function parseOmpContextUsage(value: unknown): OmpContextUsage | null {
+  const raw = asObject(value);
+  if (
+    !raw
+    || !isNonNegativeNumber(raw.tokens)
+    || !isNonNegativeNumber(raw.contextWindow)
+    || !isNonNegativeNumber(raw.percent)
+  ) {
+    return null;
+  }
+  return {
+    tokens: raw.tokens,
+    contextWindow: raw.contextWindow,
+    percent: raw.percent,
+  };
+}
+
+export function parseOmpSessionStats(value: unknown): OmpSessionStats | null {
+  const raw = asObject(value);
+  const tokens = asObject(raw?.tokens);
+  if (
+    !raw
+    || !tokens
+    || !isString(raw.sessionId)
+    || raw.sessionId.trim().length === 0
+    || (raw.sessionFile !== undefined && !isString(raw.sessionFile))
+    || !isNonNegativeNumber(raw.userMessages)
+    || !isNonNegativeNumber(raw.assistantMessages)
+    || !isNonNegativeNumber(raw.toolCalls)
+    || !isNonNegativeNumber(raw.toolResults)
+    || !isNonNegativeNumber(raw.totalMessages)
+    || !isNonNegativeNumber(tokens.input)
+    || !isNonNegativeNumber(tokens.output)
+    || !isNonNegativeNumber(tokens.reasoning)
+    || !isNonNegativeNumber(tokens.cacheRead)
+    || !isNonNegativeNumber(tokens.cacheWrite)
+    || !isNonNegativeNumber(tokens.total)
+    || !isNonNegativeNumber(raw.premiumRequests)
+    || !isNonNegativeNumber(raw.cost)
+  ) {
+    return null;
+  }
+  return {
+    sessionFile: raw.sessionFile as string | undefined,
+    sessionId: raw.sessionId,
+    userMessages: raw.userMessages,
+    assistantMessages: raw.assistantMessages,
+    toolCalls: raw.toolCalls,
+    toolResults: raw.toolResults,
+    totalMessages: raw.totalMessages,
+    tokens: {
+      input: tokens.input,
+      output: tokens.output,
+      reasoning: tokens.reasoning,
+      cacheRead: tokens.cacheRead,
+      cacheWrite: tokens.cacheWrite,
+      total: tokens.total,
+    },
+    premiumRequests: raw.premiumRequests,
+    cost: raw.cost,
+  };
+}
+
+export function parseOmpCompactionResult(value: unknown): OmpCompactionResult | null {
+  const raw = asObject(value);
+  if (
+    !raw
+    || !isString(raw.summary)
+    || !isString(raw.firstKeptEntryId)
+    || !isNonNegativeNumber(raw.tokensBefore)
+    || (raw.shortSummary !== undefined && !isString(raw.shortSummary))
+    || (raw.preserveData !== undefined && !asObject(raw.preserveData))
+  ) {
+    return null;
+  }
+  return {
+    summary: raw.summary,
+    shortSummary: raw.shortSummary as string | undefined,
+    firstKeptEntryId: raw.firstKeptEntryId,
+    tokensBefore: raw.tokensBefore,
+    details: raw.details,
+    preserveData: raw.preserveData as Record<string, unknown> | undefined,
+  };
+}
+
+export function parseOmpRuntimeEvent(value: unknown): OmpRuntimeEvent | null {
+  const raw = asObject(value);
+  if (!raw || !isString(raw.type)) return null;
+
+  switch (raw.type) {
+    case 'auto_compaction_start':
+      return isCompactionReason(raw.reason) && isCompactionAction(raw.action)
+        ? { type: raw.type, reason: raw.reason, action: raw.action }
+        : null;
+
+    case 'auto_compaction_end': {
+      if (
+        !isCompactionAction(raw.action)
+        || typeof raw.aborted !== 'boolean'
+        || typeof raw.willRetry !== 'boolean'
+        || (raw.errorMessage !== undefined && !isString(raw.errorMessage))
+        || (raw.skipped !== undefined && typeof raw.skipped !== 'boolean')
+      ) {
+        return null;
+      }
+      const result = raw.result === undefined ? undefined : parseOmpCompactionResult(raw.result);
+      if (raw.result !== undefined && !result) return null;
+      return {
+        type: raw.type,
+        action: raw.action,
+        result: result ?? undefined,
+        aborted: raw.aborted,
+        willRetry: raw.willRetry,
+        errorMessage: raw.errorMessage as string | undefined,
+        skipped: raw.skipped as boolean | undefined,
+      };
+    }
+
+    case 'auto_retry_start':
+      return isNonNegativeNumber(raw.attempt)
+        && isNonNegativeNumber(raw.maxAttempts)
+        && isNonNegativeNumber(raw.delayMs)
+        && isString(raw.errorMessage)
+        && (raw.errorId === undefined || isFiniteNumber(raw.errorId))
+        ? {
+            type: raw.type,
+            attempt: raw.attempt,
+            maxAttempts: raw.maxAttempts,
+            delayMs: raw.delayMs,
+            errorMessage: raw.errorMessage,
+            errorId: raw.errorId as number | undefined,
+          }
+        : null;
+
+    case 'auto_retry_end':
+      return typeof raw.success === 'boolean'
+        && isNonNegativeNumber(raw.attempt)
+        && (raw.finalError === undefined || isString(raw.finalError))
+        ? {
+            type: raw.type,
+            success: raw.success,
+            attempt: raw.attempt,
+            finalError: raw.finalError as string | undefined,
+          }
+        : null;
+
+    case 'retry_fallback_applied':
+      return isString(raw.from) && isString(raw.to) && isString(raw.role)
+        ? { type: raw.type, from: raw.from, to: raw.to, role: raw.role }
+        : null;
+
+    case 'retry_fallback_succeeded':
+      return isString(raw.model) && isString(raw.role)
+        ? { type: raw.type, model: raw.model, role: raw.role }
+        : null;
+
+    default:
+      return null;
+  }
+}
+
 export function parseOmpAvailableCommandsUpdate(value: unknown): OmpRpcAvailableCommandsUpdateFrame | null {
   const raw = asObject(value);
   if (raw?.type !== 'available_commands_update') return null;
@@ -404,6 +698,9 @@ export function parseOmpPromptResponseData(value: unknown): OmpRpcPromptResponse
 
 export function parseOmpSessionState(value: unknown): OmpRpcSessionState | null {
   const raw = asObject(value);
+  const contextUsage = raw?.contextUsage === undefined
+    ? undefined
+    : parseOmpContextUsage(raw.contextUsage);
   if (
     !raw
     || !isString(raw.sessionId)
@@ -417,6 +714,7 @@ export function parseOmpSessionState(value: unknown): OmpRpcSessionState | null 
     || !isFiniteNumber(raw.messageCount)
     || !isFiniteNumber(raw.queuedMessageCount)
     || !Array.isArray(raw.todoPhases)
+    || (raw.contextUsage !== undefined && !contextUsage)
     || (raw.sessionFile !== undefined && !isString(raw.sessionFile))
     || (raw.sessionName !== undefined && !isString(raw.sessionName))
   ) {
@@ -437,5 +735,6 @@ export function parseOmpSessionState(value: unknown): OmpRpcSessionState | null 
     messageCount: raw.messageCount,
     queuedMessageCount: raw.queuedMessageCount,
     todoPhases: raw.todoPhases,
+    contextUsage: contextUsage ?? undefined,
   };
 }

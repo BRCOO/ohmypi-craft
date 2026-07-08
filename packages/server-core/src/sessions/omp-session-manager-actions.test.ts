@@ -39,6 +39,43 @@ function createOmpAgent(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function createOmpRuntimeAgent(calls: string[]) {
+  const runtime = {
+    compaction: { phase: 'idle' as const },
+    retry: { phase: 'idle' as const },
+    available: true,
+    updatedAt: 1,
+  }
+  const controlState = {
+    availableCommands: [],
+    queue: {
+      isStreaming: false,
+      isCompacting: false,
+      steeringMode: 'all' as const,
+      followUpMode: 'all' as const,
+      interruptMode: 'immediate' as const,
+      queuedMessageCount: 0,
+    },
+    runtime,
+    updatedAt: 1,
+  }
+  return {
+    onControlStateChange: null,
+    getOmpControlState: () => controlState,
+    steer: async () => true,
+    followUp: async () => true,
+    abortAndPrompt: async () => true,
+    setSteeringMode: async () => {},
+    setFollowUpMode: async () => {},
+    setInterruptMode: async () => {},
+    refreshOmpRuntimeState: async () => { calls.push('refresh'); return runtime },
+    compactOmpSession: async () => { calls.push('compact'); return runtime },
+    setAutoCompaction: async (enabled: boolean) => { calls.push(`auto-compaction:${enabled}`); return runtime },
+    setAutoRetry: async (enabled: boolean) => { calls.push(`auto-retry:${enabled}`); return runtime },
+    abortRetry: async () => { calls.push('abort-retry'); return runtime },
+  }
+}
+
 function createManagedSession(agent: unknown, overrides: Record<string, unknown> = {}): any {
   return {
     id: 'session-1',
@@ -269,5 +306,93 @@ describe('SessionManager OMP session actions', () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toContain('disabled while the session is processing')
+  })
+})
+
+describe('SessionManager OMP runtime controls', () => {
+  it('delegates runtime commands and publishes the latest snapshot', async () => {
+    const calls: string[] = []
+    const agent = createOmpRuntimeAgent(calls)
+    const managed = createManagedSession(agent)
+    const manager = createManager(managed)
+
+    await manager.refreshOmpRuntime('session-1')
+    await manager.compactOmpRuntime('session-1')
+    await manager.setOmpAutoCompaction('session-1', false)
+    await manager.setOmpAutoRetry('session-1', true)
+    await manager.abortOmpRetry('session-1')
+
+    expect(calls).toEqual([
+      'refresh',
+      'compact',
+      'auto-compaction:false',
+      'auto-retry:true',
+      'abort-retry',
+    ])
+    expect(manager.events).toHaveLength(5)
+    expect(manager.events.at(-1)).toEqual({
+      event: {
+        type: 'omp_control_state_changed',
+        sessionId: 'session-1',
+        state: expect.objectContaining({
+          runtime: expect.objectContaining({ available: true }),
+        }),
+      },
+      workspaceId: 'workspace-1',
+    })
+    expect(managed.ompControlState.runtime.available).toBe(true)
+  })
+
+  it('rejects runtime commands for non-OMP agents', async () => {
+    const managed = createManagedSession({})
+    const manager = createManager(managed)
+
+    await expect(manager.refreshOmpRuntime('session-1')).rejects.toThrow(
+      'OMP runtime controls are only available for OMP sessions',
+    )
+  })
+
+  it('synchronizes global automatic settings to other live OMP agents', async () => {
+    const sourceCalls: string[] = []
+    const targetCalls: string[] = []
+    const managed = createManagedSession(createOmpRuntimeAgent(sourceCalls))
+    const target = createManagedSession(createOmpRuntimeAgent(targetCalls), { id: 'session-2' })
+    const manager = createManager(managed)
+    manager.sessions.set('session-2', target)
+
+    await manager.setOmpAutoRetry('session-1', false)
+
+    expect(sourceCalls).toEqual(['auto-retry:false'])
+    expect(targetCalls).toEqual(['auto-retry:false'])
+    expect(manager.events.map((item: any) => item.event.sessionId)).toEqual(['session-1', 'session-2'])
+  })
+
+  it('synchronizes a successful default-role fallback into the Craft session model', async () => {
+    const calls: string[] = []
+    const agent = createOmpRuntimeAgent(calls)
+    const base = agent.getOmpControlState()
+    agent.getOmpControlState = () => ({
+      ...base,
+      runtime: {
+        ...base.runtime,
+        fallback: {
+          phase: 'succeeded' as const,
+          from: 'provider/a',
+          to: 'provider/b',
+          role: 'default',
+        },
+      },
+    })
+    const managed = createManagedSession(agent, { model: 'provider/a' })
+    const manager = createManager(managed)
+
+    await manager.refreshOmpRuntime('session-1')
+
+    expect(managed.model).toBe('provider/b')
+    expect(manager.events.map((item: any) => item.event.type)).toEqual([
+      'omp_control_state_changed',
+      'session_model_changed',
+    ])
+    expect(manager.persisted).toHaveLength(1)
   })
 })

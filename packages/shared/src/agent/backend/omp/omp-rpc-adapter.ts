@@ -304,6 +304,16 @@ export class OmpRpcEventAdapter {
       case 'agent_end':
         return { events: [], complete: true };
 
+      case 'auto_compaction_start':
+      case 'auto_compaction_end':
+      case 'auto_retry_start':
+      case 'auto_retry_end':
+      case 'retry_fallback_applied':
+      case 'retry_fallback_succeeded':
+        // OMP runtime lifecycle frames are reduced by OmpRpcBackend into the
+        // session control snapshot. They are intentionally not chat events.
+        return { events: [] };
+
       case 'thinking_level_changed': {
         const level = raw.level ?? raw.thinkingLevel ?? raw.thinking_level;
         if (

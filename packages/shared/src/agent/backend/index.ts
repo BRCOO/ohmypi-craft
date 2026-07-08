@@ -87,9 +87,16 @@ export { EventQueue } from './event-queue.ts';
 // Provider-specific event adapters
 export { ClaudeEventAdapter } from './claude/event-adapter.ts';
 export { PiEventAdapter } from './pi/event-adapter.ts';
-export { OmpRpcEventAdapter, OmpRpcBackend, DEFAULT_OMP_MODEL, checkOmpRuntime } from './omp/index.ts';
+export {
+  OmpRpcEventAdapter,
+  OmpRpcBackend,
+  DEFAULT_OMP_MODEL,
+  checkOmpRuntime,
+  resolveOmpRuntimeCommand,
+} from './omp/index.ts';
 export type {
   OmpControlState,
+  OmpRuntimeState,
   OmpInterruptMode,
   OmpQueueMode,
   OmpQueueControlState,

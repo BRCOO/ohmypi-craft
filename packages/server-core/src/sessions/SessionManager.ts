@@ -22,6 +22,7 @@ import {
   type OmpControlState,
   type OmpInterruptMode,
   type OmpQueueMode,
+  type OmpRuntimeState,
   type PostInitResult,
 } from '@craft-agent/shared/agent/backend'
 import { getLlmConnection, getLlmConnections, getDefaultLlmConnection, getDefaultThinkingLevel, resetManagedAnthropicAuthEnvVars, resolveMidStreamBehavior, getPersistedUiLanguage, resolveTitleLanguageName } from '@craft-agent/shared/config'
@@ -781,6 +782,14 @@ interface OmpControllableAgent extends AgentBackend {
   setInterruptMode(mode: OmpInterruptMode): Promise<void>
 }
 
+interface OmpRuntimeAgent extends OmpControllableAgent {
+  refreshOmpRuntimeState(): Promise<OmpRuntimeState>
+  compactOmpSession(customInstructions?: string): Promise<OmpRuntimeState>
+  setAutoCompaction(enabled: boolean): Promise<OmpRuntimeState>
+  setAutoRetry(enabled: boolean): Promise<OmpRuntimeState>
+  abortRetry(): Promise<OmpRuntimeState>
+}
+
 interface OmpSessionAgent extends AgentBackend {
   getOmpSessionLink(): OmpSessionLink | null
   getOmpMessages(): Promise<unknown[]>
@@ -801,6 +810,16 @@ function isOmpControllableAgent(agent: AgentInstance | null | undefined): agent 
     && typeof candidate.setSteeringMode === 'function'
     && typeof candidate.setFollowUpMode === 'function'
     && typeof candidate.setInterruptMode === 'function'
+}
+
+function isOmpRuntimeAgent(agent: AgentInstance | null | undefined): agent is OmpRuntimeAgent {
+  const candidate = agent as Partial<OmpRuntimeAgent> | null | undefined
+  return isOmpControllableAgent(agent)
+    && typeof candidate?.refreshOmpRuntimeState === 'function'
+    && typeof candidate?.compactOmpSession === 'function'
+    && typeof candidate?.setAutoCompaction === 'function'
+    && typeof candidate?.setAutoRetry === 'function'
+    && typeof candidate?.abortRetry === 'function'
 }
 
 function isOmpSessionAgent(agent: AgentInstance | null | undefined): agent is OmpSessionAgent {
@@ -863,6 +882,26 @@ function toOmpControlStateDto(state: OmpControlState): OmpControlStateDto {
       source: command.source,
     })),
     queue: { ...state.queue },
+    runtime: {
+      ...state.runtime,
+      contextUsage: state.runtime.contextUsage ? { ...state.runtime.contextUsage } : undefined,
+      stats: state.runtime.stats
+        ? { ...state.runtime.stats, tokens: { ...state.runtime.stats.tokens } }
+        : undefined,
+      compaction: {
+        ...state.runtime.compaction,
+        result: state.runtime.compaction.result
+          ? {
+              summary: state.runtime.compaction.result.summary,
+              shortSummary: state.runtime.compaction.result.shortSummary,
+              firstKeptEntryId: state.runtime.compaction.result.firstKeptEntryId,
+              tokensBefore: state.runtime.compaction.result.tokensBefore,
+            }
+          : undefined,
+      },
+      retry: { ...state.runtime.retry },
+      fallback: state.runtime.fallback ? { ...state.runtime.fallback } : undefined,
+    },
     updatedAt: state.updatedAt,
   }
 }
@@ -1304,6 +1343,20 @@ export class SessionManager implements ISessionManager {
       sessionId: managed.id,
       state: dto,
     }, managed.workspace.id)
+    const fallback = state.runtime.fallback
+    if (
+      fallback?.phase === 'succeeded'
+      && fallback.role === 'default'
+      && managed.model !== fallback.to
+    ) {
+      managed.model = fallback.to
+      this.sendEvent({
+        type: 'session_model_changed',
+        sessionId: managed.id,
+        model: fallback.to,
+      }, managed.workspace.id)
+      this.persistSession(managed)
+    }
   }
 
   private wireOmpControlBridge(managed: ManagedSession): void {
@@ -7234,6 +7287,85 @@ export class SessionManager implements ISessionManager {
     }
     await managed.agent.setInterruptMode(mode)
     this.publishOmpControlState(managed, managed.agent.getOmpControlState())
+  }
+
+  async refreshOmpRuntime(sessionId: string): Promise<void> {
+    const { managed, agent } = await this.getOmpRuntimeAgent(sessionId)
+    await agent.refreshOmpRuntimeState()
+    this.publishOmpControlState(managed, agent.getOmpControlState())
+  }
+
+  async compactOmpRuntime(sessionId: string): Promise<void> {
+    const { managed, agent } = await this.getOmpRuntimeAgent(sessionId)
+    await agent.compactOmpSession()
+    this.publishOmpControlState(managed, agent.getOmpControlState())
+  }
+
+  async setOmpAutoCompaction(sessionId: string, enabled: boolean): Promise<void> {
+    const { managed, agent } = await this.getOmpRuntimeAgent(sessionId)
+    await agent.setAutoCompaction(enabled)
+    this.publishOmpControlState(managed, agent.getOmpControlState())
+    await this.syncOmpRuntimeSettingAcrossLiveAgents(managed.id, 'auto-compaction', enabled)
+  }
+
+  async setOmpAutoRetry(sessionId: string, enabled: boolean): Promise<void> {
+    const { managed, agent } = await this.getOmpRuntimeAgent(sessionId)
+    await agent.setAutoRetry(enabled)
+    this.publishOmpControlState(managed, agent.getOmpControlState())
+    await this.syncOmpRuntimeSettingAcrossLiveAgents(managed.id, 'auto-retry', enabled)
+  }
+
+  async abortOmpRetry(sessionId: string): Promise<void> {
+    const { managed, agent } = await this.getOmpRuntimeAgent(sessionId)
+    await agent.abortRetry()
+    this.publishOmpControlState(managed, agent.getOmpControlState())
+  }
+
+  private async getOmpRuntimeAgent(sessionId: string): Promise<{
+    managed: ManagedSession
+    agent: OmpRuntimeAgent
+  }> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+    const agent = await this.getOrCreateAgent(managed)
+    if (!isOmpRuntimeAgent(agent)) {
+      throw new Error('OMP runtime controls are only available for OMP sessions')
+    }
+    return { managed, agent }
+  }
+
+  private async syncOmpRuntimeSettingAcrossLiveAgents(
+    sourceSessionId: string,
+    setting: 'auto-compaction' | 'auto-retry',
+    enabled: boolean,
+  ): Promise<void> {
+    const updates: Promise<void>[] = []
+    for (const managed of this.sessions.values()) {
+      if (managed.id === sourceSessionId || !isOmpRuntimeAgent(managed.agent)) continue
+      const agent = managed.agent
+      updates.push((async () => {
+        try {
+          if (setting === 'auto-compaction') {
+            await agent.setAutoCompaction(enabled)
+          } else {
+            await agent.setAutoRetry(enabled)
+          }
+          const current = this.sessions.get(managed.id)
+          if (current?.agent === agent) {
+            this.publishOmpControlState(current, agent.getOmpControlState())
+          }
+        } catch (error) {
+          sessionLog.warn('Failed to synchronize global OMP runtime setting', {
+            sourceSessionId,
+            targetSessionId: managed.id,
+            setting,
+            enabled,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      })())
+    }
+    await Promise.all(updates)
   }
 
   /**

@@ -74,6 +74,11 @@ export interface ISessionManager {
   setOmpSteeringMode(sessionId: string, mode: OmpQueueMode): Promise<void>
   setOmpFollowUpMode(sessionId: string, mode: OmpQueueMode): Promise<void>
   setOmpInterruptMode(sessionId: string, mode: OmpInterruptMode): Promise<void>
+  refreshOmpRuntime(sessionId: string): Promise<void>
+  compactOmpRuntime(sessionId: string): Promise<void>
+  setOmpAutoCompaction(sessionId: string, enabled: boolean): Promise<void>
+  setOmpAutoRetry(sessionId: string, enabled: boolean): Promise<void>
+  abortOmpRetry(sessionId: string): Promise<void>
   updateWorkingDirectory(sessionId: string, path: string): void
   setSessionSources(sessionId: string, sourceSlugs: string[]): Promise<void>
   setSessionLabels(sessionId: string, labels: string[]): void

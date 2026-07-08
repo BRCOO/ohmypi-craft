@@ -972,3 +972,190 @@ describe('OmpRpcBackend subprocess lifecycle', () => {
     backend.destroy();
   });
 });
+
+describe('OmpRpcBackend runtime controls', () => {
+  const stats = {
+    sessionId: 'session-1',
+    userMessages: 2,
+    assistantMessages: 2,
+    toolCalls: 3,
+    toolResults: 3,
+    totalMessages: 10,
+    tokens: {
+      input: 100,
+      output: 50,
+      reasoning: 25,
+      cacheRead: 30,
+      cacheWrite: 10,
+      total: 215,
+    },
+    premiumRequests: 1,
+    cost: 0.125,
+  };
+
+  it('refreshes context and session statistics as one runtime snapshot', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children);
+    const refresh = backend.refreshOmpRuntimeState();
+
+    await waitFor(() => child.frames.some((frame) => frame.type === 'get_session_stats'));
+    const stateRequest = child.frames.findLast((frame) => frame.type === 'get_state')!;
+    const statsRequest = child.frames.findLast((frame) => frame.type === 'get_session_stats')!;
+    child.emitFrame({
+      type: 'response',
+      id: stateRequest.id,
+      command: 'get_state',
+      success: true,
+      data: sessionState('session-1', {
+        contextUsage: { tokens: 5000, contextWindow: 10000, percent: 50 },
+      }),
+    });
+    child.emitFrame({
+      type: 'response',
+      id: statsRequest.id,
+      command: 'get_session_stats',
+      success: true,
+      data: stats,
+    });
+
+    const runtime = await refresh;
+    expect(runtime.contextUsage).toEqual({ tokens: 5000, contextWindow: 10000, percent: 50 });
+    expect(runtime.stats).toEqual(stats);
+    expect(runtime.pendingAction).toBeUndefined();
+    backend.destroy();
+  });
+
+  it('runs manual compaction and refreshes context afterwards', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children);
+    const compact = backend.compactOmpSession();
+
+    await waitFor(() => child.frames.some((frame) => frame.type === 'compact'));
+    const compactRequest = child.frames.findLast((frame) => frame.type === 'compact')!;
+    child.emitFrame({
+      type: 'response',
+      id: compactRequest.id,
+      command: 'compact',
+      success: true,
+      data: {
+        summary: 'summary',
+        firstKeptEntryId: 'entry-2',
+        tokensBefore: 9000,
+      },
+    });
+
+    await waitFor(() => child.frames.some((frame) => frame.type === 'get_session_stats'));
+    const stateRequest = child.frames.findLast((frame) => frame.type === 'get_state')!;
+    const statsRequest = child.frames.findLast((frame) => frame.type === 'get_session_stats')!;
+    child.emitFrame({
+      type: 'response',
+      id: stateRequest.id,
+      command: 'get_state',
+      success: true,
+      data: sessionState('session-1', {
+        contextUsage: { tokens: 3000, contextWindow: 10000, percent: 30 },
+      }),
+    });
+    child.emitFrame({
+      type: 'response',
+      id: statsRequest.id,
+      command: 'get_session_stats',
+      success: true,
+      data: stats,
+    });
+
+    const runtime = await compact;
+    expect(runtime.compaction.phase).toBe('succeeded');
+    expect(runtime.compaction.manual).toBe(true);
+    expect(runtime.contextUsage?.tokens).toBe(3000);
+    backend.destroy();
+  });
+
+  it('tracks retry and fallback lifecycle events without emitting chat errors', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children);
+
+    child.emitFrame({
+      type: 'auto_retry_start',
+      attempt: 2,
+      maxAttempts: 4,
+      delayMs: 1500,
+      errorMessage: 'rate limited',
+    });
+    child.emitFrame({
+      type: 'retry_fallback_applied',
+      from: 'provider/a',
+      to: 'provider/b',
+      role: 'default',
+    });
+    child.emitFrame({
+      type: 'retry_fallback_succeeded',
+      model: 'provider/b',
+      role: 'default',
+    });
+    await waitFor(() => backend.getOmpControlState().runtime.fallback?.phase === 'succeeded');
+
+    const runtime = backend.getOmpControlState().runtime;
+    expect(runtime.retry.phase).toBe('waiting');
+    expect(runtime.retry.attempt).toBe(2);
+    expect(runtime.fallback).toEqual({
+      phase: 'succeeded',
+      from: 'provider/a',
+      to: 'provider/b',
+      role: 'default',
+    });
+    expect(backend.getModel()).toBe('provider/b');
+    expect(backend.getDiagnostics().unknownFrames).toBe(0);
+    backend.destroy();
+  });
+
+  it('updates automatic settings and aborts a waiting retry after correlated responses', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children);
+
+    const autoCompaction = backend.setAutoCompaction(false);
+    await waitFor(() => child.frames.some((frame) => frame.type === 'set_auto_compaction'));
+    const compactionRequest = child.frames.findLast((frame) => frame.type === 'set_auto_compaction')!;
+    child.emitFrame({ type: 'response', id: compactionRequest.id, command: 'set_auto_compaction', success: true });
+    await autoCompaction;
+
+    const autoRetry = backend.setAutoRetry(true);
+    await waitFor(() => child.frames.some((frame) => frame.type === 'set_auto_retry'));
+    const retryRequest = child.frames.findLast((frame) => frame.type === 'set_auto_retry')!;
+    child.emitFrame({ type: 'response', id: retryRequest.id, command: 'set_auto_retry', success: true });
+    await autoRetry;
+
+    child.emitFrame({
+      type: 'auto_retry_start',
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 1000,
+      errorMessage: 'temporary',
+    });
+    const abort = backend.abortRetry();
+    await waitFor(() => child.frames.some((frame) => frame.type === 'abort_retry'));
+    const abortRequest = child.frames.findLast((frame) => frame.type === 'abort_retry')!;
+    child.emitFrame({ type: 'response', id: abortRequest.id, command: 'abort_retry', success: true });
+    const runtime = await abort;
+
+    expect(runtime.autoCompactionEnabled).toBe(false);
+    expect(runtime.autoRetryEnabled).toBe(true);
+    expect(runtime.retry.phase).toBe('cancelled');
+    backend.destroy();
+  });
+
+  it('clears context and statistics when OMP switches to a different session', () => {
+    const { backend } = createHarness();
+    (backend as any).applySessionState(sessionState('session-a', {
+      contextUsage: { tokens: 5000, contextWindow: 10000, percent: 50 },
+    }));
+    (backend as any).updateRuntimeState({ type: 'stats', stats });
+
+    (backend as any).applySessionState(sessionState('session-b'));
+
+    const runtime = backend.getOmpControlState().runtime;
+    expect(runtime.contextUsage).toBeUndefined();
+    expect(runtime.stats).toBeUndefined();
+    expect(runtime.available).toBe(true);
+  });
+});

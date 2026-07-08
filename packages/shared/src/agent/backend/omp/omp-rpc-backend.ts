@@ -15,6 +15,12 @@ import { prepareOmpPrompt } from './omp-rpc-attachments.ts';
 import { resolveOmpRuntimeCommand } from './omp-command.ts';
 import { OmpRpcEventAdapter } from './omp-rpc-adapter.ts';
 import {
+  cloneOmpRuntimeState,
+  createOmpRuntimeState,
+  reduceOmpRuntimeState,
+  type OmpRuntimeStateAction,
+} from './omp-runtime-state.ts';
+import {
   OmpRpcDiagnostics,
   type OmpRpcDiagnosticsSnapshot,
 } from './omp-rpc-diagnostics.ts';
@@ -29,11 +35,14 @@ import {
   parseOmpBranchMessagesResponseData,
   parseOmpBranchResult,
   parseOmpCancellationResult,
+  parseOmpCompactionResult,
   parseOmpExportHtmlResponseData,
   parseOmpHandoffResult,
   parseOmpMessagesResponseData,
   parseOmpPromptResponseData,
+  parseOmpRuntimeEvent,
   parseOmpSessionState,
+  parseOmpSessionStats,
   type OmpRpcAvailableSlashCommand,
   type OmpRpcBranchMessage,
   type OmpRpcBranchResult,
@@ -43,6 +52,7 @@ import {
   type OmpRpcExtensionUiResponse,
   type OmpRpcHandoffResult,
   type OmpRpcSessionState,
+  type OmpRuntimeState,
   type OmpThinkingLevel,
 } from './omp-rpc-protocol.ts';
 
@@ -74,6 +84,8 @@ export interface OmpRpcBackendOptions {
   readyTimeoutMs?: number;
   /** Override correlated RPC response timeout for deterministic tests. */
   requestTimeoutMs?: number;
+  /** Override long-running compact/statistics timeout for deterministic tests. */
+  longRequestTimeoutMs?: number;
   /** Test seam for path-only image attachments. */
   attachmentReadFile?: (path: string) => Buffer;
 }
@@ -147,6 +159,7 @@ export class OmpRpcBackend extends BaseAgent {
   private processGeneration = 0;
   private readySyncGeneration: number | null = null;
   private sessionState: OmpRpcSessionState | null = null;
+  private runtimeState: OmpRuntimeState = createOmpRuntimeState();
   private availableCommands: OmpRpcAvailableSlashCommand[] = [];
   private controlStateUpdatedAt = Date.now();
   private remoteThinkingLevel: OmpThinkingLevel | null = null;
@@ -156,6 +169,7 @@ export class OmpRpcBackend extends BaseAgent {
   private readonly spawnProcess: typeof spawn;
   private readonly readyTimeoutMs: number;
   private readonly requestTimeoutMs: number;
+  private readonly longRequestTimeoutMs: number;
   private readonly attachmentReadFile?: (path: string) => Buffer;
   onControlStateChange: ((state: OmpControlState) => void) | null = null;
 
@@ -166,6 +180,7 @@ export class OmpRpcBackend extends BaseAgent {
     this.spawnProcess = options.spawnProcess ?? spawn;
     this.readyTimeoutMs = options.readyTimeoutMs ?? 15_000;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
+    this.longRequestTimeoutMs = options.longRequestTimeoutMs ?? 300_000;
     this.attachmentReadFile = options.attachmentReadFile;
   }
 
@@ -443,8 +458,103 @@ export class OmpRpcBackend extends BaseAgent {
     return {
       availableCommands: this.getCachedAvailableCommands(),
       queue: this.currentQueueControlState(),
+      runtime: cloneOmpRuntimeState(this.runtimeState),
       updatedAt: this.controlStateUpdatedAt,
     };
+  }
+
+  async refreshOmpRuntimeState(): Promise<OmpRuntimeState> {
+    await this.ensureSubprocess();
+    if (this.runtimeState.pendingAction === 'refresh') {
+      return cloneOmpRuntimeState(this.runtimeState);
+    }
+    this.assertRuntimeActionAvailable();
+    this.updateRuntimeState({ type: 'pending', action: 'refresh' });
+    try {
+      const [stateData, statsData] = await Promise.all([
+        this.send({ type: 'get_state' }),
+        this.send({ type: 'get_session_stats' }),
+      ]);
+      const state = parseOmpSessionState(stateData);
+      if (!state) throw new Error('OMP get_state returned an invalid session state');
+      const stats = parseOmpSessionStats(statsData);
+      if (!stats) throw new Error('OMP get_session_stats returned invalid statistics');
+      this.applySessionState(state);
+      this.updateRuntimeState({ type: 'stats', stats });
+      return cloneOmpRuntimeState(this.runtimeState);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.updateRuntimeState({ type: 'failed', action: 'refresh', error: message });
+      throw error;
+    }
+  }
+
+  async compactOmpSession(customInstructions?: string): Promise<OmpRuntimeState> {
+    await this.ensureSubprocess();
+    this.assertRuntimeActionAvailable();
+    const queue = this.currentQueueControlState();
+    if (this._isProcessing || queue.isStreaming || queue.isCompacting) {
+      throw new Error('OMP cannot compact while the session is processing');
+    }
+    this.updateRuntimeState({ type: 'manual_compaction_started' });
+    try {
+      const data = await this.send({ type: 'compact', customInstructions });
+      const result = parseOmpCompactionResult(data);
+      if (!result) throw new Error('OMP compact returned an invalid result');
+      this.updateRuntimeState({ type: 'manual_compaction_succeeded', result });
+      await this.refreshOmpRuntimeState();
+      return cloneOmpRuntimeState(this.runtimeState);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.updateRuntimeState({ type: 'failed', action: 'compact', error: message });
+      throw error;
+    }
+  }
+
+  async setAutoCompaction(enabled: boolean): Promise<OmpRuntimeState> {
+    await this.ensureSubprocess();
+    this.assertRuntimeActionAvailable();
+    this.updateRuntimeState({ type: 'pending', action: 'set-auto-compaction' });
+    try {
+      await this.send({ type: 'set_auto_compaction', enabled });
+      if (this.sessionState) this.sessionState.autoCompactionEnabled = enabled;
+      this.updateRuntimeState({ type: 'auto_compaction_set', enabled });
+      return cloneOmpRuntimeState(this.runtimeState);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.updateRuntimeState({ type: 'failed', action: 'set-auto-compaction', error: message });
+      throw error;
+    }
+  }
+
+  async setAutoRetry(enabled: boolean): Promise<OmpRuntimeState> {
+    await this.ensureSubprocess();
+    this.assertRuntimeActionAvailable();
+    this.updateRuntimeState({ type: 'pending', action: 'set-auto-retry' });
+    try {
+      await this.send({ type: 'set_auto_retry', enabled });
+      this.updateRuntimeState({ type: 'auto_retry_set', enabled });
+      return cloneOmpRuntimeState(this.runtimeState);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.updateRuntimeState({ type: 'failed', action: 'set-auto-retry', error: message });
+      throw error;
+    }
+  }
+
+  async abortRetry(): Promise<OmpRuntimeState> {
+    await this.ensureSubprocess();
+    this.assertRuntimeActionAvailable();
+    this.updateRuntimeState({ type: 'pending', action: 'abort-retry' });
+    try {
+      await this.send({ type: 'abort_retry' });
+      this.updateRuntimeState({ type: 'retry_aborted' });
+      return cloneOmpRuntimeState(this.runtimeState);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.updateRuntimeState({ type: 'failed', action: 'abort-retry', error: message });
+      throw error;
+    }
   }
 
   getOmpSessionLink(): OmpSessionLink | null {
@@ -724,6 +834,21 @@ export class OmpRpcBackend extends BaseAgent {
     }
 
     this.diagnostics.recordFrame(raw.type);
+    const runtimeEvent = parseOmpRuntimeEvent(raw);
+    if (runtimeEvent) {
+      if (runtimeEvent.type === 'retry_fallback_succeeded' && runtimeEvent.role === 'default') {
+        super.setModel(runtimeEvent.model);
+        this.selectedModelKey = runtimeEvent.model;
+      }
+      this.updateRuntimeState({ type: 'runtime_event', event: runtimeEvent });
+      if (runtimeEvent.type === 'auto_compaction_end') {
+        setTimeout(() => {
+          void this.refreshOmpRuntimeState().catch((error) => {
+            this.debug(`OMP post-compaction refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+          });
+        }, 0);
+      }
+    }
     const adapted = this.adapter.adaptFrame(raw);
     if (adapted.unknownFrameType) {
       const shouldLog = this.diagnostics.recordUnknownFrame(adapted.unknownFrameType, raw);
@@ -800,6 +925,9 @@ export class OmpRpcBackend extends BaseAgent {
     const id = `omp-${++this.requestCounter}`;
     const frame = { id, ...command };
     const commandName = command.type;
+    const timeoutMs = commandName === 'compact' || commandName === 'get_session_stats'
+      ? this.longRequestTimeoutMs
+      : this.requestTimeoutMs;
     const startedAt = this.diagnostics.recordRequest(commandName);
 
     const promise = new Promise<T>((resolve, reject) => {
@@ -809,7 +937,7 @@ export class OmpRpcBackend extends BaseAgent {
         this.pending.delete(id);
         this.diagnostics.recordTimeout();
         pending.reject(new Error(`OMP RPC command timed out: ${String(command.type ?? 'unknown')}`));
-      }, this.requestTimeoutMs);
+      }, timeoutMs);
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
         reject,
@@ -912,7 +1040,7 @@ export class OmpRpcBackend extends BaseAgent {
     this.readySyncGeneration = null;
     this.sessionState = null;
     this.availableCommands = [];
-    this.touchControlState();
+    this.updateRuntimeState({ type: 'unavailable', error: 'OMP runtime is not connected' });
     this.remoteThinkingLevel = null;
     this.thinkingLevelUpdate = null;
     this.diagnostics.clearProcessState(this.processGeneration);
@@ -1137,8 +1265,23 @@ export class OmpRpcBackend extends BaseAgent {
   }
 
   private applySessionState(state: OmpRpcSessionState): void {
+    if (this.sessionState && this.sessionState.sessionId !== state.sessionId) {
+      this.runtimeState = createOmpRuntimeState();
+    }
     this.sessionState = state;
+    this.runtimeState = reduceOmpRuntimeState(this.runtimeState, { type: 'session_state', state });
     this.touchControlState();
+  }
+
+  private updateRuntimeState(action: OmpRuntimeStateAction): void {
+    this.runtimeState = reduceOmpRuntimeState(this.runtimeState, action);
+    this.touchControlState();
+  }
+
+  private assertRuntimeActionAvailable(): void {
+    if (this.runtimeState.pendingAction) {
+      throw new Error(`OMP runtime action already in progress: ${this.runtimeState.pendingAction}`);
+    }
   }
 
   private patchQueueState(patch: Partial<OmpQueueControlState>): void {

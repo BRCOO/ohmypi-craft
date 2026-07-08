@@ -11,6 +11,10 @@ export { OmpRpcEventAdapter } from './omp-rpc-adapter.ts';
 export type { OmpRpcAdaptedFrame } from './omp-rpc-adapter.ts';
 export type {
   OmpControlState,
+  OmpRuntimeState,
+  OmpSessionStats,
+  OmpContextUsage,
+  OmpCompactionResult,
   OmpInterruptMode,
   OmpQueueMode,
   OmpQueueControlState,
