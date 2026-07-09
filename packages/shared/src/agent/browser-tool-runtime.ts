@@ -37,6 +37,90 @@ interface BrowserPageMetrics {
   activeElementName?: string;
 }
 
+function createBrowserToolAbortError(message = 'Browser tool command was cancelled'): Error {
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
+}
+
+function isBrowserToolAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function browserToolAbortReason(signal: AbortSignal): Error {
+  const { reason } = signal;
+  if (reason instanceof Error) return reason;
+  if (typeof reason === 'string' && reason.trim()) return createBrowserToolAbortError(reason);
+  return createBrowserToolAbortError();
+}
+
+function throwIfBrowserToolAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw browserToolAbortReason(signal);
+}
+
+async function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  throwIfBrowserToolAborted(signal);
+  if (!signal) {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      cleanup();
+      reject(browserToolAbortReason(signal));
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function withBrowserToolAbort<T>(
+  signal: AbortSignal | undefined,
+  operation: () => Promise<T> | T,
+): Promise<T> {
+  throwIfBrowserToolAborted(signal);
+  const operationPromise = Promise.resolve().then(operation);
+  if (!signal) return operationPromise;
+
+  let rejectAbort: ((reason: unknown) => void) | null = null;
+  const abortPromise = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const onAbort = () => {
+    rejectAbort?.(browserToolAbortReason(signal));
+  };
+  signal.addEventListener('abort', onAbort, { once: true });
+  try {
+    const result = await Promise.race([operationPromise, abortPromise]);
+    throwIfBrowserToolAborted(signal);
+    return result;
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+}
+
+function withAbortableBrowserFns(fns: BrowserPaneFns, signal?: AbortSignal): BrowserPaneFns {
+  if (!signal) return fns;
+  return new Proxy(fns, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value !== 'function') return value;
+      return (...args: unknown[]) => withBrowserToolAbort(
+        signal,
+        () => value.apply(target, args) as unknown,
+      );
+    },
+  }) as BrowserPaneFns;
+}
+
 export function getBrowserToolHelp(): string {
   return [
     'browser_tool command help',
@@ -172,7 +256,8 @@ async function safeEvaluate<T>(fns: BrowserPaneFns, expression: string): Promise
   try {
     const value = await fns.evaluate(expression);
     return value as T;
-  } catch {
+  } catch (error) {
+    if (isBrowserToolAbortError(error)) throw error;
     return null;
   }
 }
@@ -276,6 +361,7 @@ async function waitForForegroundOpenVisibility(args: {
   instanceId: string;
   timeoutMs?: number;
   pollMs?: number;
+  signal?: AbortSignal;
 }): Promise<{
   windows: Awaited<ReturnType<BrowserPaneFns['listWindows']>>;
   win: Awaited<ReturnType<BrowserPaneFns['listWindows']>>[number] | undefined;
@@ -292,8 +378,10 @@ async function waitForForegroundOpenVisibility(args: {
     return { windows, win };
   };
 
+  throwIfBrowserToolAborted(args.signal);
   let state = await readWindowState();
   while (Date.now() - started < timeoutMs) {
+    throwIfBrowserToolAborted(args.signal);
     if (!state.win || state.win.isVisible) {
       return {
         ...state,
@@ -301,10 +389,11 @@ async function waitForForegroundOpenVisibility(args: {
         usedFocusFallback: false,
       };
     }
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    await abortableDelay(pollMs, args.signal);
     state = await readWindowState();
   }
 
+  throwIfBrowserToolAborted(args.signal);
   let usedFocusFallback = false;
   if (state.win && !state.win.isVisible) {
     try {
@@ -548,6 +637,7 @@ async function verifySelectResult(args: {
   assertText?: string;
   assertValue?: string;
   timeoutMs: number;
+  signal?: AbortSignal;
 }): Promise<{
   selectedRefMatched: boolean;
   assertTextMatched: boolean;
@@ -562,8 +652,11 @@ async function verifySelectResult(args: {
   let assertTextMatched = false;
   let assertValueMatched = false;
 
+  throwIfBrowserToolAborted(args.signal);
   while (Date.now() - started <= timeoutMs) {
+    throwIfBrowserToolAborted(args.signal);
     const snapshot = await fns.snapshot();
+    throwIfBrowserToolAborted(args.signal);
     const selectedNode = snapshot.nodes.find((n) => n.ref === ref);
 
     selectedRefMatched = !!selectedNode
@@ -607,7 +700,7 @@ async function verifySelectResult(args: {
       break;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    await abortableDelay(pollMs, args.signal);
   }
 
   return {
@@ -624,7 +717,9 @@ export async function executeBrowserToolCommand(args: {
   fns: BrowserPaneFns;
   sessionId: string;
   platform?: NodeJS.Platform;
+  signal?: AbortSignal;
 }): Promise<BrowserCommandResult> {
+  throwIfBrowserToolAborted(args.signal);
   // Array mode: no batch splitting, pass directly to single command execution
   if (Array.isArray(args.command)) {
     if (args.command.length === 0) {
@@ -652,14 +747,17 @@ async function executeBatchCommands(args: {
   fns: BrowserPaneFns;
   sessionId: string;
   platform?: NodeJS.Platform;
+  signal?: AbortSignal;
 }): Promise<BrowserCommandResult> {
   const outputs: string[] = [];
   let lastImage: BrowserCommandImage | undefined;
   let appendReleaseHint = false;
 
   for (let i = 0; i < args.commands.length; i++) {
+    throwIfBrowserToolAborted(args.signal);
     const command = args.commands[i]!;
     const result = await executeSingleCommand({ ...args, command });
+    throwIfBrowserToolAborted(args.signal);
 
     outputs.push(result.output);
     if (result.image) lastImage = result.image;
@@ -684,7 +782,9 @@ async function executeSingleCommand(args: {
   fns: BrowserPaneFns;
   sessionId: string;
   platform?: NodeJS.Platform;
+  signal?: AbortSignal;
 }): Promise<BrowserCommandResult> {
+  throwIfBrowserToolAborted(args.signal);
   // Array mode: use parts directly, no parsing needed
   const parts = Array.isArray(args.command)
     ? args.command
@@ -695,7 +795,7 @@ async function executeSingleCommand(args: {
     return { output: getBrowserToolHelp(), appendReleaseHint: false };
   }
 
-  const { fns } = args;
+  const fns = withAbortableBrowserFns(args.fns, args.signal);
 
   if (cmd === 'open') {
     const foreground = parts.includes('--foreground') || parts.includes('-f');
@@ -711,6 +811,7 @@ async function executeSingleCommand(args: {
       const visibilityResult = await waitForForegroundOpenVisibility({
         fns,
         instanceId: result.instanceId,
+        signal: args.signal,
       });
       windowsAfter = visibilityResult.windows;
       win = visibilityResult.win;
@@ -1078,6 +1179,7 @@ async function executeSingleCommand(args: {
       assertText,
       assertValue,
       timeoutMs,
+      signal: args.signal,
     });
 
     const warnings: string[] = [];

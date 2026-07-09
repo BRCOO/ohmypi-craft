@@ -804,6 +804,7 @@ interface OmpSessionAgent extends AgentBackend {
   getOmpSessionLink(): OmpSessionLink | null
   getOmpMessages(): Promise<unknown[]>
   getOmpBranchMessages(): Promise<OmpBranchMessageLike[]>
+  getOmpLastAssistantText(): Promise<string | null>
   branchOmpSession(entryId: string): Promise<{ text: string; cancelled: boolean }>
   handoffOmpSession(customInstructions?: string): Promise<{ savedPath?: string } | null>
   exportOmpSessionHtml(outputPath?: string): Promise<{ path: string }>
@@ -848,6 +849,7 @@ function isOmpSessionAgent(agent: AgentInstance | null | undefined): agent is Om
     && typeof candidate.getOmpSessionLink === 'function'
     && typeof candidate.getOmpMessages === 'function'
     && typeof candidate.getOmpBranchMessages === 'function'
+    && typeof candidate.getOmpLastAssistantText === 'function'
     && typeof candidate.branchOmpSession === 'function'
     && typeof candidate.handoffOmpSession === 'function'
     && typeof candidate.exportOmpSessionHtml === 'function'
@@ -7143,10 +7145,28 @@ export class SessionManager implements ISessionManager {
             detectedAt,
           }
         } else if (craftLast && ompLast && !conversationTextsMatch(craftLast.text, ompLast.text)) {
-          mismatch = {
-            reason: 'last-message-content',
-            detail: 'Craft and OMP last conversational message text do not match',
-            detectedAt,
+          let lastAssistantTextMatches = false
+          if (craftLast.role === 'assistant') {
+            try {
+              const lastAssistantText = await agent.getOmpLastAssistantText()
+              if (lastAssistantText !== null) {
+                lastAssistantTextMatches = conversationTextsMatch(
+                  craftLast.text,
+                  normalizeConversationText(lastAssistantText),
+                )
+              }
+            } catch (error) {
+              sessionLog.debug(`OMP get_last_assistant_text check failed for ${managed.id}: ${this.formatOmpActionError(error)}`)
+            }
+          }
+          if (lastAssistantTextMatches) {
+            mismatch = undefined
+          } else {
+            mismatch = {
+              reason: 'last-message-content',
+              detail: 'Craft and OMP last conversational message text do not match',
+              detectedAt,
+            }
           }
         }
       }

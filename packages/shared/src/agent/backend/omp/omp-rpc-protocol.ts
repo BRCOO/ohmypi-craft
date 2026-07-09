@@ -47,6 +47,104 @@ export interface OmpRpcAvailableCommandsResponseData {
   commands: OmpRpcAvailableSlashCommand[];
 }
 
+export interface OmpRpcHostToolDefinition {
+  name: string;
+  label?: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  hidden?: boolean;
+}
+
+export interface OmpRpcAgentToolTextContent {
+  type: 'text';
+  text: string;
+}
+
+export interface OmpRpcAgentToolImageContent {
+  type: 'image';
+  data: string;
+  mimeType: string;
+}
+
+export type OmpRpcAgentToolContent =
+  | OmpRpcAgentToolTextContent
+  | OmpRpcAgentToolImageContent;
+
+export interface OmpRpcAgentToolResult {
+  content: OmpRpcAgentToolContent[];
+  details?: unknown;
+  isError?: boolean;
+}
+
+export interface OmpRpcHostToolCallFrame {
+  type: 'host_tool_call';
+  id: string;
+  toolCallId: string;
+  toolName: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface OmpRpcHostToolCancelFrame {
+  type: 'host_tool_cancel';
+  id: string;
+  targetId: string;
+}
+
+export interface OmpRpcHostToolUpdateFrame {
+  type: 'host_tool_update';
+  id: string;
+  partialResult: OmpRpcAgentToolResult;
+}
+
+export interface OmpRpcHostToolResultFrame {
+  type: 'host_tool_result';
+  id: string;
+  result: OmpRpcAgentToolResult;
+  isError?: boolean;
+}
+
+export interface OmpRpcSetHostToolsResponseData {
+  toolNames: string[];
+}
+
+export interface OmpRpcHostUriSchemeDefinition {
+  scheme: string;
+  description?: string;
+  writable?: boolean;
+  immutable?: boolean;
+}
+
+export type OmpRpcHostUriOperation = 'read' | 'write';
+
+export interface OmpRpcHostUriRequestFrame {
+  type: 'host_uri_request';
+  id: string;
+  operation: OmpRpcHostUriOperation;
+  url: string;
+  content?: string;
+}
+
+export interface OmpRpcHostUriCancelFrame {
+  type: 'host_uri_cancel';
+  id: string;
+  targetId: string;
+}
+
+export interface OmpRpcHostUriResultFrame {
+  type: 'host_uri_result';
+  id: string;
+  content?: string;
+  contentType?: 'text/markdown' | 'application/json' | 'text/plain';
+  notes?: string[];
+  immutable?: boolean;
+  isError?: boolean;
+  error?: string;
+}
+
+export interface OmpRpcSetHostUriSchemesResponseData {
+  schemes: string[];
+}
+
 export interface OmpRpcCancellationResult {
   cancelled: boolean;
 }
@@ -71,6 +169,16 @@ export interface OmpRpcExportHtmlResponseData {
 
 export interface OmpRpcHandoffResult {
   savedPath?: string;
+}
+
+export interface OmpRpcLastAssistantTextResponseData {
+  text: string | null;
+}
+
+export interface OmpRpcSessionInfoUpdateFrame {
+  type: 'session_info_update';
+  sessionId?: string;
+  title?: string;
 }
 
 export interface OmpRpcMessagesResponseData {
@@ -370,12 +478,20 @@ export type OmpRpcCommand =
   | { type: 'new_session'; parentSession?: string }
   | { type: 'get_state' }
   | { type: 'set_todos'; phases: OmpTodoPhase[] }
+  | { type: 'set_host_tools'; tools: OmpRpcHostToolDefinition[] }
+  | { type: 'set_host_uri_schemes'; schemes: OmpRpcHostUriSchemeDefinition[] }
   | { type: 'set_subagent_subscription'; level: OmpSubagentSubscriptionLevel }
   | { type: 'get_subagents' }
   | { type: 'get_subagent_messages'; subagentId?: string; sessionFile?: string; fromByte?: number }
   | { type: 'get_available_commands' }
+  | { type: 'cycle_model' }
+  | { type: 'get_available_models' }
+  | { type: 'cycle_thinking_level' }
+  | { type: 'bash'; command: string }
+  | { type: 'abort_bash' }
   | { type: 'get_messages' }
   | { type: 'get_branch_messages' }
+  | { type: 'get_last_assistant_text' }
   | { type: 'switch_session'; sessionPath: string }
   | { type: 'branch'; entryId: string }
   | { type: 'set_session_name'; name: string }
@@ -391,7 +507,129 @@ export type OmpRpcCommand =
   | { type: 'set_steering_mode'; mode: OmpQueueMode }
   | { type: 'set_follow_up_mode'; mode: OmpQueueMode }
   | { type: 'set_interrupt_mode'; mode: OmpInterruptMode }
+  | { type: 'get_login_providers' }
+  | { type: 'login'; providerId: string }
   | { type: 'permission_response'; requestId: string; decision: 'approved' | 'denied' };
+
+export type OmpRpcStandardCommand = Exclude<OmpRpcCommand, { type: 'permission_response' }>;
+export type OmpRpcCommandType = OmpRpcStandardCommand['type'];
+
+export type OmpRpcCommandCategory =
+  | 'prompting'
+  | 'state'
+  | 'model'
+  | 'thinking'
+  | 'queue'
+  | 'compaction'
+  | 'retry'
+  | 'bash'
+  | 'session'
+  | 'messages'
+  | 'login';
+
+export interface OmpRpcCommandDefinition {
+  category: OmpRpcCommandCategory;
+  responseKind: string;
+  timeoutMs: number;
+  longRunning: boolean;
+  sideEffect: boolean;
+}
+
+export const DEFAULT_OMP_RPC_REQUEST_TIMEOUT_MS = 30_000;
+export const DEFAULT_OMP_RPC_LONG_REQUEST_TIMEOUT_MS = 300_000;
+
+const ACK_RESPONSE = 'ack';
+const READ_TIMEOUT = DEFAULT_OMP_RPC_REQUEST_TIMEOUT_MS;
+const LONG_TIMEOUT = DEFAULT_OMP_RPC_LONG_REQUEST_TIMEOUT_MS;
+
+function commandDefinition(
+  category: OmpRpcCommandCategory,
+  responseKind: string,
+  options: {
+    longRunning?: boolean;
+    sideEffect?: boolean;
+    timeoutMs?: number;
+  } = {},
+): OmpRpcCommandDefinition {
+  const longRunning = options.longRunning ?? false;
+  return {
+    category,
+    responseKind,
+    timeoutMs: options.timeoutMs ?? (longRunning ? LONG_TIMEOUT : READ_TIMEOUT),
+    longRunning,
+    sideEffect: options.sideEffect ?? true,
+  };
+}
+
+export const OMP_RPC_COMMAND_DEFINITIONS = {
+  prompt: commandDefinition('prompting', 'prompt_result', { longRunning: true }),
+  steer: commandDefinition('prompting', ACK_RESPONSE),
+  follow_up: commandDefinition('prompting', ACK_RESPONSE),
+  abort: commandDefinition('prompting', ACK_RESPONSE),
+  abort_and_prompt: commandDefinition('prompting', ACK_RESPONSE, { longRunning: true }),
+  new_session: commandDefinition('prompting', 'cancellation_result', { longRunning: true }),
+
+  get_state: commandDefinition('state', 'session_state', { sideEffect: false }),
+  get_available_commands: commandDefinition('state', 'available_commands', { sideEffect: false }),
+  set_todos: commandDefinition('state', 'todo_snapshot'),
+  set_host_tools: commandDefinition('state', 'host_tool_names'),
+  set_host_uri_schemes: commandDefinition('state', 'host_uri_schemes'),
+  set_subagent_subscription: commandDefinition('state', 'subagent_subscription'),
+  get_subagents: commandDefinition('state', 'subagents', { sideEffect: false }),
+  get_subagent_messages: commandDefinition('state', 'subagent_messages', { sideEffect: false }),
+
+  set_model: commandDefinition('model', 'model'),
+  cycle_model: commandDefinition('model', 'model_cycle'),
+  get_available_models: commandDefinition('model', 'available_models', { sideEffect: false }),
+
+  set_thinking_level: commandDefinition('thinking', ACK_RESPONSE),
+  cycle_thinking_level: commandDefinition('thinking', 'thinking_level'),
+
+  set_steering_mode: commandDefinition('queue', ACK_RESPONSE),
+  set_follow_up_mode: commandDefinition('queue', ACK_RESPONSE),
+  set_interrupt_mode: commandDefinition('queue', ACK_RESPONSE),
+
+  compact: commandDefinition('compaction', 'compaction_result', { longRunning: true }),
+  set_auto_compaction: commandDefinition('compaction', ACK_RESPONSE),
+
+  set_auto_retry: commandDefinition('retry', ACK_RESPONSE),
+  abort_retry: commandDefinition('retry', ACK_RESPONSE),
+
+  bash: commandDefinition('bash', 'bash_result', { longRunning: true }),
+  abort_bash: commandDefinition('bash', ACK_RESPONSE),
+
+  get_session_stats: commandDefinition('session', 'session_stats', {
+    longRunning: true,
+    sideEffect: false,
+  }),
+  export_html: commandDefinition('session', 'export_html', { longRunning: true }),
+  switch_session: commandDefinition('session', 'cancellation_result', { longRunning: true }),
+  branch: commandDefinition('session', 'branch_result', { longRunning: true }),
+  get_branch_messages: commandDefinition('session', 'branch_messages', { sideEffect: false }),
+  get_last_assistant_text: commandDefinition('session', 'last_assistant_text', { sideEffect: false }),
+  set_session_name: commandDefinition('session', ACK_RESPONSE),
+  handoff: commandDefinition('session', 'handoff_result', { longRunning: true }),
+
+  get_messages: commandDefinition('messages', 'messages', { sideEffect: false }),
+
+  get_login_providers: commandDefinition('login', 'login_providers', { sideEffect: false }),
+  login: commandDefinition('login', 'login_result', { longRunning: true }),
+} satisfies Record<OmpRpcCommandType, OmpRpcCommandDefinition>;
+
+export function getOmpRpcCommandDefinition(command: string): OmpRpcCommandDefinition | undefined {
+  return OMP_RPC_COMMAND_DEFINITIONS[command as OmpRpcCommandType];
+}
+
+export function getOmpRpcCommandTimeout(
+  command: string,
+  fallbackMs = DEFAULT_OMP_RPC_REQUEST_TIMEOUT_MS,
+  longRunningFallbackMs = DEFAULT_OMP_RPC_LONG_REQUEST_TIMEOUT_MS,
+): number {
+  const definition = getOmpRpcCommandDefinition(command);
+  if (!definition) return fallbackMs;
+  if (definition.longRunning) return longRunningFallbackMs;
+  return definition.timeoutMs;
+}
 
 export type OmpRpcExtensionUiResponse =
   | { type: 'extension_ui_response'; id: string; value: string }
@@ -527,8 +765,24 @@ function isCommandName(value: unknown): value is string {
   return isString(value) && value.trim().length > 0 && !/\s/.test(value);
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return isString(value) && value.trim().length > 0;
+}
+
 function optionalString(value: unknown): string | undefined {
   return isString(value) ? value : undefined;
+}
+
+function parseRecordPayload(value: unknown): Record<string, unknown> | null {
+  if (value === undefined) return {};
+  const object = asObject(value);
+  if (object) return object;
+  if (!isString(value)) return null;
+  try {
+    return asObject(JSON.parse(value)) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function parseAliases(value: unknown): string[] | undefined {
@@ -936,6 +1190,97 @@ export function parseOmpAvailableCommandsResponseData(value: unknown): OmpRpcAva
   };
 }
 
+export function parseOmpSetHostToolsResponseData(value: unknown): OmpRpcSetHostToolsResponseData | null {
+  const raw = asObject(value);
+  const toolNames = parseStringArray(raw?.toolNames);
+  if (!raw || !toolNames) return null;
+  return { toolNames };
+}
+
+export function parseOmpSetHostUriSchemesResponseData(value: unknown): OmpRpcSetHostUriSchemesResponseData | null {
+  const raw = asObject(value);
+  const schemes = parseStringArray(raw?.schemes);
+  if (!raw || !schemes) return null;
+  return { schemes };
+}
+
+export function parseOmpHostToolCall(value: unknown): OmpRpcHostToolCallFrame | null {
+  const raw = asObject(value);
+  const args = parseRecordPayload(raw?.arguments);
+  if (
+    raw?.type !== 'host_tool_call'
+    || !isNonEmptyString(raw.id)
+    || !isNonEmptyString(raw.toolCallId)
+    || !isNonEmptyString(raw.toolName)
+    || !args
+  ) {
+    return null;
+  }
+  return {
+    type: 'host_tool_call',
+    id: raw.id,
+    toolCallId: raw.toolCallId,
+    toolName: raw.toolName,
+    arguments: args,
+  };
+}
+
+export function parseOmpHostToolCancel(value: unknown): OmpRpcHostToolCancelFrame | null {
+  const raw = asObject(value);
+  if (
+    raw?.type !== 'host_tool_cancel'
+    || !isNonEmptyString(raw.id)
+    || !isNonEmptyString(raw.targetId)
+  ) {
+    return null;
+  }
+  return {
+    type: 'host_tool_cancel',
+    id: raw.id,
+    targetId: raw.targetId,
+  };
+}
+
+function isHostUriOperation(value: unknown): value is OmpRpcHostUriOperation {
+  return value === 'read' || value === 'write';
+}
+
+export function parseOmpHostUriRequest(value: unknown): OmpRpcHostUriRequestFrame | null {
+  const raw = asObject(value);
+  if (
+    raw?.type !== 'host_uri_request'
+    || !isNonEmptyString(raw.id)
+    || !isHostUriOperation(raw.operation)
+    || !isNonEmptyString(raw.url)
+    || (raw.content !== undefined && !isString(raw.content))
+  ) {
+    return null;
+  }
+  return {
+    type: 'host_uri_request',
+    id: raw.id,
+    operation: raw.operation,
+    url: raw.url,
+    content: raw.content as string | undefined,
+  };
+}
+
+export function parseOmpHostUriCancel(value: unknown): OmpRpcHostUriCancelFrame | null {
+  const raw = asObject(value);
+  if (
+    raw?.type !== 'host_uri_cancel'
+    || !isNonEmptyString(raw.id)
+    || !isNonEmptyString(raw.targetId)
+  ) {
+    return null;
+  }
+  return {
+    type: 'host_uri_cancel',
+    id: raw.id,
+    targetId: raw.targetId,
+  };
+}
+
 export function parseOmpCancellationResult(value: unknown): OmpRpcCancellationResult | null {
   const raw = asObject(value);
   if (!raw || typeof raw.cancelled !== 'boolean') return null;
@@ -980,6 +1325,14 @@ export function parseOmpHandoffResult(value: unknown): OmpRpcHandoffResult | nul
   if (!raw || (raw.savedPath !== undefined && !isString(raw.savedPath))) return null;
   return {
     savedPath: raw.savedPath as string | undefined,
+  };
+}
+
+export function parseOmpLastAssistantTextResponseData(value: unknown): OmpRpcLastAssistantTextResponseData | null {
+  const raw = asObject(value);
+  if (!raw || (raw.text !== null && !isString(raw.text))) return null;
+  return {
+    text: raw.text,
   };
 }
 
@@ -1191,6 +1544,27 @@ export function parseOmpAvailableCommandsUpdate(value: unknown): OmpRpcAvailable
   return {
     type: 'available_commands_update',
     commands: parsed.commands,
+  };
+}
+
+export function parseOmpSessionInfoUpdate(value: unknown): OmpRpcSessionInfoUpdateFrame | null {
+  const raw = asObject(value);
+  if (
+    raw?.type !== 'session_info_update'
+    || (raw.sessionId !== undefined && !isString(raw.sessionId))
+    || (raw.session_id !== undefined && !isString(raw.session_id))
+    || (raw.title !== undefined && !isString(raw.title))
+  ) {
+    return null;
+  }
+
+  const sessionId = raw.sessionId ?? raw.session_id;
+  if (sessionId === undefined && raw.title === undefined) return null;
+
+  return {
+    type: 'session_info_update',
+    sessionId: sessionId as string | undefined,
+    title: raw.title as string | undefined,
   };
 }
 

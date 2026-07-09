@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
+  DEFAULT_OMP_RPC_LONG_REQUEST_TIMEOUT_MS,
+  DEFAULT_OMP_RPC_REQUEST_TIMEOUT_MS,
+  OMP_RPC_COMMAND_DEFINITIONS,
   craftThinkingLevelToOmp,
+  getOmpRpcCommandTimeout,
   ompThinkingLevelToCraft,
   parseOmpAvailableCommandsResponseData,
   parseOmpAvailableCommandsUpdate,
@@ -13,13 +17,21 @@ import {
   parseOmpContextUsage,
   parseOmpExportHtmlResponseData,
   parseOmpHandoffResult,
+  parseOmpHostToolCall,
+  parseOmpHostToolCancel,
+  parseOmpHostUriCancel,
+  parseOmpHostUriRequest,
+  parseOmpLastAssistantTextResponseData,
   parseOmpMessagesResponseData,
   parseOmpPromptResponseData,
   parseOmpPromptResult,
   parseOmpQueueControlState,
   parseOmpRpcResponse,
   parseOmpRuntimeEvent,
+  parseOmpSetHostToolsResponseData,
+  parseOmpSetHostUriSchemesResponseData,
   parseOmpSetTodosResponseData,
+  parseOmpSessionInfoUpdate,
   parseOmpSessionState,
   parseOmpSessionStats,
   parseOmpSubagentFrame,
@@ -47,6 +59,38 @@ const validState = {
 };
 
 describe('OMP RPC protocol parsers', () => {
+  it('defines metadata for all 39 standard OMP RPC commands', () => {
+    const commandNames = Object.keys(OMP_RPC_COMMAND_DEFINITIONS);
+    expect(commandNames).toHaveLength(39);
+    expect(commandNames).toEqual(expect.arrayContaining([
+      'prompt',
+      'set_host_tools',
+      'set_host_uri_schemes',
+      'get_available_models',
+      'cycle_thinking_level',
+      'bash',
+      'abort_bash',
+      'get_login_providers',
+      'login',
+    ]));
+
+    expect(OMP_RPC_COMMAND_DEFINITIONS.get_state).toMatchObject({
+      category: 'state',
+      responseKind: 'session_state',
+      sideEffect: false,
+      longRunning: false,
+    });
+    expect(OMP_RPC_COMMAND_DEFINITIONS.login).toMatchObject({
+      category: 'login',
+      responseKind: 'login_result',
+      sideEffect: true,
+      longRunning: true,
+    });
+    expect(getOmpRpcCommandTimeout('get_state')).toBe(DEFAULT_OMP_RPC_REQUEST_TIMEOUT_MS);
+    expect(getOmpRpcCommandTimeout('login')).toBe(DEFAULT_OMP_RPC_LONG_REQUEST_TIMEOUT_MS);
+    expect(getOmpRpcCommandTimeout('future_extension_command', 1234, 9999)).toBe(1234);
+  });
+
   it('maps Craft and OMP thinking levels without overstating max support', () => {
     expect(craftThinkingLevelToOmp('off')).toBe('off');
     expect(craftThinkingLevelToOmp('medium')).toBe('medium');
@@ -99,6 +143,106 @@ describe('OMP RPC protocol parsers', () => {
     });
     expect(parseOmpPromptResponseData({ agentInvoked: true, extra: 1 })).toEqual({
       agentInvoked: true,
+    });
+  });
+
+  it('parses last assistant text responses and session info updates', () => {
+    expect(parseOmpLastAssistantTextResponseData({ text: 'Final answer' })).toEqual({
+      text: 'Final answer',
+    });
+    expect(parseOmpLastAssistantTextResponseData({ text: null })).toEqual({
+      text: null,
+    });
+    expect(parseOmpLastAssistantTextResponseData({ text: 42 })).toBeNull();
+
+    expect(parseOmpSessionInfoUpdate({
+      type: 'session_info_update',
+      sessionId: 'session-2',
+      title: 'Updated OMP title',
+    })).toEqual({
+      type: 'session_info_update',
+      sessionId: 'session-2',
+      title: 'Updated OMP title',
+    });
+    expect(parseOmpSessionInfoUpdate({
+      type: 'session_info_update',
+      session_id: 'session-3',
+    })).toEqual({
+      type: 'session_info_update',
+      sessionId: 'session-3',
+      title: undefined,
+    });
+    expect(parseOmpSessionInfoUpdate({ type: 'session_info_update' })).toBeNull();
+  });
+
+  it('parses OMP host tool and host URI bridge frames', () => {
+    expect(parseOmpSetHostToolsResponseData({ toolNames: ['config_validate', 'SubmitPlan'] })).toEqual({
+      toolNames: ['config_validate', 'SubmitPlan'],
+    });
+    expect(parseOmpSetHostToolsResponseData({ toolNames: ['ok', 1] })).toBeNull();
+
+    expect(parseOmpHostToolCall({
+      type: 'host_tool_call',
+      id: 'host-1',
+      toolCallId: 'tool-use-1',
+      toolName: 'config_validate',
+      arguments: '{"target":"all"}',
+    })).toEqual({
+      type: 'host_tool_call',
+      id: 'host-1',
+      toolCallId: 'tool-use-1',
+      toolName: 'config_validate',
+      arguments: { target: 'all' },
+    });
+    expect(parseOmpHostToolCall({
+      type: 'host_tool_call',
+      id: 'host-1',
+      toolName: 'config_validate',
+      arguments: {},
+    })).toBeNull();
+
+    expect(parseOmpHostToolCancel({
+      type: 'host_tool_cancel',
+      id: 'cancel-1',
+      targetId: 'host-1',
+    })).toEqual({
+      type: 'host_tool_cancel',
+      id: 'cancel-1',
+      targetId: 'host-1',
+    });
+
+    expect(parseOmpSetHostUriSchemesResponseData({ schemes: ['craft-session'] })).toEqual({
+      schemes: ['craft-session'],
+    });
+    expect(parseOmpSetHostUriSchemesResponseData({ schemes: ['ok', 1] })).toBeNull();
+
+    expect(parseOmpHostUriRequest({
+      type: 'host_uri_request',
+      id: 'uri-1',
+      operation: 'read',
+      url: 'craft-session://current/todos',
+    })).toEqual({
+      type: 'host_uri_request',
+      id: 'uri-1',
+      operation: 'read',
+      url: 'craft-session://current/todos',
+      content: undefined,
+    });
+    expect(parseOmpHostUriRequest({
+      type: 'host_uri_request',
+      id: 'uri-2',
+      operation: 'delete',
+      url: 'craft-session://current/todos',
+    })).toBeNull();
+
+    expect(parseOmpHostUriCancel({
+      type: 'host_uri_cancel',
+      id: 'cancel-uri-1',
+      targetId: 'uri-1',
+    })).toEqual({
+      type: 'host_uri_cancel',
+      id: 'cancel-uri-1',
+      targetId: 'uri-1',
     });
   });
 

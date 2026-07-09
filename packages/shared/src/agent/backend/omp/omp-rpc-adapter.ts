@@ -2,13 +2,23 @@ import type { AgentEvent } from '@craft-agent/core/types';
 import type { PermissionRequestType } from '../types.ts';
 import {
   parseOmpAvailableCommandsUpdate,
+  parseOmpHostToolCall,
+  parseOmpHostToolCancel,
+  parseOmpHostUriCancel,
+  parseOmpHostUriRequest,
   parseOmpPromptResult,
   parseOmpQueueControlState,
   parseOmpRpcResponse,
+  parseOmpSessionInfoUpdate,
   type OmpQueueControlState,
   type OmpRpcAvailableSlashCommand,
+  type OmpRpcHostToolCallFrame,
+  type OmpRpcHostToolCancelFrame,
+  type OmpRpcHostUriCancelFrame,
+  type OmpRpcHostUriRequestFrame,
   type OmpRpcPromptResultFrame,
   type OmpRpcResponseFrame,
+  type OmpRpcSessionInfoUpdateFrame,
   type OmpThinkingLevel,
 } from './omp-rpc-protocol.ts';
 
@@ -21,6 +31,11 @@ export interface OmpRpcAdaptedFrame {
   thinkingLevel?: OmpThinkingLevel;
   queueState?: Partial<OmpQueueControlState>;
   availableCommands?: OmpRpcAvailableSlashCommand[];
+  sessionInfoUpdate?: OmpRpcSessionInfoUpdateFrame;
+  hostToolCall?: OmpRpcHostToolCallFrame;
+  hostToolCancel?: OmpRpcHostToolCancelFrame;
+  hostUriRequest?: OmpRpcHostUriRequestFrame;
+  hostUriCancel?: OmpRpcHostUriCancelFrame;
   sessionId?: string;
   unknownFrameType?: string;
 }
@@ -534,6 +549,46 @@ export class OmpRpcEventAdapter {
         };
       }
 
+      case 'session_info_update': {
+        const sessionInfoUpdate = parseOmpSessionInfoUpdate(raw);
+        return {
+          events: [],
+          ...(sessionInfoUpdate ? { sessionInfoUpdate } : {}),
+        };
+      }
+
+      case 'host_tool_call': {
+        const hostToolCall = parseOmpHostToolCall(raw);
+        return {
+          events: [],
+          ...(hostToolCall ? { hostToolCall } : {}),
+        };
+      }
+
+      case 'host_tool_cancel': {
+        const hostToolCancel = parseOmpHostToolCancel(raw);
+        return {
+          events: [],
+          ...(hostToolCancel ? { hostToolCancel } : {}),
+        };
+      }
+
+      case 'host_uri_request': {
+        const hostUriRequest = parseOmpHostUriRequest(raw);
+        return {
+          events: [],
+          ...(hostUriRequest ? { hostUriRequest } : {}),
+        };
+      }
+
+      case 'host_uri_cancel': {
+        const hostUriCancel = parseOmpHostUriCancel(raw);
+        return {
+          events: [],
+          ...(hostUriCancel ? { hostUriCancel } : {}),
+        };
+      }
+
       case 'permission_resolved':
         return { events: [] };
 
@@ -588,11 +643,9 @@ export class OmpRpcEventAdapter {
         };
       }
 
-      case 'auto_compaction_start':
       case 'compaction_start':
         return { events: [{ type: 'status', message: 'Compacting context...' }] };
 
-      case 'auto_compaction_end':
       case 'compaction_end': {
         const errorMessage = asString(raw.errorMessage) ?? asString(raw.error_message);
         if (errorMessage) {

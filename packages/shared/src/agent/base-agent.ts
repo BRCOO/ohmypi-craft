@@ -1139,14 +1139,17 @@ ${formattedMessages}
    * Pre-execute a call_llm request: resolve attachments, validate model, run query.
    * Shared across all backends. Codex overrides validateCallLlmModel() for provider filtering.
    */
-  protected async preExecuteCallLlm(input: Record<string, unknown>): Promise<LLMQueryResult> {
+  protected async preExecuteCallLlm(
+    input: Record<string, unknown>,
+    executeQuery: (request: LLMQueryRequest) => Promise<LLMQueryResult> = request => this.queryLlm(request),
+  ): Promise<LLMQueryResult> {
     const sessionPath = getSessionPath(this.config.workspace.rootPath, this._sessionId);
     const request = await buildCallLlmRequest(input, {
       backendName: this.backendName,
       sessionPath,
       validateModel: this.validateCallLlmModel?.bind(this),
     });
-    return this.queryLlm(request);
+    return executeQuery(request);
   }
 
   /**

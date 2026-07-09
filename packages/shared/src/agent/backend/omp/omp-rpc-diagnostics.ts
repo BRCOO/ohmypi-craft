@@ -1,4 +1,9 @@
-import type { OmpRpcSessionState } from './omp-rpc-protocol.ts';
+import {
+  OMP_RPC_COMMAND_DEFINITIONS,
+  type OmpRpcCommandDefinition,
+  type OmpRpcCommandType,
+  type OmpRpcSessionState,
+} from './omp-rpc-protocol.ts';
 
 export interface OmpUnknownFrameSample {
   type: string;
@@ -32,6 +37,8 @@ export interface OmpRpcDiagnosticsSnapshot {
   requestsByCommand: Record<string, number>;
   requestLatencyByCommand: Record<string, OmpRequestLatency>;
   requestTimeouts: number;
+  requestTimeoutsByCommand: Record<string, number>;
+  commandDefinitions: Record<OmpRpcCommandType, OmpRpcCommandDefinition>;
   orphanResponses: number;
   duplicateResponses: number;
   writeFailures: number;
@@ -72,6 +79,7 @@ export class OmpRpcDiagnostics {
   private requestsByCommand: Record<string, number> = {};
   private requestLatencyByCommand: Record<string, OmpRequestLatency> = {};
   private requestTimeouts = 0;
+  private requestTimeoutsByCommand: Record<string, number> = {};
   private orphanResponses = 0;
   private duplicateResponses = 0;
   private writeFailures = 0;
@@ -155,8 +163,9 @@ export class OmpRpcDiagnostics {
     }
   }
 
-  recordTimeout(): void {
+  recordTimeout(command?: string): void {
     this.requestTimeouts += 1;
+    if (command) increment(this.requestTimeoutsByCommand, command);
   }
 
   recordWriteFailure(): void {
@@ -201,6 +210,13 @@ export class OmpRpcDiagnostics {
         ]),
       ),
       requestTimeouts: this.requestTimeouts,
+      requestTimeoutsByCommand: { ...this.requestTimeoutsByCommand },
+      commandDefinitions: Object.fromEntries(
+        Object.entries(OMP_RPC_COMMAND_DEFINITIONS).map(([command, definition]) => [
+          command,
+          { ...definition },
+        ]),
+      ) as Record<OmpRpcCommandType, OmpRpcCommandDefinition>,
       orphanResponses: this.orphanResponses,
       duplicateResponses: this.duplicateResponses,
       writeFailures: this.writeFailures,

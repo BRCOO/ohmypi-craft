@@ -1,14 +1,49 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { appendFile, mkdir, writeFile } from 'node:fs/promises';
+import {
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  win32,
+} from 'node:path';
 import readline from 'node:readline';
 
 import type { AgentEvent, ExtensionUiResponse } from '@craft-agent/core/types';
+import {
+  getSessionToolDefs,
+  getToolDefsAsJsonSchema,
+  SESSION_TOOL_REGISTRY,
+  type SessionToolContext,
+  type ToolResult,
+} from '@craft-agent/session-tools-core';
 import type { OmpSessionLink, OmpSessionMismatchReason } from '../../../sessions/types.ts';
 
 import { BaseAgent } from '../../base-agent.ts';
+import { executeBrowserToolCommand } from '../../browser-tool-runtime.ts';
+import { createClaudeContext } from '../../claude-context.ts';
+import { FEATURE_FLAGS } from '../../../feature-flags.ts';
 import type { LLMQueryRequest, LLMQueryResult } from '../../llm-tool.ts';
+import { attachSessionSelfManagementBindings } from '../../session-self-management-bindings.ts';
+import {
+  getSessionScopedToolCallbacks,
+  setLastPlanFilePath,
+  type AuthRequest,
+} from '../../session-scoped-tools.ts';
+import { runPreToolUseChecks } from '../../core/pre-tool-use.ts';
+import { SourceActivationDrainController } from '../../source-activation-drain.ts';
 import type { ThinkingLevel } from '../../thinking-levels.ts';
+import { saveBinaryResponse } from '../../../utils/binary-detection.ts';
 import type { FileAttachment } from '../../../utils/files.ts';
-import type { ChatOptions, BackendConfig } from '../types.ts';
+import type { LoadedSource } from '../../../sources/types.ts';
+import {
+  getSessionDataPath,
+  getSessionPath,
+  getSessionPlansPath,
+} from '../../../sessions/storage.ts';
+import { extractWorkspaceSlug } from '../../../utils/workspace.ts';
+import type { ChatOptions, BackendConfig, PermissionRequestType } from '../types.ts';
 import { AbortReason } from '../types.ts';
 import { EventQueue } from '../event-queue.ts';
 import { prepareOmpPrompt } from './omp-rpc-attachments.ts';
@@ -40,6 +75,9 @@ import {
 } from './omp-todo-state.ts';
 import {
   type OmpControlState,
+  DEFAULT_OMP_RPC_LONG_REQUEST_TIMEOUT_MS,
+  DEFAULT_OMP_RPC_REQUEST_TIMEOUT_MS,
+  getOmpRpcCommandTimeout,
   type OmpInterruptMode,
   type OmpQueueMode,
   type OmpQueueControlState,
@@ -52,6 +90,9 @@ import {
   parseOmpCompactionResult,
   parseOmpExportHtmlResponseData,
   parseOmpHandoffResult,
+  parseOmpSetHostToolsResponseData,
+  parseOmpSetHostUriSchemesResponseData,
+  parseOmpLastAssistantTextResponseData,
   parseOmpMessagesResponseData,
   parseOmpPromptResponseData,
   parseOmpRuntimeEvent,
@@ -66,7 +107,9 @@ import {
   type OmpSubagentFrame,
   type OmpSubagentSnapshot,
   type OmpTodoPhase,
+  type OmpRpcAgentToolContent,
   type OmpRpcAvailableSlashCommand,
+  type OmpRpcAgentToolResult,
   type OmpRpcBranchMessage,
   type OmpRpcBranchResult,
   type OmpRpcCancellationResult,
@@ -74,13 +117,81 @@ import {
   type OmpRpcExportHtmlResponseData,
   type OmpRpcExtensionUiResponse,
   type OmpRpcHandoffResult,
+  type OmpRpcHostToolCallFrame,
+  type OmpRpcHostToolDefinition,
+  type OmpRpcHostToolResultFrame,
+  type OmpRpcHostToolUpdateFrame,
+  type OmpRpcHostUriCancelFrame,
+  type OmpRpcHostUriRequestFrame,
+  type OmpRpcHostUriResultFrame,
   type OmpRpcSessionState,
+  type OmpRpcSessionInfoUpdateFrame,
   type OmpRuntimeState,
   type OmpThinkingLevel,
 } from './omp-rpc-protocol.ts';
 import type { OmpTodoMutationDto } from '../../../protocol/dto.ts';
 
 export const DEFAULT_OMP_MODEL = 'omp/default';
+export const DEFAULT_OMP_HOST_TOOL_MAX_CONCURRENT_EXECUTIONS = 4;
+const OMP_HOST_URI_SCHEME = 'craft-session';
+const OMP_HOST_WORKSPACE_URI_SCHEME = 'craft-workspace';
+const OMP_HOST_URI_ARTIFACTS_PATH = 'artifacts';
+const OMP_HOST_URI_ARTIFACTS_DIR = 'omp-artifacts';
+const OMP_HOST_URI_AUDIT_FILE = 'omp-host-uri-audit.jsonl';
+
+function positiveIntegerOrDefault(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : fallback;
+}
+
+export function dedupeOmpHostToolDefinitions(
+  tools: OmpRpcHostToolDefinition[],
+): { tools: OmpRpcHostToolDefinition[]; skippedNames: string[] } {
+  const seen = new Set<string>();
+  const deduped: OmpRpcHostToolDefinition[] = [];
+  const skippedNames: string[] = [];
+  for (const tool of tools) {
+    if (seen.has(tool.name)) {
+      skippedNames.push(tool.name);
+      continue;
+    }
+    seen.add(tool.name);
+    deduped.push(tool);
+  }
+  return { tools: deduped, skippedNames };
+}
+
+function mapBrowserToolErrorCode(code: string): string | null {
+  switch (code) {
+    case 'BROWSER_NO_CAPABLE_CLIENT':
+    case 'CAPABILITY_UNAVAILABLE':
+      return 'No connected desktop client supports browser tools, or no client is currently connected. ' +
+        'Ask the user to open this workspace from the Craft Agent desktop app.';
+    case 'CLIENT_DISCONNECTED':
+      return 'The desktop client that owned this browser session disconnected. ' +
+        'Ask the user to reconnect and retry.';
+    case 'CLIENT_REQUEST_TIMEOUT':
+      return 'Browser operation timed out (>30s). The desktop client may be unresponsive.';
+    case 'BROWSER_INSTANCE_NOT_OWNED':
+      return 'That browser instance ID does not belong to this session. ' +
+        'Use `windows` to list owned instances, or `open` to create a new one.';
+    case 'BROWSER_REMOTE_UPLOAD_NOT_SUPPORTED':
+      return 'File upload from a remote agent is not supported. ' +
+        'Ask the user to attach the file to the session.';
+    case 'BROWSER_REMOTE_EVALUATE_BLOCKED':
+      return 'JavaScript evaluation is disabled on this desktop client. ' +
+        'Ask the user to enable it in settings.';
+    default:
+      return null;
+  }
+}
+
+function createHostToolAbortError(message: string): Error {
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
+}
 
 export interface OmpModelSelection {
   provider: string;
@@ -101,6 +212,51 @@ interface ActiveTurn {
   finished: boolean;
 }
 
+interface PendingHostToolExecution {
+  requestId: string;
+  toolName: string;
+  startedAt: number;
+  controller: AbortController;
+  timer: ReturnType<typeof setTimeout>;
+  settled: boolean;
+  cooperativelyCancellable: boolean;
+  updateTimer: ReturnType<typeof setTimeout> | null;
+  pendingUpdateText?: string;
+  lastSentUpdateText?: string;
+}
+
+interface PendingHostToolPermission {
+  resolve(allowed: boolean): void;
+  toolName: string;
+  command?: string;
+  hostRequestId: string;
+}
+
+interface PendingHostUriRequest {
+  url: string;
+  operation: 'read' | 'write';
+  cancelled: boolean;
+  startedAt: number;
+}
+
+interface HostUriArtifactTarget {
+  relativePath: string;
+  rootPath: string;
+  filePath: string;
+}
+
+interface HostUriAuditRecord {
+  timestamp: number;
+  operation: 'read' | 'write';
+  url: string;
+  contentType?: string;
+  bytes?: number;
+  allowed: boolean;
+  relativePath?: string;
+  resultPath?: string;
+  error?: string;
+}
+
 export interface OmpRpcBackendOptions {
   /** Test seam for deterministic subprocess lifecycle coverage. */
   spawnProcess?: typeof spawn;
@@ -110,6 +266,16 @@ export interface OmpRpcBackendOptions {
   requestTimeoutMs?: number;
   /** Override long-running compact/statistics timeout for deterministic tests. */
   longRequestTimeoutMs?: number;
+  /** Override host bridge registration timeout for deterministic tests. */
+  hostBridgeRequestTimeoutMs?: number;
+  /** Override the maximum lifetime of one OMP host tool call. */
+  hostToolExecutionTimeoutMs?: number;
+  /** Override host tool progress coalescing for deterministic tests. */
+  hostToolUpdateThrottleMs?: number;
+  /** Maximum concurrent OMP host tool executions per backend instance. */
+  hostToolMaxConcurrentExecutions?: number;
+  /** Disable the host bridge for isolated utility completions. */
+  hostBridgeEnabled?: boolean;
   /** Test seam for path-only image attachments. */
   attachmentReadFile?: (path: string) => Buffer;
 }
@@ -195,6 +361,13 @@ export class OmpRpcBackend extends BaseAgent {
   private todoWrite: Promise<OmpTodoState> | null = null;
   private subagentRefresh: Promise<void> | null = null;
   private subagentRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private hostBridgeRegistration: Promise<void> | null = null;
+  private sessionToolContext: SessionToolContext | null = null;
+  private registeredHostToolNames = new Set<string>();
+  private pendingHostToolExecutions = new Map<string, PendingHostToolExecution>();
+  private pendingHostToolPermissions = new Map<string, PendingHostToolPermission>();
+  private ignoredHostToolPermissionIds = new Set<string>();
+  private pendingHostUriRequests = new Map<string, PendingHostUriRequest>();
   private availableCommands: OmpRpcAvailableSlashCommand[] = [];
   private controlStateUpdatedAt = Date.now();
   private remoteThinkingLevel: OmpThinkingLevel | null = null;
@@ -204,7 +377,13 @@ export class OmpRpcBackend extends BaseAgent {
   private readonly spawnProcess: typeof spawn;
   private readonly readyTimeoutMs: number;
   private readonly requestTimeoutMs: number;
+  private readonly requestTimeoutOverrideMs?: number;
   private readonly longRequestTimeoutMs: number;
+  private readonly hostBridgeRequestTimeoutMs: number;
+  private readonly hostToolExecutionTimeoutMs: number;
+  private readonly hostToolUpdateThrottleMs: number;
+  private readonly hostToolMaxConcurrentExecutions: number;
+  private readonly hostBridgeEnabled: boolean;
   private readonly attachmentReadFile?: (path: string) => Buffer;
   onControlStateChange: ((state: OmpControlState) => void) | null = null;
   onTodoStateChange: ((state: OmpTodoState) => void) | null = null;
@@ -215,8 +394,17 @@ export class OmpRpcBackend extends BaseAgent {
     this.sessionLink = config.session?.ompSessionLink ?? null;
     this.spawnProcess = options.spawnProcess ?? spawn;
     this.readyTimeoutMs = options.readyTimeoutMs ?? 15_000;
-    this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
-    this.longRequestTimeoutMs = options.longRequestTimeoutMs ?? 300_000;
+    this.requestTimeoutOverrideMs = options.requestTimeoutMs;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_OMP_RPC_REQUEST_TIMEOUT_MS;
+    this.longRequestTimeoutMs = options.longRequestTimeoutMs ?? DEFAULT_OMP_RPC_LONG_REQUEST_TIMEOUT_MS;
+    this.hostBridgeRequestTimeoutMs = options.hostBridgeRequestTimeoutMs ?? 3_000;
+    this.hostToolExecutionTimeoutMs = options.hostToolExecutionTimeoutMs ?? 120_000;
+    this.hostToolUpdateThrottleMs = options.hostToolUpdateThrottleMs ?? 100;
+    this.hostToolMaxConcurrentExecutions = positiveIntegerOrDefault(
+      options.hostToolMaxConcurrentExecutions,
+      DEFAULT_OMP_HOST_TOOL_MAX_CONCURRENT_EXECUTIONS,
+    );
+    this.hostBridgeEnabled = options.hostBridgeEnabled ?? true;
     this.attachmentReadFile = options.attachmentReadFile;
   }
 
@@ -260,6 +448,11 @@ export class OmpRpcBackend extends BaseAgent {
       }
 
       await this.ensureSubprocess();
+      if (!this._isProcessing) {
+        for await (const event of this.eventQueue.drain()) yield event;
+        return;
+      }
+      await this.waitForHostBridgeRegistration();
       if (!this._isProcessing) {
         for await (const event of this.eventQueue.drain()) yield event;
         return;
@@ -324,7 +517,21 @@ export class OmpRpcBackend extends BaseAgent {
         this.finishTurn(promptRequest.id);
       });
 
+      const sourceActivationDrain = new SourceActivationDrainController('fire-on-non-tool-result');
       for await (const event of this.eventQueue.drain()) {
+        const preFire = sourceActivationDrain.shouldFireBeforeEvent(event);
+        if (preFire) {
+          this.debug(`source_test activated "${preFire.sourceSlug}", drained sibling OMP tool_results, restarting turn`);
+          yield preFire;
+          this.forceAbort(AbortReason.SourceActivated);
+          return;
+        }
+
+        if (sourceActivationDrain.observe(event, () => this.consumePendingSourceActivationRestart())) {
+          yield event;
+          continue;
+        }
+
         if (event.type === 'tool_start' && event.toolName === 'Read') {
           this.prerequisiteManager.trackReadTool(event.input as Record<string, unknown>);
         }
@@ -345,6 +552,14 @@ export class OmpRpcBackend extends BaseAgent {
         }
 
         yield event;
+      }
+
+      const sourceActivationFireAtEnd = sourceActivationDrain.shouldFireAtBoundary();
+      if (sourceActivationFireAtEnd) {
+        this.debug(`source_test activated "${sourceActivationFireAtEnd.sourceSlug}", OMP stream ended with pending restart, restarting turn`);
+        yield sourceActivationFireAtEnd;
+        this.forceAbort(AbortReason.SourceActivated);
+        return;
       }
 
     } catch (error) {
@@ -370,6 +585,7 @@ export class OmpRpcBackend extends BaseAgent {
     this.debug(`Abort requested${reason ? `: ${reason}` : ''}`);
     this.emitAutomationEvent('Stop', { hook_event_name: 'Stop' });
     this._isProcessing = false;
+    this.resolvePendingHostToolPermissions(false);
     this.send({ type: 'abort' }).catch((error) => {
       this.debug(`Abort command failed: ${error instanceof Error ? error.message : String(error)}`);
     });
@@ -379,6 +595,7 @@ export class OmpRpcBackend extends BaseAgent {
   forceAbort(reason: AbortReason): void {
     this.abortReason = reason;
     this._isProcessing = false;
+    this.resolvePendingHostToolPermissions(false);
     this.emitAutomationEvent('Stop', { hook_event_name: 'Stop' });
     this.finishTurnOrIdle();
 
@@ -413,7 +630,18 @@ export class OmpRpcBackend extends BaseAgent {
     return this._isProcessing;
   }
 
-  respondToPermission(requestId: string, allowed: boolean, _alwaysAllow?: boolean): void {
+  respondToPermission(requestId: string, allowed: boolean, alwaysAllow?: boolean): void {
+    if (this.ignoredHostToolPermissionIds.delete(requestId)) return;
+    const pendingHostPermission = this.pendingHostToolPermissions.get(requestId);
+    if (pendingHostPermission) {
+      this.pendingHostToolPermissions.delete(requestId);
+      if (allowed && alwaysAllow && pendingHostPermission.command) {
+        this.permissionManager.whitelistCommand(pendingHostPermission.command);
+      }
+      pendingHostPermission.resolve(allowed);
+      return;
+    }
+
     this.send({
       type: 'permission_response',
       requestId,
@@ -429,17 +657,21 @@ export class OmpRpcBackend extends BaseAgent {
     });
   }
 
-  async runMiniCompletion(prompt: string): Promise<string | null> {
-    if (this._isProcessing) {
-      this.debug('runMiniCompletion skipped while OMP is processing');
-      return null;
-    }
-
+  private async collectMiniCompletion(
+    events: AsyncIterable<AgentEvent>,
+    onTextUpdate?: (text: string) => void,
+  ): Promise<string | null> {
     let streamed = '';
     let completed = '';
-    for await (const event of this.chat(prompt)) {
-      if (event.type === 'text_delta') streamed += event.text;
-      if (event.type === 'text_complete') completed = event.text;
+    for await (const event of events) {
+      if (event.type === 'text_delta' && !event.isThinking) {
+        streamed += event.text;
+        onTextUpdate?.(streamed);
+      }
+      if (event.type === 'text_complete' && !event.isIntermediate) {
+        completed = event.text;
+        onTextUpdate?.(completed);
+      }
       if (event.type === 'error') {
         this.debug(`runMiniCompletion stream error: ${event.message}`);
       }
@@ -449,13 +681,109 @@ export class OmpRpcBackend extends BaseAgent {
     return text || null;
   }
 
+  private async runIsolatedMiniCompletion(
+    prompt: string,
+    model: string | undefined = this._model,
+    lifecycle?: {
+      signal?: AbortSignal;
+      onTextUpdate?: (text: string) => void;
+    },
+  ): Promise<string | null> {
+    if (lifecycle?.signal?.aborted) {
+      throw createHostToolAbortError('OMP mini completion was cancelled');
+    }
+
+    const session = this.config.session;
+    const isolatedSessionId = `${session?.id ?? this._sessionId}-omp-query-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const isolatedConfig: BackendConfig = {
+      ...this.config,
+      model,
+      skipConfigWatcher: true,
+      automationSystem: undefined,
+      onSdkSessionIdUpdate: undefined,
+      onSdkSessionIdCleared: undefined,
+      onOmpSessionLinkUpdate: undefined,
+      session: session
+        ? {
+            ...session,
+            id: isolatedSessionId,
+            sdkSessionId: undefined,
+            ompSessionLink: undefined,
+          }
+        : undefined,
+    };
+    const isolated = new OmpRpcBackend(isolatedConfig, {
+      spawnProcess: this.spawnProcess,
+      readyTimeoutMs: this.readyTimeoutMs,
+      requestTimeoutMs: this.requestTimeoutMs,
+      longRequestTimeoutMs: this.longRequestTimeoutMs,
+      hostBridgeRequestTimeoutMs: this.hostBridgeRequestTimeoutMs,
+      hostToolExecutionTimeoutMs: this.hostToolExecutionTimeoutMs,
+      hostToolUpdateThrottleMs: this.hostToolUpdateThrottleMs,
+      hostToolMaxConcurrentExecutions: this.hostToolMaxConcurrentExecutions,
+      hostBridgeEnabled: false,
+      attachmentReadFile: this.attachmentReadFile,
+    });
+    isolated.setThinkingLevel(this.getThinkingLevel());
+    isolated.onDebug = (message) => this.debug(`[call_llm] ${message}`);
+
+    let rejectAbort: ((error: Error) => void) | null = null;
+    const abortPromise = new Promise<never>((_resolve, reject) => {
+      rejectAbort = reject;
+    });
+    const onAbort = () => {
+      isolated.destroy();
+      rejectAbort?.(createHostToolAbortError('OMP mini completion was cancelled'));
+    };
+    lifecycle?.signal?.addEventListener('abort', onAbort, { once: true });
+
+    try {
+      return await Promise.race([
+        isolated.collectMiniCompletion(isolated.chatImpl(prompt), lifecycle?.onTextUpdate),
+        abortPromise,
+      ]);
+    } finally {
+      lifecycle?.signal?.removeEventListener('abort', onAbort);
+      isolated.destroy();
+    }
+  }
+
+  async runMiniCompletion(prompt: string): Promise<string | null> {
+    if (this._isProcessing) {
+      this.debug('runMiniCompletion is using an isolated OMP process while the main turn is active');
+      return this.runIsolatedMiniCompletion(prompt);
+    }
+    return this.collectMiniCompletion(this.chat(prompt));
+  }
+
   async queryLlm(request: LLMQueryRequest): Promise<LLMQueryResult> {
     const prompt = [
       request.systemPrompt ? `System: ${request.systemPrompt}` : '',
       request.prompt,
     ].filter(Boolean).join('\n\n');
 
-    const text = await this.runMiniCompletion(prompt);
+    const text = this._isProcessing
+      ? await this.runIsolatedMiniCompletion(prompt, request.model)
+      : await this.collectMiniCompletion(this.chat(prompt));
+    return {
+      text: text ?? '',
+      model: request.model ?? this._model,
+    };
+  }
+
+  private async queryLlmForHostTool(
+    request: LLMQueryRequest,
+    execution: PendingHostToolExecution,
+  ): Promise<LLMQueryResult> {
+    const prompt = [
+      request.systemPrompt ? `System: ${request.systemPrompt}` : '',
+      request.prompt,
+    ].filter(Boolean).join('\n\n');
+    execution.cooperativelyCancellable = true;
+    const text = await this.runIsolatedMiniCompletion(prompt, request.model, {
+      signal: execution.controller.signal,
+      onTextUpdate: update => this.queueHostToolTextUpdate(execution, update),
+    });
     return {
       text: text ?? '',
       model: request.model ?? this._model,
@@ -770,6 +1098,14 @@ export class OmpRpcBackend extends BaseAgent {
     return parsed.messages;
   }
 
+  async getOmpLastAssistantText(): Promise<string | null> {
+    await this.ensureSubprocess();
+    const data = await this.send({ type: 'get_last_assistant_text' });
+    const parsed = parseOmpLastAssistantTextResponseData(data);
+    if (!parsed) throw new Error('OMP get_last_assistant_text returned an invalid result');
+    return parsed.text;
+  }
+
   async branchOmpSession(entryId: string): Promise<OmpRpcBranchResult> {
     await this.ensureSubprocess();
     const data = await this.send({ type: 'branch', entryId });
@@ -1050,6 +1386,30 @@ export class OmpRpcBackend extends BaseAgent {
       this.applyAvailableCommands(adapted.availableCommands);
     }
 
+    if (adapted.sessionInfoUpdate) {
+      this.applySessionInfoUpdate(adapted.sessionInfoUpdate);
+    }
+
+    if (adapted.hostToolCall) {
+      void this.handleHostToolCall(adapted.hostToolCall).catch((error) => {
+        this.debug(`OMP host tool call handling failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }
+
+    if (adapted.hostToolCancel) {
+      this.handleHostToolCancel(adapted.hostToolCancel.targetId);
+    }
+
+    if (adapted.hostUriRequest) {
+      void this.handleHostUriRequest(adapted.hostUriRequest).catch((error) => {
+        this.debug(`OMP host URI request handling failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }
+
+    if (adapted.hostUriCancel) {
+      this.handleHostUriCancel(adapted.hostUriCancel);
+    }
+
     for (const event of adapted.events) {
       if (!this.eventQueue.isComplete) this.eventQueue.enqueue(event);
     }
@@ -1063,11 +1423,11 @@ export class OmpRpcBackend extends BaseAgent {
     }
   }
 
-  private send<T = unknown>(command: OmpRpcCommand): Promise<T> {
-    return this.createRequest<T>(command).promise;
+  private send<T = unknown>(command: OmpRpcCommand, timeoutMs?: number): Promise<T> {
+    return this.createRequest<T>(command, timeoutMs).promise;
   }
 
-  private createRequest<T = unknown>(command: OmpRpcCommand): { id: string; promise: Promise<T> } {
+  private createRequest<T = unknown>(command: OmpRpcCommand, timeoutMsOverride?: number): { id: string; promise: Promise<T> } {
     const child = this.child;
     const stdin = child?.stdin;
     const generation = this.processGeneration;
@@ -1081,9 +1441,9 @@ export class OmpRpcBackend extends BaseAgent {
     const id = `omp-${++this.requestCounter}`;
     const frame = { id, ...command };
     const commandName = command.type;
-    const timeoutMs = commandName === 'compact' || commandName === 'get_session_stats'
-      ? this.longRequestTimeoutMs
-      : this.requestTimeoutMs;
+    const timeoutMs = timeoutMsOverride
+      ?? this.requestTimeoutOverrideMs
+      ?? getOmpRpcCommandTimeout(commandName, this.requestTimeoutMs, this.longRequestTimeoutMs);
     const startedAt = this.diagnostics.recordRequest(commandName);
 
     const promise = new Promise<T>((resolve, reject) => {
@@ -1091,7 +1451,7 @@ export class OmpRpcBackend extends BaseAgent {
         const pending = this.pending.get(id);
         if (!pending) return;
         this.pending.delete(id);
-        this.diagnostics.recordTimeout();
+        this.diagnostics.recordTimeout(commandName);
         pending.reject(new Error(`OMP RPC command timed out: ${String(command.type ?? 'unknown')}`));
       }, timeoutMs);
       this.pending.set(id, {
@@ -1116,7 +1476,13 @@ export class OmpRpcBackend extends BaseAgent {
     return { id, promise };
   }
 
-  private writeSideChannel(frame: OmpRpcExtensionUiResponse): Promise<void> {
+  private writeSideChannel(
+    frame:
+      | OmpRpcExtensionUiResponse
+      | OmpRpcHostToolResultFrame
+      | OmpRpcHostToolUpdateFrame
+      | OmpRpcHostUriResultFrame,
+  ): Promise<void> {
     const stdin = this.child?.stdin;
     if (!stdin?.writable) {
       return Promise.reject(new Error('OMP RPC is not connected'));
@@ -1201,6 +1567,11 @@ export class OmpRpcBackend extends BaseAgent {
     this.sessionState = null;
     this.availableCommands = [];
     this.subagentRefresh = null;
+    this.hostBridgeRegistration = null;
+    this.registeredHostToolNames.clear();
+    this.abortAllPendingHostToolExecutions('OMP RPC backend disconnected');
+    this.resolvePendingHostToolPermissions(false);
+    this.pendingHostUriRequests.clear();
     this.updateRuntimeState({ type: 'unavailable', error: 'OMP runtime is not connected' });
     this.updateTodoState({ type: 'unavailable', error: 'OMP runtime is not connected' });
     this.remoteThinkingLevel = null;
@@ -1255,6 +1626,9 @@ export class OmpRpcBackend extends BaseAgent {
       this.diagnostics.setSessionState(state);
       this.diagnostics.markReady();
       this.debug(`Synchronized OMP session: ${state.sessionId}`);
+      if (this.hostBridgeEnabled) {
+        this.startHostBridgeRegistrationForReady(generation, child);
+      }
       this.resolveReady();
       setTimeout(() => {
         void this.refreshAvailableCommandsForReady(generation, child);
@@ -1270,6 +1644,1224 @@ export class OmpRpcBackend extends BaseAgent {
         generation,
         child,
       );
+    });
+  }
+
+  private startHostBridgeRegistrationForReady(
+    generation: number,
+    child: ChildProcessWithoutNullStreams,
+  ): void {
+    const registration = this.registerHostBridgeForReady(generation, child);
+    this.hostBridgeRegistration = registration;
+    registration.finally(() => {
+      if (this.hostBridgeRegistration === registration) this.hostBridgeRegistration = null;
+    }).catch(() => {
+      // Registration is best-effort; individual failures are logged by the
+      // registration methods and must not surface as unhandled rejections.
+    });
+  }
+
+  private async waitForHostBridgeRegistration(): Promise<void> {
+    const registration = this.hostBridgeRegistration;
+    if (!registration) return;
+    try {
+      await registration;
+    } catch {
+      // Registration is best-effort and logs its own failures.
+    }
+  }
+
+  private async registerHostBridgeForReady(
+    generation: number,
+    child: ChildProcessWithoutNullStreams,
+  ): Promise<void> {
+    await Promise.all([
+      this.registerHostToolsForReady(generation, child),
+      this.registerHostUriSchemesForReady(generation, child),
+    ]);
+  }
+
+  private buildHostToolDefinitions(): OmpRpcHostToolDefinition[] {
+    const hostToolNames = new Set(
+      getSessionToolDefs({ includeDeveloperFeedback: FEATURE_FLAGS.developerFeedback })
+        .map(def => def.name),
+    );
+
+    const definitions = getToolDefsAsJsonSchema({
+      includeDeveloperFeedback: FEATURE_FLAGS.developerFeedback,
+    })
+      .filter(def => hostToolNames.has(def.name))
+      .map(def => ({
+        name: def.name,
+        description: def.description,
+        parameters: def.inputSchema,
+      }));
+    const deduped = dedupeOmpHostToolDefinitions(definitions);
+    if (deduped.skippedNames.length > 0) {
+      this.debug(`Skipped duplicate OMP host tool definitions: ${deduped.skippedNames.join(', ')}`);
+    }
+    return deduped.tools;
+  }
+
+  private async registerHostToolsForReady(
+    generation: number,
+    child: ChildProcessWithoutNullStreams,
+  ): Promise<void> {
+    if (generation !== this.processGeneration || child !== this.child) return;
+    const tools = this.buildHostToolDefinitions();
+    if (tools.length === 0) return;
+
+    try {
+      const data = await this.send(
+        { type: 'set_host_tools', tools },
+        this.hostBridgeRequestTimeoutMs,
+      );
+      if (generation !== this.processGeneration || child !== this.child) return;
+
+      const parsed = parseOmpSetHostToolsResponseData(data);
+      if (!parsed) {
+        this.registeredHostToolNames = new Set(tools.map(tool => tool.name));
+        this.debug('OMP set_host_tools returned an invalid acknowledgement; keeping local host tool registry');
+        return;
+      }
+
+      this.registeredHostToolNames = new Set(parsed.toolNames);
+      this.debug(`Registered ${parsed.toolNames.length} OMP host tools`);
+    } catch (error) {
+      if (generation !== this.processGeneration || child !== this.child) return;
+      this.registeredHostToolNames.clear();
+      this.debug(`OMP host tool registration failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async registerHostUriSchemesForReady(
+    generation: number,
+    child: ChildProcessWithoutNullStreams,
+  ): Promise<void> {
+    if (generation !== this.processGeneration || child !== this.child) return;
+
+    try {
+      const data = await this.send(
+        {
+          type: 'set_host_uri_schemes',
+          schemes: [
+            {
+              scheme: OMP_HOST_URI_SCHEME,
+              description: 'Read session snapshots and write scoped session artifacts.',
+              writable: true,
+              immutable: false,
+            },
+            {
+              scheme: OMP_HOST_WORKSPACE_URI_SCHEME,
+              description: 'Read sanitized workspace-level Craft metadata.',
+              writable: false,
+              immutable: false,
+            },
+          ],
+        },
+        this.hostBridgeRequestTimeoutMs,
+      );
+      if (generation !== this.processGeneration || child !== this.child) return;
+
+      const parsed = parseOmpSetHostUriSchemesResponseData(data);
+      if (!parsed) {
+        this.debug('OMP set_host_uri_schemes returned an invalid acknowledgement');
+        return;
+      }
+      this.debug(`Registered ${parsed.schemes.length} OMP host URI schemes`);
+    } catch (error) {
+      if (generation !== this.processGeneration || child !== this.child) return;
+      this.debug(`OMP host URI scheme registration failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private getHostSessionToolContext(execution?: PendingHostToolExecution): SessionToolContext {
+    let baseContext = this.sessionToolContext;
+    if (!baseContext) {
+      const sessionId = this.config.session?.id || this._sessionId;
+      const workspacePath = this.config.workspace.rootPath;
+      const workspaceId = this.config.workspace.id;
+      baseContext = createClaudeContext({
+        sessionId,
+        workspacePath,
+        workspaceId,
+        onPlanSubmitted: (planPath: string) => {
+          setLastPlanFilePath(sessionId, planPath);
+          this.onPlanSubmitted?.(planPath);
+        },
+        onAuthRequest: (request: unknown) => {
+          this.onAuthRequest?.(request as AuthRequest);
+        },
+      });
+      attachSessionSelfManagementBindings(baseContext, sessionId);
+      this.sessionToolContext = baseContext;
+    }
+
+    if (!execution) return baseContext;
+
+    const context = Object.create(Object.getPrototypeOf(baseContext)) as SessionToolContext;
+    Object.defineProperties(context, Object.getOwnPropertyDescriptors(baseContext));
+    context.abortSignal = execution.controller.signal;
+    return context;
+  }
+
+  private createPendingHostToolExecution(
+    request: OmpRpcHostToolCallFrame,
+  ): PendingHostToolExecution {
+    const controller = new AbortController();
+    const execution: PendingHostToolExecution = {
+      requestId: request.id,
+      toolName: request.toolName,
+      startedAt: Date.now(),
+      controller,
+      timer: setTimeout(() => {
+        this.handleHostToolTimeout(execution);
+      }, this.hostToolExecutionTimeoutMs),
+      settled: false,
+      cooperativelyCancellable: false,
+      updateTimer: null,
+    };
+    this.pendingHostToolExecutions.set(request.id, execution);
+    return execution;
+  }
+
+  private isHostToolExecutionActive(execution: PendingHostToolExecution): boolean {
+    return !execution.settled
+      && this.pendingHostToolExecutions.get(execution.requestId) === execution;
+  }
+
+  private async awaitHostToolExecution<T>(
+    execution: PendingHostToolExecution,
+    operation: Promise<T>,
+  ): Promise<T> {
+    if (execution.controller.signal.aborted) {
+      throw execution.controller.signal.reason
+        ?? createHostToolAbortError(`Host tool "${execution.toolName}" was cancelled`);
+    }
+
+    let rejectAbort: ((reason: unknown) => void) | null = null;
+    const abortPromise = new Promise<never>((_resolve, reject) => {
+      rejectAbort = reject;
+    });
+    const onAbort = () => {
+      rejectAbort?.(
+        execution.controller.signal.reason
+          ?? createHostToolAbortError(`Host tool "${execution.toolName}" was cancelled`),
+      );
+    };
+    execution.controller.signal.addEventListener('abort', onAbort, { once: true });
+    try {
+      return await Promise.race([operation, abortPromise]);
+    } finally {
+      execution.controller.signal.removeEventListener('abort', onAbort);
+    }
+  }
+
+  private settleHostToolExecution(
+    execution: PendingHostToolExecution,
+    options: { abort?: boolean; reason?: string } = {},
+  ): boolean {
+    if (!this.isHostToolExecutionActive(execution)) return false;
+    execution.settled = true;
+    clearTimeout(execution.timer);
+    if (execution.updateTimer) {
+      clearTimeout(execution.updateTimer);
+      execution.updateTimer = null;
+    }
+    execution.pendingUpdateText = undefined;
+    this.pendingHostToolExecutions.delete(execution.requestId);
+    if (options.abort && !execution.controller.signal.aborted) {
+      execution.controller.abort(
+        createHostToolAbortError(options.reason ?? `Host tool "${execution.toolName}" was cancelled`),
+      );
+    }
+    return true;
+  }
+
+  private abortAllPendingHostToolExecutions(reason: string): void {
+    for (const execution of Array.from(this.pendingHostToolExecutions.values())) {
+      this.settleHostToolExecution(execution, { abort: true, reason });
+    }
+  }
+
+  private handleHostToolTimeout(execution: PendingHostToolExecution): void {
+    const elapsedSeconds = Math.max(1, Math.ceil(this.hostToolExecutionTimeoutMs / 1000));
+    if (!this.settleHostToolExecution(execution, {
+      abort: true,
+      reason: `Host tool "${execution.toolName}" timed out`,
+    })) {
+      return;
+    }
+
+    this.writeSideChannel({
+      type: 'host_tool_result',
+      id: execution.requestId,
+      result: this.hostToolTextResult(
+        `Host tool "${execution.toolName}" timed out after ${elapsedSeconds}s`,
+      ),
+      isError: true,
+    }).catch((error) => {
+      this.debug(`OMP host tool timeout response failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
+
+  private queueHostToolTextUpdate(
+    execution: PendingHostToolExecution,
+    text: string,
+  ): void {
+    const normalized = text.trim();
+    if (
+      !normalized
+      || !this.isHostToolExecutionActive(execution)
+      || normalized === execution.pendingUpdateText
+      || normalized === execution.lastSentUpdateText
+    ) {
+      return;
+    }
+
+    execution.pendingUpdateText = normalized;
+    if (execution.lastSentUpdateText === undefined) {
+      void this.flushHostToolTextUpdate(execution);
+      return;
+    }
+    if (execution.updateTimer) return;
+    execution.updateTimer = setTimeout(() => {
+      execution.updateTimer = null;
+      void this.flushHostToolTextUpdate(execution);
+    }, this.hostToolUpdateThrottleMs);
+  }
+
+  private async flushHostToolTextUpdate(
+    execution: PendingHostToolExecution,
+  ): Promise<void> {
+    if (!this.isHostToolExecutionActive(execution)) return;
+    if (execution.updateTimer) {
+      clearTimeout(execution.updateTimer);
+      execution.updateTimer = null;
+    }
+    const text = execution.pendingUpdateText;
+    if (!text || text === execution.lastSentUpdateText) return;
+    execution.pendingUpdateText = undefined;
+    execution.lastSentUpdateText = text;
+
+    try {
+      await this.writeSideChannel({
+        type: 'host_tool_update',
+        id: execution.requestId,
+        partialResult: this.hostToolTextResult(text),
+      });
+    } catch (error) {
+      this.debug(`OMP host tool update failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private resolvePendingHostToolPermissions(allowed: boolean): void {
+    const pending = Array.from(this.pendingHostToolPermissions.values());
+    this.pendingHostToolPermissions.clear();
+    for (const request of pending) {
+      request.resolve(allowed);
+    }
+  }
+
+  private ignoreLateHostToolPermissionResponse(requestId: string): void {
+    this.ignoredHostToolPermissionIds.add(requestId);
+    if (this.ignoredHostToolPermissionIds.size <= 100) return;
+    const oldest = this.ignoredHostToolPermissionIds.values().next().value;
+    if (typeof oldest === 'string') this.ignoredHostToolPermissionIds.delete(oldest);
+  }
+
+  private hostToolPermissionName(toolName: string): string {
+    return `mcp__session__${toolName}`;
+  }
+
+  private async requestHostToolPermission(request: {
+    toolName: string;
+    command?: string;
+    description: string;
+    type?: PermissionRequestType;
+    appName?: string;
+    reason?: string;
+    impact?: string;
+    requiresSystemPrompt?: boolean;
+    rememberForMinutes?: number;
+    commandHash?: string;
+    approvalTtlSeconds?: number;
+  }, execution: PendingHostToolExecution): Promise<boolean> {
+    if (!this.onPermissionRequest) return false;
+    if (execution.controller.signal.aborted) return false;
+
+    const requestId = `omp-host-perm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (allowed: boolean) => {
+        if (settled) return;
+        settled = true;
+        execution.controller.signal.removeEventListener('abort', onAbort);
+        this.pendingHostToolPermissions.delete(requestId);
+        resolve(allowed);
+      };
+      const onAbort = () => {
+        this.ignoreLateHostToolPermissionResponse(requestId);
+        finish(false);
+      };
+      execution.controller.signal.addEventListener('abort', onAbort, { once: true });
+      this.pendingHostToolPermissions.set(requestId, {
+        resolve: finish,
+        toolName: request.toolName,
+        command: request.command,
+        hostRequestId: execution.requestId,
+      });
+      try {
+        this.onPermissionRequest?.({
+          requestId,
+          ...request,
+        });
+      } catch (error) {
+        this.debug(`OMP host tool permission request failed: ${error instanceof Error ? error.message : String(error)}`);
+        finish(false);
+      }
+    });
+  }
+
+  private async authorizeHostTool(
+    toolName: string,
+    args: Record<string, unknown>,
+    execution: PendingHostToolExecution,
+  ): Promise<{ ok: true; args: Record<string, unknown> } | { ok: false; message: string }> {
+    const permissionToolName = this.hostToolPermissionName(toolName);
+    const sessionId = this.config.session?.id || this._sessionId;
+    const workspaceRootPath = this.config.workspace.rootPath;
+
+    await this.emitAutomationEvent('PreToolUse', {
+      hook_event_name: 'PreToolUse',
+      tool_name: permissionToolName,
+      tool_input: args,
+    });
+    if (execution.controller.signal.aborted) {
+      return { ok: false, message: `Host tool "${toolName}" was cancelled.` };
+    }
+
+    const checkResult = runPreToolUseChecks({
+      toolName: permissionToolName,
+      input: args,
+      sessionId,
+      permissionMode: this.permissionManager.getPermissionMode(),
+      workspaceRootPath,
+      workspaceId: extractWorkspaceSlug(workspaceRootPath, this.config.workspace.id),
+      plansFolderPath: getSessionPlansPath(workspaceRootPath, sessionId),
+      dataFolderPath: getSessionDataPath(workspaceRootPath, sessionId),
+      workingDirectory: this.config.session?.workingDirectory,
+      activeSourceSlugs: Array.from(this.sourceManager.getActiveSlugs()),
+      allSourceSlugs: this.sourceManager.getAllSources().map(source => source.config.slug),
+      hasSourceActivation: !!this.onSourceActivationRequest,
+      permissionManager: this.permissionManager,
+      prerequisiteManager: this.prerequisiteManager,
+      onDebug: (message) => this.debug(`PreToolUse(sessionId=${sessionId}): ${message}`),
+    });
+
+    switch (checkResult.type) {
+      case 'allow':
+        return { ok: true, args };
+      case 'modify':
+        return { ok: true, args: checkResult.input };
+      case 'block':
+        return { ok: false, message: checkResult.reason };
+      case 'prompt': {
+        const allowed = await this.requestHostToolPermission({
+          toolName: permissionToolName,
+          command: checkResult.command,
+          description: checkResult.description,
+          type: checkResult.promptType,
+          appName: checkResult.appName,
+          reason: checkResult.reason,
+          impact: checkResult.impact,
+          requiresSystemPrompt: checkResult.requiresSystemPrompt,
+          rememberForMinutes: checkResult.rememberForMinutes,
+          commandHash: checkResult.commandHash,
+          approvalTtlSeconds: checkResult.approvalTtlSeconds,
+        }, execution);
+        if (!allowed) {
+          return { ok: false, message: 'Permission denied by user.' };
+        }
+        return { ok: true, args: checkResult.modifiedInput ?? args };
+      }
+      case 'source_activation_needed':
+        return {
+          ok: false,
+          message: `Source "${checkResult.sourceSlug}" is not active for this OMP host tool call.`,
+        };
+      case 'call_llm_intercept':
+      case 'spawn_session_intercept':
+        return { ok: true, args };
+    }
+  }
+
+  private hostToolTextResult(text: string): OmpRpcAgentToolResult {
+    return {
+      content: [{ type: 'text', text }],
+    };
+  }
+
+  private hostToolContentResult(
+    content: OmpRpcAgentToolContent[],
+    options: { details?: unknown; isError?: boolean } = {},
+  ): OmpRpcAgentToolResult {
+    const safeContent = content.filter((item): item is OmpRpcAgentToolContent => {
+      if (item.type === 'text') return item.text.length > 0;
+      return item.type === 'image' && item.data.length > 0 && item.mimeType.startsWith('image/');
+    });
+    return {
+      content: safeContent.length > 0 ? safeContent : [{ type: 'text', text: 'Tool completed' }],
+      ...(options.details !== undefined ? { details: options.details } : {}),
+      ...(options.isError ? { isError: true } : {}),
+    };
+  }
+
+  private sessionToolResultToHostToolResult(result: ToolResult): OmpRpcAgentToolResult {
+    const content = result.content
+      .map(item => ({ type: 'text' as const, text: item.text }))
+      .filter(item => item.text.length > 0);
+    return this.hostToolContentResult(content, {
+      details: result.structuredContent,
+      isError: result.isError,
+    });
+  }
+
+  private formatHostToolValidationError(error: unknown): string {
+    const issues = (error as { issues?: Array<{ path?: Array<string | number>; message?: string }> } | null)?.issues;
+    if (!issues?.length) return error instanceof Error ? error.message : String(error);
+    return issues
+      .slice(0, 5)
+      .map((issue) => {
+        const path = issue.path?.length ? issue.path.join('.') : 'input';
+        return `${path}: ${issue.message ?? 'invalid value'}`;
+      })
+      .join('; ');
+  }
+
+  private async executeBackendHostTool(
+    toolName: string,
+    args: Record<string, unknown>,
+    execution: PendingHostToolExecution,
+  ): Promise<{ result: OmpRpcAgentToolResult; isError?: boolean } | null> {
+    if (toolName === 'call_llm') {
+      execution.cooperativelyCancellable = true;
+      const result = await this.preExecuteCallLlm(
+        args,
+        request => this.queryLlmForHostTool(request, execution),
+      );
+      return {
+        result: this.hostToolTextResult(result.text || '(Model returned empty response)'),
+      };
+    }
+
+    if (toolName === 'spawn_session') {
+      const result = await this.preExecuteSpawnSession(args);
+      return {
+        result: this.hostToolTextResult(JSON.stringify(result, null, 2)),
+      };
+    }
+
+    if (toolName !== 'browser_tool') return null;
+
+    execution.cooperativelyCancellable = true;
+    const sessionId = this.config.session?.id || this._sessionId;
+    const browserFns = getSessionScopedToolCallbacks(sessionId)?.browserPaneFns;
+    if (!browserFns) {
+      return {
+        result: this.hostToolTextResult(
+          'Browser window controls are not available. This tool requires the desktop app.',
+        ),
+        isError: true,
+      };
+    }
+
+    try {
+      const browserResult = await executeBrowserToolCommand({
+        command: (args.command as string | string[]) ?? '',
+        fns: browserFns,
+        sessionId,
+        signal: execution.controller.signal,
+      });
+      let content = browserResult.output;
+
+      if (browserResult.image) {
+        const sessionPath = getSessionPath(this.config.workspace.rootPath, sessionId);
+        const imageBuffer = Buffer.from(browserResult.image.data, 'base64');
+        const extension = browserResult.image.mimeType === 'image/jpeg' ? 'jpg' : 'png';
+        const saved = saveBinaryResponse(
+          sessionPath,
+          `browser-screenshot.${extension}`,
+          imageBuffer,
+          browserResult.image.mimeType,
+        );
+
+        if (saved.type === 'file_download') {
+          content += [
+            '',
+            `Saved screenshot: ${saved.path}`,
+            '',
+            '```image-preview',
+            JSON.stringify({
+              src: saved.path,
+              title: 'Browser Screenshot',
+            }, null, 2),
+            '```',
+          ].join('\n');
+        } else {
+          content += `\n\n[Screenshot captured (${Math.round(browserResult.image.sizeBytes / 1024)}KB ${browserResult.image.mimeType}) but failed to save: ${saved.error}]`;
+        }
+      }
+
+      const resultContent: OmpRpcAgentToolContent[] = [{ type: 'text', text: content }];
+      if (browserResult.image) {
+        resultContent.push({
+          type: 'image',
+          data: browserResult.image.data,
+          mimeType: browserResult.image.mimeType,
+        });
+      }
+
+      return { result: this.hostToolContentResult(resultContent) };
+    } catch (error) {
+      const rawCode = (error as { code?: unknown } | null)?.code;
+      const code = typeof rawCode === 'string' ? rawCode : '';
+      const message = mapBrowserToolErrorCode(code)
+        ?? (error instanceof Error ? error.message : String(error));
+      return {
+        result: this.hostToolTextResult(message),
+        isError: true,
+      };
+    }
+  }
+
+  private async executeHostTool(
+    toolName: string,
+    args: Record<string, unknown>,
+    execution: PendingHostToolExecution,
+  ): Promise<{ result: OmpRpcAgentToolResult; isError?: boolean }> {
+    if (!this.registeredHostToolNames.has(toolName)) {
+      return {
+        result: this.hostToolTextResult(`Unknown or unregistered OMP host tool: ${toolName}`),
+        isError: true,
+      };
+    }
+
+    const def = SESSION_TOOL_REGISTRY.get(toolName);
+    if (!def) {
+      return {
+        result: this.hostToolTextResult(`Unknown session tool: ${toolName}`),
+        isError: true,
+      };
+    }
+
+    const authorization = await this.authorizeHostTool(toolName, args, execution);
+    if (!authorization.ok) {
+      return {
+        result: this.hostToolTextResult(authorization.message),
+        isError: true,
+      };
+    }
+    if (execution.controller.signal.aborted) {
+      throw createHostToolAbortError(`Host tool "${toolName}" was cancelled`);
+    }
+
+    const parsed = def.inputSchema.safeParse(authorization.args);
+    if (!parsed.success) {
+      return {
+        result: this.hostToolTextResult(`Invalid arguments for ${toolName}: ${this.formatHostToolValidationError(parsed.error)}`),
+        isError: true,
+      };
+    }
+
+    const backendResult = await this.executeBackendHostTool(toolName, parsed.data, execution);
+    if (backendResult) return backendResult;
+
+    if (!def.handler) {
+      return {
+        result: this.hostToolTextResult(
+          `Session tool '${toolName}' is backend-executed (${def.executionMode}) but has no OMP host adapter implementation.`,
+        ),
+        isError: true,
+      };
+    }
+
+    if (execution.controller.signal.aborted) {
+      throw createHostToolAbortError(`Host tool "${toolName}" was cancelled`);
+    }
+    const result = await def.handler(this.getHostSessionToolContext(execution), parsed.data);
+    return {
+      result: this.sessionToolResultToHostToolResult(result),
+      isError: !!result.isError,
+    };
+  }
+
+  private async handleHostToolCall(request: OmpRpcHostToolCallFrame): Promise<void> {
+    if (this.pendingHostToolExecutions.size >= this.hostToolMaxConcurrentExecutions) {
+      await this.writeSideChannel({
+        type: 'host_tool_result',
+        id: request.id,
+        result: this.hostToolTextResult(
+          `Host tool quota is full (${this.hostToolMaxConcurrentExecutions} active). Try again after another host tool finishes.`,
+        ),
+        isError: true,
+      });
+      return;
+    }
+
+    const execution = this.createPendingHostToolExecution(request);
+
+    try {
+      const result = await this.awaitHostToolExecution(
+        execution,
+        this.executeHostTool(
+          request.toolName,
+          request.arguments,
+          execution,
+        ),
+      );
+      if (!this.isHostToolExecutionActive(execution)) return;
+      await this.flushHostToolTextUpdate(execution);
+      if (!this.settleHostToolExecution(execution)) return;
+      await this.writeSideChannel({
+        type: 'host_tool_result',
+        id: request.id,
+        result: result.result,
+        ...(result.isError ? { isError: true } : {}),
+      });
+    } catch (error) {
+      if (!this.settleHostToolExecution(execution)) return;
+      const message = error instanceof Error ? error.message : String(error);
+      await this.writeSideChannel({
+        type: 'host_tool_result',
+        id: request.id,
+        result: this.hostToolTextResult(`Host tool ${request.toolName} failed: ${message}`),
+        isError: true,
+      });
+    }
+  }
+
+  private handleHostToolCancel(targetId: string): void {
+    const execution = this.pendingHostToolExecutions.get(targetId);
+    if (!execution) return;
+    if (!this.settleHostToolExecution(execution, {
+      abort: true,
+      reason: `Host tool "${execution.toolName}" was cancelled by OMP`,
+    })) {
+      return;
+    }
+    if (!execution.cooperativelyCancellable) {
+      this.debug(`Cancelled non-cooperative host tool "${execution.toolName}"; late output will be ignored`);
+    }
+  }
+
+  private hostUriError(
+    request: OmpRpcHostUriRequestFrame,
+    message: string,
+  ): OmpRpcHostUriResultFrame {
+    return {
+      type: 'host_uri_result',
+      id: request.id,
+      isError: true,
+      error: message,
+      content: message,
+      contentType: 'text/plain',
+    };
+  }
+
+  private hostUriJsonResult(
+    request: OmpRpcHostUriRequestFrame,
+    value: unknown,
+    notes?: string[],
+  ): OmpRpcHostUriResultFrame {
+    return {
+      type: 'host_uri_result',
+      id: request.id,
+      content: JSON.stringify(value, null, 2),
+      contentType: 'application/json',
+      immutable: false,
+      ...(notes?.length ? { notes } : {}),
+    };
+  }
+
+  private decodeHostUriPath(url: URL): string {
+    return decodeURIComponent(url.pathname).replace(/^\/+|\/+$/g, '');
+  }
+
+  private parseHostUriUrl(request: OmpRpcHostUriRequestFrame): URL | OmpRpcHostUriResultFrame {
+    let url: URL;
+    try {
+      url = new URL(request.url);
+    } catch {
+      return this.hostUriError(request, `Invalid OMP host URI: ${request.url}`);
+    }
+    return url;
+  }
+
+  private isHostUriRequestActive(requestId: string): boolean {
+    const pending = this.pendingHostUriRequests.get(requestId);
+    return !!pending && !pending.cancelled;
+  }
+
+  private normalizeHostUriArtifactPath(rawRelativePath: string): { relativePath: string; segments: string[] } | { error: string } {
+    const trimmed = rawRelativePath.trim();
+    if (!trimmed) return { error: 'Artifact path is required after /artifacts/' };
+    if (trimmed.length > 240) return { error: 'Artifact path is too long' };
+    if (/[\x00-\x1F\x7F]/.test(trimmed)) return { error: 'Artifact path contains control characters' };
+    if (trimmed.includes('\\')) return { error: 'Artifact path must use forward slashes, not backslashes' };
+    if (isAbsolute(trimmed) || win32.isAbsolute(trimmed) || /^[a-zA-Z]:/.test(trimmed)) {
+      return { error: 'Artifact path must be relative' };
+    }
+
+    const segments = trimmed.split('/');
+    const reservedWindowsName = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+    for (const segment of segments) {
+      if (!segment) return { error: 'Artifact path cannot contain empty segments' };
+      if (segment === '.' || segment === '..') return { error: 'Artifact path cannot contain . or .. segments' };
+      if (segment.includes(':')) return { error: 'Artifact path segments cannot contain colons' };
+      if (segment !== segment.trim()) return { error: 'Artifact path segments cannot start or end with whitespace' };
+      if (segment.endsWith('.')) return { error: 'Artifact path segments cannot end with a dot' };
+      if (reservedWindowsName.test(segment)) return { error: `Artifact path segment "${segment}" is reserved on Windows` };
+    }
+
+    return {
+      relativePath: segments.join('/'),
+      segments,
+    };
+  }
+
+  private resolveHostUriArtifactTarget(request: OmpRpcHostUriRequestFrame, path: string): HostUriArtifactTarget | { error: string } {
+    if (path === OMP_HOST_URI_ARTIFACTS_PATH) {
+      return { error: 'Artifact path is required after /artifacts/' };
+    }
+    if (!path.startsWith(`${OMP_HOST_URI_ARTIFACTS_PATH}/`)) {
+      return {
+        error: `Only ${OMP_HOST_URI_SCHEME}://current/${OMP_HOST_URI_ARTIFACTS_PATH}/<name> supports write operations`,
+      };
+    }
+
+    const normalized = this.normalizeHostUriArtifactPath(path.slice(OMP_HOST_URI_ARTIFACTS_PATH.length + 1));
+    if ('error' in normalized) return normalized;
+
+    const sessionId = this.config.session?.id || this._sessionId;
+    const rootPath = resolve(
+      getSessionDataPath(this.config.workspace.rootPath, sessionId),
+      OMP_HOST_URI_ARTIFACTS_DIR,
+    );
+    const filePath = resolve(rootPath, ...normalized.segments);
+    const relativePathFromRoot = relative(rootPath, filePath);
+    if (
+      !relativePathFromRoot
+      || relativePathFromRoot.startsWith('..')
+      || isAbsolute(relativePathFromRoot)
+      || win32.isAbsolute(relativePathFromRoot)
+    ) {
+      return { error: 'Artifact path escapes the session artifact directory' };
+    }
+
+    return {
+      relativePath: normalized.relativePath,
+      rootPath,
+      filePath,
+    };
+  }
+
+  private inferHostUriContentType(content: string): 'application/json' | 'text/plain' {
+    const trimmed = content.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        JSON.parse(trimmed);
+        return 'application/json';
+      } catch {
+        return 'text/plain';
+      }
+    }
+    return 'text/plain';
+  }
+
+  private async appendHostUriAudit(record: HostUriAuditRecord): Promise<void> {
+    try {
+      const sessionId = this.config.session?.id || this._sessionId;
+      const dataPath = getSessionDataPath(this.config.workspace.rootPath, sessionId);
+      await mkdir(dataPath, { recursive: true });
+      await appendFile(
+        join(dataPath, OMP_HOST_URI_AUDIT_FILE),
+        `${JSON.stringify(record)}\n`,
+        'utf-8',
+      );
+    } catch (error) {
+      this.debug(`OMP host URI audit write failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private resolvePendingHostUriPermission(hostRequestId: string, allowed: boolean): void {
+    for (const [requestId, pending] of Array.from(this.pendingHostToolPermissions.entries())) {
+      if (pending.hostRequestId !== hostRequestId || pending.toolName !== 'omp_host_uri_write') continue;
+      this.pendingHostToolPermissions.delete(requestId);
+      this.ignoreLateHostToolPermissionResponse(requestId);
+      pending.resolve(allowed);
+    }
+  }
+
+  private async requestHostUriWritePermission(
+    request: OmpRpcHostUriRequestFrame,
+    target: HostUriArtifactTarget,
+    contentType: string,
+    bytes: number,
+  ): Promise<boolean> {
+    const mode = this.permissionManager.getPermissionMode();
+    if (mode === 'safe') return false;
+    if (mode === 'allow-all') return true;
+    if (!this.onPermissionRequest) return false;
+    if (!this.isHostUriRequestActive(request.id)) return false;
+
+    const requestId = `omp-host-uri-perm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return new Promise<boolean>((resolvePermission) => {
+      let settled = false;
+      const finish = (allowed: boolean) => {
+        if (settled) return;
+        settled = true;
+        this.pendingHostToolPermissions.delete(requestId);
+        resolvePermission(allowed);
+      };
+      this.pendingHostToolPermissions.set(requestId, {
+        resolve: finish,
+        toolName: 'omp_host_uri_write',
+        hostRequestId: request.id,
+      });
+      try {
+        this.onPermissionRequest?.({
+          requestId,
+          toolName: 'omp_host_uri_write',
+          description: `OMP wants to write a session artifact: ${target.relativePath}`,
+          type: 'file_write' as PermissionRequestType,
+          appName: 'Oh My Pi',
+          reason: `Host URI write to ${request.url}`,
+          impact: [
+            `Destination: ${target.filePath}`,
+            `Content type: ${contentType}`,
+            `Size: ${bytes} bytes`,
+          ].join('\n'),
+        });
+      } catch (error) {
+        this.debug(`OMP host URI permission request failed: ${error instanceof Error ? error.message : String(error)}`);
+        finish(false);
+      }
+    });
+  }
+
+  private sanitizeWorkspaceSource(source: LoadedSource): Record<string, unknown> {
+    const { config } = source;
+    const active = this.sourceManager.isSourceActive(config.slug);
+    const requiresAuthentication = config.type === 'mcp'
+      ? !!config.mcp?.authType && config.mcp.authType !== 'none'
+      : config.type === 'api'
+        ? !!config.api?.authType && config.api.authType !== 'none'
+        : false;
+    const service = config.type === 'api'
+      ? (
+        config.api?.googleService
+        ?? config.api?.slackService
+        ?? config.api?.microsoftService
+        ?? config.provider
+      )
+      : config.type === 'mcp'
+        ? config.mcp?.transport ?? 'mcp'
+        : config.local?.format ?? 'local';
+
+    return {
+      slug: config.slug,
+      name: config.name,
+      type: config.type,
+      enabled: !!config.enabled,
+      active,
+      hasCredentials: config.isAuthenticated === true || config.connectionStatus === 'connected',
+      requiresAuthentication,
+      service,
+      ...(config.tagline ? { summary: config.tagline } : {}),
+    };
+  }
+
+  private workspaceSourcesSnapshot(): Record<string, unknown> {
+    const activeSourceSlugs = Array.from(this.sourceManager.getActiveSlugs());
+    return {
+      workspaceId: this.config.workspace.id,
+      workspaceRootPath: this.config.workspace.rootPath,
+      activeSourceSlugs,
+      sources: this.sourceManager.getAllSources().map(source => this.sanitizeWorkspaceSource(source)),
+      updatedAt: Date.now(),
+    };
+  }
+
+  private async writeHostUriArtifact(
+    request: OmpRpcHostUriRequestFrame,
+    path: string,
+  ): Promise<OmpRpcHostUriResultFrame> {
+    const target = this.resolveHostUriArtifactTarget(request, path);
+    const content = request.content ?? '';
+    const contentType = this.inferHostUriContentType(content);
+    const bytes = Buffer.byteLength(content, 'utf-8');
+
+    if ('error' in target) {
+      await this.appendHostUriAudit({
+        timestamp: Date.now(),
+        operation: 'write',
+        url: request.url,
+        contentType,
+        bytes,
+        allowed: false,
+        error: target.error,
+      });
+      return this.hostUriError(request, target.error);
+    }
+
+    if (!this.isHostUriRequestActive(request.id)) {
+      await this.appendHostUriAudit({
+        timestamp: Date.now(),
+        operation: 'write',
+        url: request.url,
+        contentType,
+        bytes,
+        allowed: false,
+        relativePath: target.relativePath,
+        error: 'cancelled',
+      });
+      return this.hostUriError(request, `Host URI write for ${request.url} was cancelled`);
+    }
+
+    const allowed = await this.requestHostUriWritePermission(request, target, contentType, bytes);
+    if (!allowed) {
+      if (!this.isHostUriRequestActive(request.id)) {
+        await this.appendHostUriAudit({
+          timestamp: Date.now(),
+          operation: 'write',
+          url: request.url,
+          contentType,
+          bytes,
+          allowed: false,
+          relativePath: target.relativePath,
+          error: 'cancelled',
+        });
+        return this.hostUriError(request, `Host URI write for ${request.url} was cancelled`);
+      }
+      await this.appendHostUriAudit({
+        timestamp: Date.now(),
+        operation: 'write',
+        url: request.url,
+        contentType,
+        bytes,
+        allowed: false,
+        relativePath: target.relativePath,
+        error: 'permission_denied',
+      });
+      return this.hostUriError(request, 'Host URI write denied by permission policy.');
+    }
+
+    if (!this.isHostUriRequestActive(request.id)) {
+      await this.appendHostUriAudit({
+        timestamp: Date.now(),
+        operation: 'write',
+        url: request.url,
+        contentType,
+        bytes,
+        allowed: false,
+        relativePath: target.relativePath,
+        error: 'cancelled',
+      });
+      return this.hostUriError(request, `Host URI write for ${request.url} was cancelled`);
+    }
+
+    try {
+      await mkdir(dirname(target.filePath), { recursive: true });
+      await writeFile(target.filePath, content, 'utf-8');
+      const writtenAt = Date.now();
+      await this.appendHostUriAudit({
+        timestamp: writtenAt,
+        operation: 'write',
+        url: request.url,
+        contentType,
+        bytes,
+        allowed: true,
+        relativePath: target.relativePath,
+        resultPath: target.filePath,
+      });
+      return this.hostUriJsonResult(request, {
+        path: target.filePath,
+        relativePath: target.relativePath,
+        bytes,
+        contentType,
+        updatedAt: writtenAt,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.appendHostUriAudit({
+        timestamp: Date.now(),
+        operation: 'write',
+        url: request.url,
+        contentType,
+        bytes,
+        allowed: true,
+        relativePath: target.relativePath,
+        error: message,
+      });
+      return this.hostUriError(request, `Host URI artifact write failed: ${message}`);
+    }
+  }
+
+  private async resolveSessionHostUriRequest(
+    request: OmpRpcHostUriRequestFrame,
+    url: URL,
+  ): Promise<OmpRpcHostUriResultFrame> {
+    if (url.hostname !== 'current') {
+      return this.hostUriError(
+        request,
+        `Unsupported ${OMP_HOST_URI_SCHEME} authority: ${url.hostname || '(empty)'}`,
+      );
+    }
+
+    let path: string;
+    try {
+      path = this.decodeHostUriPath(url);
+    } catch {
+      return this.hostUriError(request, `Invalid encoded ${OMP_HOST_URI_SCHEME} path`);
+    }
+
+    if (request.operation === 'write') {
+      return this.writeHostUriArtifact(request, path);
+    }
+
+    switch (path) {
+      case 'summary':
+        return this.hostUriJsonResult(request, {
+          provider: 'omp',
+          craftSessionId: this.config.session?.id || this._sessionId,
+          ompSessionId: this.sessionState?.sessionId ?? this.sessionLink?.sessionId ?? null,
+          sessionName: this.sessionState?.sessionName ?? this.sessionLink?.sessionName ?? null,
+          messageCount: this.sessionState?.messageCount ?? this.sessionLink?.messageCount ?? 0,
+          model: this.getModel(),
+          thinkingLevel: this.getThinkingLevel(),
+          isProcessing: this._isProcessing,
+          runtimeAvailable: this.runtimeState.available,
+          todoAvailable: this.todoState.available,
+          updatedAt: Date.now(),
+        });
+
+      case 'todos': {
+        const todo = this.getOmpTodoState();
+        return this.hostUriJsonResult(request, {
+          available: todo.available,
+          sessionId: todo.sessionId,
+          phases: todo.phases,
+          revision: todo.revision,
+          pendingAction: todo.pendingAction,
+          error: todo.error,
+          reminder: todo.reminder,
+          updatedAt: todo.updatedAt,
+        });
+      }
+
+      case 'runtime':
+        return this.hostUriJsonResult(request, {
+          runtime: cloneOmpRuntimeState(this.runtimeState),
+          queue: this.currentQueueControlState(),
+          model: this.getModel(),
+          thinkingLevel: this.getThinkingLevel(),
+          isProcessing: this._isProcessing,
+        });
+
+      default:
+        return this.hostUriError(
+          request,
+          `Unknown ${OMP_HOST_URI_SCHEME} path: /${path || '(empty)'}. Supported paths: /summary, /todos, /runtime, /artifacts/<name> (write only)`,
+        );
+    }
+  }
+
+  private async resolveWorkspaceHostUriRequest(
+    request: OmpRpcHostUriRequestFrame,
+    url: URL,
+  ): Promise<OmpRpcHostUriResultFrame> {
+    if (request.operation !== 'read') {
+      return this.hostUriError(
+        request,
+        `${OMP_HOST_WORKSPACE_URI_SCHEME} is read-only; write operations are not supported`,
+      );
+    }
+    if (url.hostname !== 'current') {
+      return this.hostUriError(
+        request,
+        `Unsupported ${OMP_HOST_WORKSPACE_URI_SCHEME} authority: ${url.hostname || '(empty)'}`,
+      );
+    }
+
+    let path: string;
+    try {
+      path = this.decodeHostUriPath(url);
+    } catch {
+      return this.hostUriError(request, `Invalid encoded ${OMP_HOST_WORKSPACE_URI_SCHEME} path`);
+    }
+
+    if (path === 'sources') {
+      return this.hostUriJsonResult(request, this.workspaceSourcesSnapshot());
+    }
+
+    return this.hostUriError(
+      request,
+      `Unknown ${OMP_HOST_WORKSPACE_URI_SCHEME} path: /${path || '(empty)'}. Supported paths: /sources`,
+    );
+  }
+
+  private async resolveHostUriRequest(request: OmpRpcHostUriRequestFrame): Promise<OmpRpcHostUriResultFrame> {
+    const parsed = this.parseHostUriUrl(request);
+    if (!(parsed instanceof URL)) return parsed;
+
+    const scheme = parsed.protocol.replace(/:$/, '');
+    if (scheme === OMP_HOST_URI_SCHEME) {
+      return this.resolveSessionHostUriRequest(request, parsed);
+    }
+    if (scheme === OMP_HOST_WORKSPACE_URI_SCHEME) {
+      return this.resolveWorkspaceHostUriRequest(request, parsed);
+    }
+
+    return this.hostUriError(
+      request,
+      `Unsupported OMP host URI scheme: ${scheme || '(empty)'}`,
+    );
+  }
+
+  private async handleHostUriRequest(request: OmpRpcHostUriRequestFrame): Promise<void> {
+    this.pendingHostUriRequests.set(request.id, {
+      url: request.url,
+      operation: request.operation,
+      cancelled: false,
+      startedAt: Date.now(),
+    });
+
+    try {
+      const pending = this.pendingHostUriRequests.get(request.id);
+      if (!pending || pending.cancelled) return;
+      const result = await this.resolveHostUriRequest(request);
+      if (!this.isHostUriRequestActive(request.id)) return;
+      await this.writeSideChannel(result);
+    } finally {
+      this.pendingHostUriRequests.delete(request.id);
+    }
+  }
+
+  private handleHostUriCancel(frame: OmpRpcHostUriCancelFrame): void {
+    const pending = this.pendingHostUriRequests.get(frame.targetId);
+    if (!pending) return;
+    pending.cancelled = true;
+    this.pendingHostUriRequests.delete(frame.targetId);
+    this.resolvePendingHostUriPermission(frame.targetId, false);
+    this.writeSideChannel({
+      type: 'host_uri_result',
+      id: frame.targetId,
+      isError: true,
+      error: `Host URI ${pending.operation} for ${pending.url} was cancelled`,
+      contentType: 'text/plain',
+    }).catch((error) => {
+      this.debug(`OMP host URI cancel response failed: ${error instanceof Error ? error.message : String(error)}`);
     });
   }
 
@@ -1332,6 +2924,38 @@ export class OmpRpcBackend extends BaseAgent {
     this.sessionLink = link;
     this.config.onOmpSessionLinkUpdate?.(this.cloneSessionLink(link));
     return this.cloneSessionLink(link);
+  }
+
+  private applySessionInfoUpdate(update: OmpRpcSessionInfoUpdateFrame): void {
+    const previousState = this.sessionState;
+    const previousLink = this.sessionLink;
+    const sessionId = update.sessionId ?? previousState?.sessionId ?? previousLink?.sessionId;
+    if (!sessionId) return;
+
+    const sessionName = update.title ?? previousState?.sessionName ?? previousLink?.sessionName;
+
+    if (previousState) {
+      this.sessionState = {
+        ...previousState,
+        sessionId,
+        sessionName,
+      };
+      this.diagnostics.setSessionState(this.sessionState);
+      this.touchControlState();
+    }
+
+    const link: OmpSessionLink = {
+      provider: 'omp',
+      sessionId,
+      sessionFile: previousState?.sessionFile ?? previousLink?.sessionFile,
+      sessionName,
+      messageCount: previousState?.messageCount ?? previousLink?.messageCount,
+      lastSyncedAt: Date.now(),
+      lastCheckedAt: previousLink?.lastCheckedAt,
+      lastMismatch: previousLink?.lastMismatch ? { ...previousLink.lastMismatch } : undefined,
+    };
+    this.sessionLink = link;
+    this.config.onOmpSessionLinkUpdate?.(this.cloneSessionLink(link));
   }
 
   private publishSessionMismatch(

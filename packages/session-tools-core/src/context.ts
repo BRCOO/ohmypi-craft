@@ -171,6 +171,15 @@ export interface SessionToolContext {
   /** Working directory (project root) for the session, if set */
   workingDirectory?: string;
 
+  /**
+   * Optional per-tool-call cancellation signal.
+   *
+   * In-process backends may attach this when a session tool is executing as a
+   * cancellable host call. Existing handlers can ignore it; long-running
+   * handlers should check it before starting new work and after awaited calls.
+   */
+  abortSignal?: AbortSignal;
+
   // ============================================================
   // Callbacks (transport-agnostic)
   // ============================================================

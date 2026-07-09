@@ -31,6 +31,7 @@ function createOmpAgent(overrides: Record<string, unknown> = {}) {
     getOmpSessionLink: () => link,
     getOmpMessages: async () => [],
     getOmpBranchMessages: async () => [],
+    getOmpLastAssistantText: async () => null,
     branchOmpSession: async () => ({ text: '', cancelled: false }),
     handoffOmpSession: async () => null,
     exportOmpSessionHtml: async () => ({ path: 'C:\\sessions\\session.html' }),
@@ -146,14 +147,19 @@ function createManagedSession(agent: unknown, overrides: Record<string, unknown>
   }
 }
 
-function createManager(managed: Record<string, unknown>) {
+function createManager(
+  managed: Record<string, unknown>,
+  options: { useRealReconcile?: boolean } = {},
+) {
   const manager = Object.create(SessionManager.prototype) as any
   manager.sessions = new Map([[managed.id, managed]])
   manager.ensureMessagesLoaded = async () => {
     managed.messagesLoaded = true
   }
   manager.getOrCreateAgent = async () => managed.agent
-  manager.reconcileOmpSessionBeforePrompt = async () => {}
+  if (!options.useRealReconcile) {
+    manager.reconcileOmpSessionBeforePrompt = async () => {}
+  }
   manager.persisted = [] as unknown[]
   manager.flushed = [] as string[]
   manager.events = [] as unknown[]
@@ -206,6 +212,35 @@ describe('SessionManager OMP session actions', () => {
         },
       ],
     })
+  })
+
+  it('uses OMP last assistant text as a continuity fallback for branch options', async () => {
+    const calls: string[] = []
+    const agent = createOmpAgent({
+      getOmpMessages: async () => [
+        { role: 'user', content: [{ type: 'text', text: 'first prompt' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'first answer' }] },
+        { role: 'user', content: [{ type: 'text', text: 'second prompt' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'truncated' }] },
+      ],
+      getOmpLastAssistantText: async () => {
+        calls.push('get-last-assistant')
+        return 'second answer'
+      },
+      getOmpBranchMessages: async () => [
+        { entryId: 'entry-1', text: 'first prompt' },
+        { entryId: 'entry-2', text: 'second prompt' },
+      ],
+    })
+    const managed = createManagedSession(agent)
+    const manager = createManager(managed, { useRealReconcile: true })
+
+    const result = await manager.getOmpBranchOptions('session-1')
+
+    expect(result.success).toBe(true)
+    expect(result.options?.map((option: { entryId: string }) => option.entryId)).toEqual(['entry-1', 'entry-2'])
+    expect(calls).toEqual(['get-last-assistant'])
+    expect(managed.ompSessionLink?.lastMismatch).toBeUndefined()
   })
 
   it('branches by truncating Craft messages before the selected OMP user entry', async () => {

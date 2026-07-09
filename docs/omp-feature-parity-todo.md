@@ -21,7 +21,7 @@
 - OMP 的模型、认证、会话、压缩、重试、队列、Todo、子智能体、技能、扩展、插件、MCP、记忆、浏览器、LSP、计划和目标系统。
 - OMP 设置系统的 10 个设置页及其功能分组。
 
-当前后端已具备类型化发送路径的标准 OMP RPC 命令已从 6/39 提升到 21/39：
+当前本地 OMP RPC 协议快照已覆盖 39/39 个标准命令，并为每条命令记录分类、返回类型标签、长操作标记、默认超时和副作用标记。桌面产品中已有明确后端动作或入口的命令仍不是全部 39 个；主要已接入/部分接入命令包括：
 
 - `prompt`
 - `steer`
@@ -45,7 +45,7 @@
 - `handoff`
 - `export_html`
 
-这不等于 OMP 内核只运行了 21/39 的能力，也不等于 21 个命令都已有桌面入口。`omp --mode rpc` 仍会加载 OMP 自身的工具、项目配置、技能、扩展和 MCP。但这些能力中的很大一部分没有桌面入口、状态同步、事件呈现、持久化或错误恢复。
+这不等于所有 39 个命令都已有桌面入口。`omp --mode rpc` 仍会加载 OMP 自身的工具、项目配置、技能、扩展和 MCP。但这些能力中的很大一部分没有桌面入口、状态同步、事件呈现、持久化或错误恢复。
 
 ### 状态标记
 
@@ -132,9 +132,9 @@ OMP 的 `/model`、`/stats`、`/context` 等 RPC/ACP 命令可能返回 `{ agent
 
 - [x] 从 OMP 上游同步或生成精简的 `RpcCommand`、`RpcResponse`、事件帧类型。
 - [x] 已覆盖当前直接发送的提示、模型、思考、命令发现和队列控制命令类型。
-- [ ] 为每种命令定义返回数据类型和默认超时。
-- [ ] 区分普通 request/response、无响应 side channel 和长时操作。
-- [ ] 为登录、压缩、导出等长操作配置单独超时。
+- [x] 为 39 个标准命令定义返回数据标签、默认超时和长操作分类。
+- [x] 区分普通 request/response、无响应 side channel 和长时操作。（`extension_ui_response`、`host_tool_result/update` 和 `host_uri_result` 保持 side channel；标准命令走 metadata。）
+- [x] 为登录、压缩、导出、handoff、bash 等长操作配置单独超时，并保留测试 override。
 - [x] 对未知帧计数并记录采样日志，而不是完全静默丢弃。
 - [ ] 增加协议版本/OMP 版本探测和兼容性警告。
 
@@ -166,12 +166,12 @@ OMP 的 `/model`、`/stats`、`/context` 等 RPC/ACP 命令可能返回 `{ agent
 | 6 | `new_session` | 后端接口已接入 | 已支持 `parentSession`；仍需接入 Craft 新会话动作。 |
 | 7 | `get_state` | 启动同步已接入 | 继续用于恢复、重连和调试页，并把状态接入对应 UI。 |
 | 8 | `get_available_commands` | 已接入 | 启动后拉取动态命令并驱动输入框自动补全；仍需补参数 schema 展示和逐来源回归。 |
-| 9 | `set_todos` | 未接入 | 把桌面 Todo 编辑结果同步回 OMP。 |
-| 10 | `set_host_tools` | 未接入 | 把 Craft 数据源、会话操作和宿主工具注册给 OMP。 |
-| 11 | `set_host_uri_schemes` | 未接入 | 让 OMP 能读写 Craft 数据源 URI。 |
-| 12 | `set_subagent_subscription` | 未接入 | 支持 `off/progress/events`，桌面默认建议 `progress`。 |
-| 13 | `get_subagents` | 未接入 | 增加当前子智能体列表和状态恢复。 |
-| 14 | `get_subagent_messages` | 未接入 | 增加子智能体详情、增量读取和会话跳转。 |
+| 9 | `set_todos` | 已接入 | 桌面 Todo 编辑结果可同步回 OMP；仍需更多导入、导出、子智能体 Todo 分离和真实端到端回归。 |
+| 10 | `set_host_tools` | 部分接入 | Craft registry/backend host tools 已注册给 OMP；结构化结果、截图 image block、工具名去重、并发配额和边界级协作式中止已接入；仍缺深层桌面 IPC abort。 |
+| 11 | `set_host_uri_schemes` | 部分接入 | `craft-session` 已支持会话快照读取和 scoped artifact 写入；`craft-workspace://current/sources` 已支持脱敏 sources 快照；仍缺更多 Craft 数据对象 URI、真实数据源写入和端到端回归。 |
+| 12 | `set_subagent_subscription` | 部分接入 | 后端支持 `progress` 订阅和恢复；仍需完整子智能体实时 UI。 |
+| 13 | `get_subagents` | 部分接入 | 后端可拉取当前子智能体快照；仍需列表、详情和状态恢复 UI。 |
+| 14 | `get_subagent_messages` | 部分接入 | 后端可增量读取子智能体 transcript；仍需详情页、跳转和错误重试。 |
 | 15 | `set_model` | 已接入 | 增加失败回滚、当前模型状态确认和运行中切换限制。 |
 | 16 | `cycle_model` | 未接入 | 可由模型选择器替代，但需要保留快捷键或明确不支持。 |
 | 17 | `get_available_models` | 已接入 | 改为可复用缓存，显示不可用原因、能力和认证状态。 |
@@ -180,18 +180,18 @@ OMP 的 `/model`、`/stats`、`/context` 等 RPC/ACP 命令可能返回 `{ agent
 | 20 | `set_steering_mode` | 已接入 | 输入框控制菜单可设置 `all/one-at-a-time`，并同步 OMP 队列状态；仍需持久化/恢复验证。 |
 | 21 | `set_follow_up_mode` | 已接入 | 输入框控制菜单可设置 `all/one-at-a-time`，并同步 OMP 队列状态；仍需持久化/恢复验证。 |
 | 22 | `set_interrupt_mode` | 已接入 | 输入框控制菜单可设置 `immediate/wait`；仍需与停止按钮语义做一次真实场景验收。 |
-| 23 | `compact` | 未接入 | 增加手动压缩、焦点说明和结果摘要。 |
-| 24 | `set_auto_compaction` | 未接入 | 增加会话级开关并从 `get_state` 恢复。 |
-| 25 | `set_auto_retry` | 未接入 | 增加会话级开关并显示当前状态。 |
-| 26 | `abort_retry` | 未接入 | 重试倒计时时提供取消按钮。 |
+| 23 | `compact` | 部分接入 | 手动压缩后端动作和运行时状态已接入；仍需焦点说明、结果摘要和真实场景验收。 |
+| 24 | `set_auto_compaction` | 部分接入 | 会话级开关后端动作和 `get_state` 恢复已接入；仍需设置 UI 与持久化验收。 |
+| 25 | `set_auto_retry` | 部分接入 | 会话级开关和当前状态已接入；仍需设置 UI 与失败场景验收。 |
+| 26 | `abort_retry` | 部分接入 | 后端可取消等待中的重试；仍需倒计时 UI 入口和端到端验收。 |
 | 27 | `bash` | 未接入 | 支持 OMP 的直接用户 Bash 模式，而不必让模型调用 bash 工具。 |
 | 28 | `abort_bash` | 未接入 | 支持停止直接 Bash 命令。 |
-| 29 | `get_session_stats` | 未接入 | 接入 token、费用、时长、消息和工具统计。 |
+| 29 | `get_session_stats` | 部分接入 | 运行时快照已接入 token、费用、时长、消息和工具统计；仍需更完整的 UI 呈现。 |
 | 30 | `export_html` | 后端接口已接入 | 已解析返回路径；仍需桌面动作、成功提示和打开文件。 |
 | 31 | `switch_session` | 恢复链路已接入 | Craft 会话启动时会切回持久化的 OMP sessionFile；仍需会话选择器。 |
 | 32 | `branch` | 后端接口已接入 | 已支持 OMP entryId 分支并刷新 session 映射；当前 `_supportsBranching=false`，桌面分支流仍待接入。 |
 | 33 | `get_branch_messages` | 后端接口已接入 | 已返回 OMP entryId/text；分支菜单仍待接入。 |
-| 34 | `get_last_assistant_text` | 未接入 | 用于复制、继续、外部动作和恢复验证。 |
+| 34 | `get_last_assistant_text` | 后端接口已接入 | 已用于 OMP 分支连续性 fallback；复制、继续和外部动作入口仍待接入。 |
 | 35 | `set_session_name` | 单向已接入 | Craft 重命名会同步到 live OMP；OMP → Craft 的显式标题同步仍待产品决策。 |
 | 36 | `handoff` | 后端接口已接入 | 已解析 `savedPath`；仍需桌面动作、结果展示和新会话跳转。 |
 | 37 | `get_messages` | 恢复对账已接入 | 首条新提示前核对用户消息数量、最后角色和最后文本，异常会持久化并阻止继续写错会话。 |
@@ -205,7 +205,7 @@ OMP 的 `/model`、`/stats`、`/context` 等 RPC/ACP 命令可能返回 `{ agent
 ### 5.1 基础响应和状态帧
 
 - [x] `ready`：完成后主动获取真实状态。
-- [ ] `response`：正确解包 `data`，记录命令耗时。
+- [x] `response`：正确解包 `data`，记录命令耗时和按命令 timeout 计数。
 - [x] `prompt_result`：决定是否等待 `agent_end`。
 - [x] `command_output`：以 OMP Command 卡片展示，保留 Markdown/代码块，并在 slash prompt 上下文中显示命令名。
 - [x] `available_commands_update`：更新命令缓存和输入框补全。
@@ -249,20 +249,20 @@ OMP 的 `/model`、`/stats`、`/context` 等 RPC/ACP 命令可能返回 `{ agent
 
 ### 5.4 Host Tool 帧
 
-- [ ] 实现 `host_tool_call` 分发。
-- [ ] 实现 `host_tool_cancel`。
-- [ ] 返回 `host_tool_update` 流式进度。
-- [ ] 返回 `host_tool_result`，保留结构化内容和 `isError`。
-- [ ] 对宿主工具执行权限、超时、取消和并发做统一治理。
-- [ ] 防止 OMP 工具名与 Craft 内置工具名冲突。
+- [x] 实现 `host_tool_call` 分发。
+- [x] 按上游语义处理 `host_tool_cancel`，真正终止隔离 `call_llm` 并抑制孤儿/迟到结果。
+- [x] 返回 `host_tool_update` 流式进度。（`call_llm` 文本增量已按 100ms 合并发送。）
+- [x] 返回 `host_tool_result`，保留结构化内容、原生图片内容和 `isError`。（文本内容、错误状态、`details`、浏览器截图 image block 和落盘预览已接入。）
+- [x] 对宿主工具执行权限、超时、取消和并发做统一治理。（Craft 权限、前置规则、统一超时、取消去重、并发配额、registry `AbortSignal` 和 browser runtime 轮询/批处理协作式中止已接入；深层桌面 IPC abort 留作后续 browser runtime 加固。）
+- [x] 防止 OMP 工具名与 Craft 内置工具名冲突。（注册前按名称去重，保留首个定义并记录被跳过项。）
 
 ### 5.5 Host URI 帧
 
-- [ ] 实现 `host_uri_request` 的 read/write。
-- [ ] 实现 `host_uri_cancel`。
-- [ ] 返回 `host_uri_result` 的 content、contentType、notes、immutable 和错误。
-- [ ] 为 Craft API、MCP、本地文件夹及未来数据源分配稳定 URI scheme。
-- [ ] 对 URI 写操作应用 Craft 权限和审计。
+- [ ] 实现 `host_uri_request` 的 read/write。（`craft-session://current/{summary,todos,runtime}` 只读端点、`craft-workspace://current/sources` 脱敏只读端点、`craft-session://current/artifacts/<name>` scoped 文本/JSON 写入已接入；任意 workspace/source/todo 写入仍拒绝。）
+- [x] 实现 `host_uri_cancel`。
+- [x] 返回 `host_uri_result` 的 content、contentType、notes、immutable 和错误。
+- [ ] 为 Craft API、MCP、本地文件夹及未来数据源分配稳定 URI scheme。（首批 `craft-session` 与 `craft-workspace` scheme 已接入。）
+- [x] 对已开放的 URI 写操作应用 Craft 权限和审计。（artifact 写入走 safe/ask/allow-all、支持取消，审计只记录路径/大小/结果，不记录正文。）
 
 ---
 
@@ -826,12 +826,12 @@ OMP 当前 RPC 协议并没有使用现有适配器中的标准 `permission_resp
 
 ### Phase A：协议可信（P0）
 
-- [ ] 类型化 RPC 客户端。（当前直接发送命令已类型化；完整 39 命令返回类型、超时和长操作分类待补齐。）
+- [x] 类型化 RPC 客户端。（39 个标准命令已进入本地协议快照；返回类型标签、默认超时、长操作分类和诊断 metadata 已补齐。）
 - [x] 修复 response.data。
 - [x] 修复 `agentInvoked:false` 挂起。
 - [x] 真实会话 get_state。
 - [x] 图片和 thinking。
-- [ ] 完整事件日志与未知帧诊断。
+- [ ] 完整事件日志与未知帧诊断。（未知帧、重复/孤儿响应、写入失败、按命令 latency/timeout 和 command metadata 已有；仍缺协议版本/OMP 版本探测、全量事件日志导出和 UI 化诊断。）
 
 ### Phase B：核心 OMP 产品能力（P1）
 
@@ -844,8 +844,8 @@ OMP 当前 RPC 协议并没有使用现有适配器中的标准 `permission_resp
 
 ### Phase C：宿主融合（P1/P2）
 
-- [ ] Host Tools。
-- [ ] Host URI。
+- [ ] Host Tools。（注册、权限、超时、`call_llm` 流式更新/真正中止、`spawn_session`、`browser_tool`、registry session tools、结构化结果、截图 image block、工具名去重、并发配额和边界级协作式中止已接入；仍缺深层桌面 IPC abort、更多真实端到端回归和产品化 UI。）
+- [ ] Host URI。（`craft-session` 会话快照、scoped artifact 写入、`craft-workspace` sources 脱敏快照、写权限和审计已接入；仍缺更多 Craft 数据对象 scheme、真实 source/todo 写入和产品化 UI。）
 - [ ] Craft Sources 与 OMP MCP 统一。
 - [ ] 权限和安全策略统一。
 - [ ] Browser/LSP/GitHub/SSH 专用体验。
