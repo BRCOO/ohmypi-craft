@@ -112,9 +112,10 @@ export function loadWorkspaceConfig(rootPath: string): WorkspaceConfig | null {
   try {
     const config = readJsonFileSync<WorkspaceConfig>(configPath);
 
-    // Expand path variables in defaults for portability
+    // Expand path variables in defaults for portability. Relative working directories
+    // are workspace-scoped, not process-cwd scoped.
     if (config.defaults?.workingDirectory) {
-      config.defaults.workingDirectory = expandPath(config.defaults.workingDirectory);
+      config.defaults.workingDirectory = expandPath(config.defaults.workingDirectory, rootPath);
     }
 
     // Compatibility: accept canonical or legacy permission mode names on read

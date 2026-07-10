@@ -86,4 +86,26 @@ describe('workspace storage: config normalization', () => {
     expect(loaded).not.toBeNull();
     expect(loaded?.defaults?.thinkingLevel).toBe('medium');
   });
+
+  it('resolves relative defaults.workingDirectory from the workspace root', () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'ws-working-dir-'));
+    tempDirs.push(workspaceRoot);
+
+    const rawConfig = {
+      id: 'ws_working_dir',
+      name: 'Working Directory',
+      slug: 'working-directory',
+      defaults: {
+        workingDirectory: 'project',
+      },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    writeFileSync(join(workspaceRoot, 'config.json'), JSON.stringify(rawConfig, null, 2), 'utf-8');
+
+    const loaded = loadWorkspaceConfig(workspaceRoot);
+    expect(loaded).not.toBeNull();
+    expect(loaded?.defaults?.workingDirectory).toBe(join(workspaceRoot, 'project'));
+  });
 });

@@ -91,6 +91,14 @@ function hasHiddenMetadata(phases: OmpTodoPhaseDto[]): boolean {
   ))
 }
 
+export function shouldShowOmpTodoCard(state: OmpTodoStateDto): boolean {
+  return !!state.error
+    || !!state.pendingAction
+    || !!state.reminder
+    || state.phases.some(phase => phase.tasks.length > 0)
+    || (state.subagents ?? []).length > 0
+}
+
 function taskStatusClass(status: OmpTodoStatusDto): string {
   switch (status) {
     case 'in_progress':
@@ -350,21 +358,21 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
   }, [])
 
   return (
-    <div className="px-3 pb-2">
-      <div className="overflow-hidden rounded-2xl border border-blue-300/15 bg-[#090B18]/90 shadow-[0_20px_60px_rgba(35,35,95,0.24)]">
+    <div className="mx-auto w-full max-w-3xl px-3 pb-2">
+      <div className="overflow-hidden rounded-xl border border-blue-300/15 bg-[#090B18]/85 shadow-[0_12px_38px_rgba(35,35,95,0.18)] backdrop-blur">
         <div className="pointer-events-none h-[2px] bg-gradient-to-r from-blue-400 via-violet-400 to-fuchsia-400" />
-        <div className="flex items-center gap-2 px-3 py-2.5">
+        <div className="flex items-center gap-2 px-3 py-2">
           <button
             type="button"
             onClick={() => setExpanded(value => !value)}
             className="flex min-w-0 flex-1 items-center gap-2 text-left"
           >
-            <span className="flex size-7 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 text-blue-100 ring-1 ring-blue-300/20">
-              <ListChecks className="size-4" />
+            <span className="flex size-6 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500/20 to-violet-500/20 text-blue-100 ring-1 ring-blue-300/20">
+              <ListChecks className="size-3.5" />
             </span>
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-2">
-                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-100/80">OMP Todos</span>
+                <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-100/80">OMP Todos</span>
                 {state.pendingAction && (
                   <span className="inline-flex items-center gap-1 rounded-full bg-blue-400/10 px-1.5 py-0.5 text-[10px] text-blue-100/80">
                     <Loader2 className="size-3 animate-spin" />
@@ -378,7 +386,7 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
                   </span>
                 )}
               </span>
-              <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+              <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
                 {activeTask
                   ? `Now: ${activeTask}`
                   : hasTodos

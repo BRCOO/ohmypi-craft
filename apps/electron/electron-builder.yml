@@ -1,5 +1,6 @@
 appId: com.ohmypi.desktop
 productName: Oh My Pi
+executableName: Oh My Pi
 copyright: Copyright © 2026 Oh My Pi
 
 electronVersion: "39.2.7"
@@ -154,8 +155,10 @@ win:
     - target: nsis
       arch:
         - x64
-  # Use predictable naming: Oh-My-Pi-x64.exe
-  artifactName: "Oh-My-Pi-${arch}.${ext}"
+  # Keep the installer artifact visually distinct from the installed app executable
+  # (`Oh My Pi.exe` via executableName/productName). The installer is a delivery
+  # wrapper, not the app binary.
+  artifactName: "Oh-My-Pi-Setup-${version}-${arch}.${ext}"
   files:
     # Exclude binaries for other platforms
     - "!**/resources/bin/darwin-*/**"
@@ -185,6 +188,11 @@ win:
 
 nsis:
   oneClick: true
+  shortcutName: "Oh My Pi"
+  uninstallDisplayName: "Oh My Pi"
+  installerIcon: resources/installer.ico
+  uninstallerIcon: resources/uninstaller.ico
+  installerHeaderIcon: resources/installer.ico
   # Per-user install to %LOCALAPPDATA%\Programs\ (not Program Files).
   # Bun subprocess cannot read/write files in Program Files due to Windows permissions.
   perMachine: false

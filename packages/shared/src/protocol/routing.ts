@@ -61,6 +61,9 @@ export const LOCAL_ONLY_CHANNELS = new Set<string>([
   RPC_CHANNELS.shell.OPEN_FILE,
   RPC_CHANNELS.shell.SHOW_IN_FOLDER,
 
+  // omp Feature Center path actions — local OS shell, guarded by OMP state allowlist
+  RPC_CHANNELS.omp.OPEN_FEATURE_CENTER_PATH,
+
   // skills — local filesystem actions (guarded for remote)
   RPC_CHANNELS.skills.OPEN_EDITOR,
   RPC_CHANNELS.skills.OPEN_FINDER,
@@ -337,6 +340,8 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.omp.GET_LOGIN_PROVIDERS,
   RPC_CHANNELS.omp.LOGIN_PROVIDER,
   RPC_CHANNELS.omp.GET_DIAGNOSTICS_SUMMARY,
+  RPC_CHANNELS.omp.GET_FEATURE_CENTER_STATE,
+  RPC_CHANNELS.omp.SAVE_FEATURE_CENTER_CONFIG,
 
   // preferences — workspace-level preferences
   RPC_CHANNELS.preferences.READ,

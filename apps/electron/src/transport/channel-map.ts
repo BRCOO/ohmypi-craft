@@ -176,6 +176,9 @@ export const CHANNEL_MAP = {
   getOmpLoginProviders: invoke(RPC_CHANNELS.omp.GET_LOGIN_PROVIDERS),
   loginOmpProvider: invoke(RPC_CHANNELS.omp.LOGIN_PROVIDER),
   getOmpDiagnosticsSummary: invoke(RPC_CHANNELS.omp.GET_DIAGNOSTICS_SUMMARY),
+  getOmpFeatureCenterState: invoke(RPC_CHANNELS.omp.GET_FEATURE_CENTER_STATE),
+  openOmpFeatureCenterPath: invoke(RPC_CHANNELS.omp.OPEN_FEATURE_CENTER_PATH),
+  saveOmpFeatureCenterConfig: invoke(RPC_CHANNELS.omp.SAVE_FEATURE_CENTER_CONFIG),
 
   // Session-specific model
   getSessionModel: invoke(RPC_CHANNELS.sessions.GET_MODEL),

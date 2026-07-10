@@ -739,6 +739,170 @@ export interface OmpDiagnosticsSummary {
 }
 
 // ---------------------------------------------------------------------------
+// OMP Feature Center DTOs
+// ---------------------------------------------------------------------------
+
+export type OmpFeatureValueSource = 'default' | 'global' | 'project'
+export type OmpFeaturePathLevel = 'user' | 'project'
+
+export interface OmpFeatureConfigPathDto {
+  path: string
+  exists: boolean
+  parseError?: string
+}
+
+export interface OmpFeatureCenterRuntimeDto {
+  available: boolean
+  version?: string
+  executablePath?: string
+  rawCommand?: string
+  commandSource?: OmpCommandSource
+  globalConfigPath: string
+  projectRootPath?: string
+  projectConfigPath?: string
+  projectConfigExists?: boolean
+  checkedAt: number
+  error?: string
+}
+
+export interface OmpFeatureModelRoleDto {
+  role: string
+  label: string
+  common: boolean
+  source: OmpFeatureValueSource
+  effectiveValue?: string
+  globalValue?: string
+  projectValue?: string
+  projectOverridden: boolean
+}
+
+export interface OmpFeatureAdvisorSettingDto<T = string | boolean> {
+  source: OmpFeatureValueSource
+  effectiveValue: T
+  globalValue?: T
+  projectValue?: T
+  projectOverridden: boolean
+}
+
+export interface OmpFeatureAdvisorRosterItemDto {
+  name: string
+  model?: string
+  tools?: string[]
+  instructions?: string
+  level?: OmpFeaturePathLevel
+  path?: string
+}
+
+export interface OmpFeatureAdvisorRosterEditableDto {
+  path: string
+  exists: boolean
+  parseError?: string
+  instructions?: string
+  advisors: OmpFeatureAdvisorRosterItemDto[]
+}
+
+export interface OmpFeatureAdvisorRosterDto {
+  paths: OmpFeatureConfigPathDto[]
+  advisors: OmpFeatureAdvisorRosterItemDto[]
+  editable: OmpFeatureAdvisorRosterEditableDto
+  sharedInstructions: boolean
+  parseErrors: string[]
+}
+
+export interface OmpFeatureAdvisorDto {
+  enabled: OmpFeatureAdvisorSettingDto<boolean>
+  subagents: OmpFeatureAdvisorSettingDto<boolean>
+  modelRole: OmpFeatureAdvisorSettingDto<string>
+  roster: OmpFeatureAdvisorRosterDto
+}
+
+export interface OmpFeatureCapabilityItemDto {
+  name: string
+  path: string
+  level: OmpFeaturePathLevel
+  description?: string
+}
+
+export interface OmpFeatureCapabilityDto {
+  count: number
+  sourcePaths: OmpFeatureConfigPathDto[]
+  items: OmpFeatureCapabilityItemDto[]
+  usageHint: string
+  error?: string
+}
+
+export interface OmpFeatureNativePlanDto {
+  modelRole?: string
+  supportStatus: 'rpc-unavailable' | 'model-role-only' | 'rpc-command-available'
+  toggleAvailable: boolean
+  approvalUi: 'not-exposed' | 'extension-ui-if-emitted'
+  rpcCommands: string[]
+  unavailableReason?: string
+  message: string
+}
+
+export type OmpFeatureUnavailableCommandStatus = 'hidden' | 'desktop-equivalent' | 'needs-upstream-rpc'
+
+export interface OmpFeatureUnavailableCommandDto {
+  command: string
+  label: string
+  status: OmpFeatureUnavailableCommandStatus
+  reason: string
+  alternative?: string
+}
+
+export interface OmpFeatureCenterStateDto {
+  runtime: OmpFeatureCenterRuntimeDto
+  config: {
+    global: OmpFeatureConfigPathDto
+    project?: OmpFeatureConfigPathDto
+  }
+  modelRoles: {
+    common: OmpFeatureModelRoleDto[]
+    advanced: OmpFeatureModelRoleDto[]
+  }
+  advisor: OmpFeatureAdvisorDto
+  skills: OmpFeatureCapabilityDto
+  mcp: OmpFeatureCapabilityDto
+  agents: OmpFeatureCapabilityDto
+  nativePlan: OmpFeatureNativePlanDto
+  unavailableCommands: OmpFeatureUnavailableCommandDto[]
+  lastRefreshedAt: number
+}
+
+export type OpenOmpFeatureCenterPathAction = 'open' | 'reveal'
+
+export interface OpenOmpFeatureCenterPathInput {
+  workspaceId?: string | null
+  path: string
+  action: OpenOmpFeatureCenterPathAction
+}
+
+export interface SaveOmpFeatureCenterConfigInput {
+  workspaceId?: string | null
+  modelRoles?: Record<string, string | null | undefined>
+  advisor?: {
+    enabled?: boolean
+    subagents?: boolean
+  }
+  advisorRoster?: {
+    instructions?: string | null
+    advisors?: Array<{
+      name?: string | null
+      model?: string | null
+      tools?: string[] | null
+      instructions?: string | null
+    }>
+  }
+}
+
+export interface SaveOmpFeatureCenterConfigResult {
+  success: boolean
+  state?: OmpFeatureCenterStateDto
+  error?: string
+}
+
+// ---------------------------------------------------------------------------
 // Source / skill types
 // ---------------------------------------------------------------------------
 

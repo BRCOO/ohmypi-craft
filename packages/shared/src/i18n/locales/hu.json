@@ -1074,6 +1074,8 @@
   "settings.notifications.desktopNotifications": "Asztali értesítések",
   "settings.notifications.desktopNotificationsDesc": "Értesítést kap, amikor az AI befejezi a munkát egy csevegésben.",
   "settings.notifications.title": "Értesítések",
+  "settings.omp.description": "Runtime, roles, Advisor, Skills",
+  "settings.omp.title": "Oh My Pi",
   "settings.permissions.aboutPermissions": "Az engedélyekről",
   "settings.permissions.aboutText1": "Az engedélyek szabályozzák, hogy az ügynök mennyi önállósággal rendelkezik. Felfedező módban az ügynök csak olvashat és kutathat – tökéletes a probléma megértéséhez a változtatások végrehajtása előtt. Ha készen áll, váltson Végrehajtó módra, hogy az ügynök önállóan megvalósíthassa a tervet.",
   "settings.permissions.aboutText2": "Egy hatékony munkafolyamat: kezdje Felfedező módban, hagyja az ügynököt megvizsgálni a helyzetet, tekintse át a javasolt tervet, majd hajtsa végre magabiztosan.",

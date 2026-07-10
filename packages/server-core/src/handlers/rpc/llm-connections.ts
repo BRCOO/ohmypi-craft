@@ -1,4 +1,4 @@
-import { RPC_CHANNELS, type LlmConnectionSetup, type OmpDiagnosticsSummary, type OmpLoginProviderDto, type OmpLoginProvidersResult, type OmpLoginSessionResult, type OmpRuntimeStatus, type SetOmpCommandPathResult } from '@craft-agent/shared/protocol'
+import { RPC_CHANNELS, type LlmConnectionSetup, type OmpDiagnosticsSummary, type OmpFeatureCenterStateDto, type OmpLoginProviderDto, type OmpLoginProvidersResult, type OmpLoginSessionResult, type OmpRuntimeStatus, type OpenOmpFeatureCenterPathInput, type SaveOmpFeatureCenterConfigInput, type SaveOmpFeatureCenterConfigResult, type SetOmpCommandPathResult } from '@craft-agent/shared/protocol'
 import { getLlmConnections, getLlmConnection, addLlmConnection, updateLlmConnection, deleteLlmConnection, getDefaultLlmConnection, setDefaultLlmConnection, touchLlmConnection, isCompatProvider, isAnthropicProvider, getDefaultModelsForConnection, getDefaultModelForConnection, type LlmConnection, type LlmConnectionWithStatus, toBedrockNativeId, deriveBedrockRegionPrefix } from '@craft-agent/shared/config'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { clearOmpCommandPath, getOmpCommandPath, setOmpCommandPath, setSetupDeferred } from '@craft-agent/shared/config/storage'
@@ -13,10 +13,12 @@ import { probeOmpAuth, getOmpDiagnosticsSummary } from '@craft-agent/shared/agen
 import { getModelRefreshService } from '@craft-agent/server-core/model-fetchers'
 import { parseTestConnectionError, createBuiltInConnection, validateModelList, piAuthProviderDisplayName, validateSetupTestInput, setupTestRequiresApiKey, resolveCustomEndpointSetup } from '@craft-agent/server-core/domain'
 import { getWorkspaceOrThrow, buildBackendHostRuntimeContext } from '@craft-agent/server-core/handlers'
-import { pushTyped, type RpcServer } from '@craft-agent/server-core/transport'
+import { CLIENT_OPEN_EXTERNAL, pushTyped, requestClientOpenPath, requestClientShowInFolder, type RpcServer } from '@craft-agent/server-core/transport'
+import { loadWorkspaceConfig } from '@craft-agent/shared/workspaces'
+import { getOmpFeatureCenterState, resolveOmpFeatureCenterAllowedPath, saveOmpFeatureCenterConfig } from '@craft-agent/server-core/services'
 import type { HandlerDeps } from '../handler-deps'
 import { randomUUID } from 'node:crypto'
-import { CLIENT_OPEN_EXTERNAL } from '@craft-agent/server-core/transport'
+import { access } from 'node:fs/promises'
 
 // Local OAuth state
 let copilotOAuthAbort: AbortController | null = null
@@ -52,6 +54,9 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.omp.GET_LOGIN_PROVIDERS,
   RPC_CHANNELS.omp.LOGIN_PROVIDER,
   RPC_CHANNELS.omp.GET_DIAGNOSTICS_SUMMARY,
+  RPC_CHANNELS.omp.GET_FEATURE_CENTER_STATE,
+  RPC_CHANNELS.omp.OPEN_FEATURE_CENTER_PATH,
+  RPC_CHANNELS.omp.SAVE_FEATURE_CENTER_CONFIG,
 ] as const
 
 export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerDeps): void {
@@ -62,6 +67,26 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
     cwd: deps.platform.appRootPath || process.cwd(),
     timeoutMs: 15_000,
   })
+  const getCurrentOmpDiagnostics = () => getOmpDiagnosticsSummary({
+    configuredCommand: getOmpCommandPath(),
+    cwd: deps.platform.appRootPath || process.cwd(),
+    timeoutMs: 30_000,
+  })
+  const resolveOmpFeatureCenterOptions = async (workspaceId?: string | null) => {
+    const diagnostics = await getCurrentOmpDiagnostics()
+    let workspaceRootPath: string | undefined
+    let projectRootPath: string | undefined
+    if (workspaceId) {
+      const workspace = getWorkspaceOrThrow(workspaceId)
+      workspaceRootPath = workspace.rootPath
+      projectRootPath = loadWorkspaceConfig(workspace.rootPath)?.defaults?.workingDirectory || workspace.rootPath
+    }
+    return {
+      diagnostics,
+      workspaceRootPath,
+      projectRootPath,
+    }
+  }
 
   // Unified handler for LLM connection setup
   server.handle(RPC_CHANNELS.settings.SETUP_LLM_CONNECTION, async (_ctx, setup: LlmConnectionSetup): Promise<{ success: boolean; error?: string }> => {
@@ -491,11 +516,40 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
   })
 
   server.handle(RPC_CHANNELS.omp.GET_DIAGNOSTICS_SUMMARY, async (): Promise<OmpDiagnosticsSummary> => {
-    return getOmpDiagnosticsSummary({
-      configuredCommand: getOmpCommandPath(),
-      cwd: deps.platform.appRootPath || process.cwd(),
-      timeoutMs: 30_000,
-    })
+    return getCurrentOmpDiagnostics()
+  })
+
+  server.handle(RPC_CHANNELS.omp.GET_FEATURE_CENTER_STATE, async (_ctx, workspaceId?: string | null): Promise<OmpFeatureCenterStateDto> => {
+    return getOmpFeatureCenterState(await resolveOmpFeatureCenterOptions(workspaceId))
+  })
+
+  server.handle(RPC_CHANNELS.omp.OPEN_FEATURE_CENTER_PATH, async (ctx, input: OpenOmpFeatureCenterPathInput): Promise<void> => {
+    if (!input || typeof input !== 'object') {
+      throw new Error('Invalid OMP Feature Center path request.')
+    }
+    const action = input.action
+    const targetPath = typeof input.path === 'string' ? input.path : ''
+    if (!targetPath.trim() || (action !== 'open' && action !== 'reveal')) {
+      throw new Error('Invalid OMP Feature Center path request.')
+    }
+
+    const state = await getOmpFeatureCenterState(await resolveOmpFeatureCenterOptions(input.workspaceId))
+    const safePath = resolveOmpFeatureCenterAllowedPath(state, targetPath)
+    if (!safePath) {
+      throw new Error('Path is not part of the current OMP Feature Center state.')
+    }
+
+    await access(safePath)
+    if (action === 'open') {
+      const result = await requestClientOpenPath(server, ctx.clientId, safePath)
+      if (result.error) throw new Error(result.error)
+      return
+    }
+    await requestClientShowInFolder(server, ctx.clientId, safePath)
+  })
+
+  server.handle(RPC_CHANNELS.omp.SAVE_FEATURE_CENTER_CONFIG, async (_ctx, input: SaveOmpFeatureCenterConfigInput): Promise<SaveOmpFeatureCenterConfigResult> => {
+    return saveOmpFeatureCenterConfig(input, await resolveOmpFeatureCenterOptions(input.workspaceId))
   })
 
   server.handle(RPC_CHANNELS.omp.GET_LOGIN_PROVIDERS, async (): Promise<OmpLoginProvidersResult> => {

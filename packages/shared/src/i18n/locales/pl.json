@@ -1074,6 +1074,8 @@
   "settings.notifications.desktopNotifications": "Powiadomienia systemowe",
   "settings.notifications.desktopNotificationsDesc": "Otrzymuj powiadomienia, gdy AI zakończy pracę w czacie.",
   "settings.notifications.title": "Powiadomienia",
+  "settings.omp.description": "Runtime, roles, Advisor, Skills",
+  "settings.omp.title": "Oh My Pi",
   "settings.permissions.aboutPermissions": "O uprawnieniach",
   "settings.permissions.aboutText1": "Uprawnienia kontrolują, ile autonomii ma twój agent. W trybie Eksploruj agent może tylko czytać i badać — idealnie do zrozumienia problemu przed wprowadzeniem zmian. Gdy jesteś gotowy, przełącz się na tryb Wykonuj, aby agent samodzielnie wdrożył plan.",
   "settings.permissions.aboutText2": "Dobry przepływ pracy: zacznij w trybie Eksploruj, aby agent mógł zbadać temat, przejrzyj proponowany plan, a następnie wykonaj go pewnie.",

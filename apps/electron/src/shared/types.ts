@@ -2,7 +2,7 @@
 // Protocol re-exports (channels, DTOs, events, wire types)
 // =============================================================================
 export * from '@craft-agent/shared/protocol'
-import type { OmpDiagnosticsSummary, OmpLoginProvidersResult, OmpLoginSessionResult, OmpRuntimeStatus, SetOmpCommandPathResult } from '@craft-agent/shared/protocol'
+import type { OmpDiagnosticsSummary, OmpFeatureCenterStateDto, OmpLoginProvidersResult, OmpLoginSessionResult, OmpRuntimeStatus, OpenOmpFeatureCenterPathInput, SaveOmpFeatureCenterConfigInput, SaveOmpFeatureCenterConfigResult, SetOmpCommandPathResult } from '@craft-agent/shared/protocol'
 
 // =============================================================================
 // Package re-exports (convenience for renderer imports)
@@ -436,6 +436,9 @@ export interface ElectronAPI {
   getOmpLoginProviders(): Promise<OmpLoginProvidersResult>
   loginOmpProvider(providerId: string): Promise<OmpLoginSessionResult>
   getOmpDiagnosticsSummary(): Promise<OmpDiagnosticsSummary>
+  getOmpFeatureCenterState(workspaceId?: string | null): Promise<OmpFeatureCenterStateDto>
+  openOmpFeatureCenterPath(input: OpenOmpFeatureCenterPathInput): Promise<void>
+  saveOmpFeatureCenterConfig(input: SaveOmpFeatureCenterConfigInput): Promise<SaveOmpFeatureCenterConfigResult>
 
   // Session-specific model (overrides global)
   getSessionModel(sessionId: string, workspaceId: string): Promise<string | null>

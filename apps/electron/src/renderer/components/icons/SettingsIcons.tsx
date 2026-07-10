@@ -8,6 +8,7 @@
 
 import {
   Building2,
+  Cpu,
   Keyboard,
   MessageSquare,
   Palette,
@@ -24,6 +25,7 @@ type IconProps = { className?: string }
 
 export const AppSettingsIcon = ({ className }: IconProps) => <ToggleRight className={className} />
 export const AiSettingsIcon = ({ className }: IconProps) => <Sparkles className={className} />
+export const OmpSettingsIcon = ({ className }: IconProps) => <Cpu className={className} />
 export const AppearanceIcon = ({ className }: IconProps) => <Palette className={className} />
 export const InputIcon = ({ className }: IconProps) => <Keyboard className={className} />
 export const WorkspaceIcon = ({ className }: IconProps) => <Building2 className={className} />
@@ -41,6 +43,7 @@ export const PreferencesIcon = ({ className }: IconProps) => <UserCircle classNa
 export const SETTINGS_ICONS: Record<SettingsSubpage, React.ComponentType<IconProps>> = {
   app: AppSettingsIcon,
   ai: AiSettingsIcon,
+  omp: OmpSettingsIcon,
   appearance: AppearanceIcon,
   input: InputIcon,
   workspace: WorkspaceIcon,

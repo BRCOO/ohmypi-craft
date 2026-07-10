@@ -1,11 +1,11 @@
 import * as React from 'react'
 import { useTranslation } from "react-i18next"
 import { Command as CommandPrimitive } from 'cmdk'
-import { Check, Minimize2, Sparkles } from 'lucide-react'
+import { Bot, Check, Minimize2, ServerCog, Sparkles, Wrench } from 'lucide-react'
 import { Icon_Folder } from '@craft-agent/ui'
 import { cn } from '@/lib/utils'
 import { PERMISSION_MODE_CONFIG, PERMISSION_MODE_ORDER, type PermissionMode } from '@craft-agent/shared/agent/modes'
-import type { OmpAvailableCommandDto } from '../../../shared/types'
+import type { OmpAvailableCommandDto, OmpAvailableCommandSource } from '../../../shared/types'
 
 // ============================================================================
 // Types
@@ -40,6 +40,8 @@ export interface SlashCommand {
   shortcut?: string
   /** Optional color for the command (hex color string) */
   color?: string
+  /** Optional compact metadata shown on the right side of inline menus. */
+  meta?: string
 }
 
 /** Folder item for the slash menu */
@@ -127,11 +129,11 @@ export const DEFAULT_SLASH_COMMAND_GROUPS: CommandGroup[] = [
 // Shared Styles
 // ============================================================================
 
-const MENU_CONTAINER_STYLE = 'min-w-[200px] overflow-hidden rounded-[8px] bg-background text-foreground shadow-modal-small'
-const MENU_LIST_STYLE = 'max-h-[260px] overflow-y-auto py-1'
-const MENU_ITEM_STYLE = 'flex cursor-pointer select-none items-center gap-2 rounded-[6px] mx-1 px-2 py-1.5 text-[13px]'
-const MENU_ITEM_SELECTED = 'bg-foreground/5'
-const MENU_SECTION_HEADER = 'px-3 py-1.5 mb-0.5 text-[12px] font-medium text-muted-foreground border-b border-foreground/5'
+const MENU_CONTAINER_STYLE = 'min-w-[260px] overflow-hidden rounded-2xl border border-white/10 bg-[#15151c]/95 text-foreground shadow-[0_22px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl'
+const MENU_LIST_STYLE = 'max-h-[360px] overflow-y-auto p-1.5'
+const MENU_ITEM_STYLE = 'flex cursor-pointer select-none items-start gap-2.5 rounded-xl px-2.5 py-2 text-[13px]'
+const MENU_ITEM_SELECTED = 'bg-white/[0.075]'
+const MENU_SECTION_HEADER = 'px-2.5 pb-1.5 pt-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground/80'
 
 // ============================================================================
 // Shared: Filter utilities
@@ -143,8 +145,10 @@ function filterCommands(commands: SlashCommand[], filter: string): SlashCommand[
   return commands.filter(
     cmd =>
       cmd.label.toLowerCase().includes(lowerFilter) ||
+      cmd.description?.toLowerCase().includes(lowerFilter) ||
       slashCommandIdKey(cmd.id).toLowerCase().includes(lowerFilter) ||
-      cmd.shortcut?.toLowerCase().includes(lowerFilter)
+      cmd.shortcut?.toLowerCase().includes(lowerFilter) ||
+      cmd.meta?.toLowerCase().includes(lowerFilter)
   )
 }
 
@@ -168,7 +172,9 @@ function filterSections(sections: SlashSection[], filter: string): SlashSection[
           ? item.id.toLowerCase()
           : slashCommandIdKey(item.id).toLowerCase()
         ).includes(lowerFilter) ||
-        item.description?.toLowerCase().includes(lowerFilter)
+        item.description?.toLowerCase().includes(lowerFilter) ||
+        (!isFolder(item) && item.meta?.toLowerCase().includes(lowerFilter)) ||
+        (!isFolder(item) && item.shortcut?.toLowerCase().includes(lowerFilter))
       ),
     }))
     .filter(section => section.items.length > 0)
@@ -192,13 +198,20 @@ function CommandItemContent({ command, isActive }: { command: SlashCommand; isAc
     : command.label
   return (
     <>
-      <div className="shrink-0 text-muted-foreground">{command.icon}</div>
-      <div className="flex-1 min-w-0">{label}</div>
-      {command.shortcut && (
-        <div className="shrink-0 text-[11px] text-muted-foreground/70">{command.shortcut}</div>
+      <div className="mt-0.5 shrink-0 text-muted-foreground">{command.icon}</div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate font-medium leading-5">{label}</div>
+        {command.description && (
+          <div className="truncate text-[11px] leading-4 text-muted-foreground/80">{command.description}</div>
+        )}
+      </div>
+      {(command.meta || command.shortcut) && (
+        <div className="mt-0.5 shrink-0 rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-muted-foreground/80">
+          {command.meta ?? command.shortcut}
+        </div>
       )}
       {isActive && (
-        <div className="shrink-0 h-4 w-4 rounded-full bg-current flex items-center justify-center">
+        <div className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-current">
           <Check className="h-2.5 w-2.5 text-white dark:text-black" strokeWidth={3} />
         </div>
       )}
@@ -446,6 +459,12 @@ export function InlineSlashCommand({
   const bottomPosition = typeof window !== 'undefined'
     ? window.innerHeight - Math.round(position.y) + 8
     : 0
+  const menuWidth = typeof window !== 'undefined'
+    ? Math.min(420, Math.max(320, window.innerWidth - 24))
+    : 420
+  const leftPosition = typeof window !== 'undefined'
+    ? Math.min(Math.max(12, Math.round(position.x) - 10), Math.max(12, window.innerWidth - menuWidth - 12))
+    : Math.round(position.x) - 10
 
   // Track current item index across all sections
   let currentItemIndex = 0
@@ -455,7 +474,7 @@ export function InlineSlashCommand({
       ref={menuRef}
       data-inline-menu
       className={cn('fixed z-dropdown', MENU_CONTAINER_STYLE, className)}
-      style={{ left: Math.round(position.x) - 10, bottom: bottomPosition, minWidth: 220, maxWidth: 260 }}
+      style={{ left: leftPosition, bottom: bottomPosition, width: menuWidth }}
     >
       <div ref={listRef} className={MENU_LIST_STYLE}>
         {filteredSections.map((section, sectionIndex) => (
@@ -483,12 +502,12 @@ export function InlineSlashCommand({
                       isSelected && MENU_ITEM_SELECTED
                     )}
                   >
-                    <div className="shrink-0 text-muted-foreground">
+                    <div className="mt-0.5 shrink-0 text-muted-foreground">
                       <Icon_Folder className={MENU_ICON_SIZE} strokeWidth={1.75} />
                     </div>
-                    <div className="flex-1 min-w-0 truncate">
-                      <span>{item.label}</span>
-                      <span className="text-muted-foreground ml-1.5">{item.description}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-medium leading-5">{item.label}</div>
+                      <div className="truncate text-[11px] leading-4 text-muted-foreground/80">{item.description}</div>
                     </div>
                   </div>
                 )
@@ -517,8 +536,8 @@ export function InlineSlashCommand({
         ))}
       </div>
       {/* Always-visible footer hint for @ mentions */}
-      <div className="h-px bg-border/50 mx-2" />
-      <div className="px-3 py-2.5 select-none text-xs text-muted-foreground">
+      <div className="mx-3 h-px bg-white/10" />
+      <div className="select-none px-3 py-2.5 text-xs text-muted-foreground">
         Use @ for skills and files
       </div>
     </div>
@@ -552,6 +571,43 @@ function formatPathForDisplay(path: string, homeDir?: string): string {
  */
 function getFolderName(path: string): string {
   return path.split('/').pop() || path
+}
+
+function humanizeSlashName(value: string): string {
+  return value
+    .replace(/^skill:/, '')
+    .replace(/^agent:/, '')
+    .replace(/[-_:]+/g, ' ')
+    .replace(/\b\w/g, letter => letter.toUpperCase())
+}
+
+function ompCommandSection(command: OmpAvailableCommandDto): { id: string; label: string; meta: string; icon: React.ReactNode } {
+  if (command.source === 'skill' || command.name.startsWith('skill:')) {
+    return { id: 'omp-skills', label: 'Skills', meta: 'skill', icon: <Sparkles className={MENU_ICON_SIZE} /> }
+  }
+  if (command.source === 'mcp_prompt' || command.name === 'mcp' || command.name.startsWith('mcp:')) {
+    return { id: 'omp-mcp', label: 'MCP', meta: command.source === 'mcp_prompt' ? 'prompt' : 'mcp', icon: <ServerCog className={MENU_ICON_SIZE} /> }
+  }
+  if (command.name.includes('agent') || command.source === 'file') {
+    return { id: 'omp-agents', label: 'Agents', meta: command.source === 'file' ? 'file' : 'agent', icon: <Bot className={MENU_ICON_SIZE} /> }
+  }
+  return {
+    id: 'omp-commands',
+    label: 'Oh My Pi',
+    meta: command.source === 'builtin' ? 'omp' : command.source,
+    icon: command.source === 'builtin' ? <Wrench className={MENU_ICON_SIZE} /> : <Sparkles className={MENU_ICON_SIZE} />,
+  }
+}
+
+function formatOmpCommandLabel(commandName: string, subcommand?: string): string {
+  if (commandName.startsWith('skill:')) return humanizeSlashName(commandName)
+  if (subcommand) return `${humanizeSlashName(commandName)} ${humanizeSlashName(subcommand)}`
+  return commandName.startsWith('/') ? commandName : `/${commandName}`
+}
+
+function formatOmpCommandMeta(source: OmpAvailableCommandSource, fallback: string): string {
+  if (source === 'mcp_prompt') return 'mcp'
+  return fallback
 }
 
 export interface UseInlineSlashCommandOptions {
@@ -595,23 +651,45 @@ export function useInlineSlashCommand({
 
   const ompSlashCommands = React.useMemo((): SlashCommand[] => {
     return ompCommands.flatMap((command) => {
+      const section = ompCommandSection(command)
       const base: SlashCommand = {
         id: { type: 'omp', name: command.name },
-        label: `/${command.name}`,
+        label: formatOmpCommandLabel(command.name),
         description: command.description || command.input?.hint || 'Oh My Pi command',
-        icon: <Sparkles className={MENU_ICON_SIZE} />,
+        icon: section.icon,
         shortcut: command.source,
+        meta: formatOmpCommandMeta(command.source, section.meta),
       }
       const subcommands = command.subcommands?.map((subcommand): SlashCommand => ({
         id: { type: 'omp', name: command.name, subcommand: subcommand.name },
-        label: `/${command.name} ${subcommand.name}`,
+        label: formatOmpCommandLabel(command.name, subcommand.name),
         description: subcommand.description || subcommand.usage || command.description || 'Oh My Pi subcommand',
-        icon: <Sparkles className={MENU_ICON_SIZE} />,
+        icon: section.icon,
         shortcut: command.source,
+        meta: formatOmpCommandMeta(command.source, section.meta),
       })) ?? []
       return [base, ...subcommands]
     })
   }, [ompCommands])
+
+  const ompSections = React.useMemo((): SlashSection[] => {
+    const grouped = new Map<string, SlashSection>()
+    for (const command of ompCommands) {
+      const section = ompCommandSection(command)
+      if (!grouped.has(section.id)) {
+        grouped.set(section.id, { id: section.id, label: section.label, items: [] })
+      }
+    }
+    for (const item of ompSlashCommands) {
+      const commandName = isOmpSlashCommandId(item.id) ? item.id.name : ''
+      const source = ompCommands.find(command => command.name === commandName)
+      const section = source ? ompCommandSection(source) : { id: 'omp-commands', label: 'Oh My Pi' }
+      grouped.get(section.id)?.items.push(item)
+    }
+    return ['omp-commands', 'omp-skills', 'omp-mcp', 'omp-agents']
+      .map(id => grouped.get(id))
+      .filter((section): section is SlashSection => !!section && section.items.length > 0)
+  }, [ompCommands, ompSlashCommands])
 
   // Build sections from commands and folders
   const sections = React.useMemo((): SlashSection[] => {
@@ -631,13 +709,7 @@ export function useInlineSlashCommand({
       items: [compactCommand],
     })
 
-    if (ompSlashCommands.length > 0) {
-      result.push({
-        id: 'omp',
-        label: 'Oh My Pi',
-        items: ompSlashCommands,
-      })
-    }
+    result.push(...ompSections)
 
     // Recent folders section - sorted alphabetically by folder name, show all
     if (recentFolders.length > 0) {
@@ -662,7 +734,7 @@ export function useInlineSlashCommand({
     }
 
     return result
-  }, [recentFolders, homeDir, ompSlashCommands])
+  }, [recentFolders, homeDir, ompSections])
 
   const handleInputChange = React.useCallback((value: string, cursorPosition: number) => {
     // Store current state for handleSelect

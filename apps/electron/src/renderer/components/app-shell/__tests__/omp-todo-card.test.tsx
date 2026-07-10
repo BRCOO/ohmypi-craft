@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import * as React from 'react'
 import * as ReactDOMServer from 'react-dom/server'
-import { OmpTodoCard } from '../OmpTodoCard'
+import { OmpTodoCard, shouldShowOmpTodoCard } from '../OmpTodoCard'
 import type { OmpTodoStateDto } from '../../../../shared/types'
 
 function makeState(overrides: Partial<OmpTodoStateDto> = {}): OmpTodoStateDto {
@@ -43,6 +43,12 @@ describe('OmpTodoCard', () => {
       />,
     )
     expect(html).toContain('No OMP Todo items yet')
+  })
+
+  it('hides the chat card host for an empty available OMP Todo state', () => {
+    expect(shouldShowOmpTodoCard(makeState({ phases: [] }))).toBe(false)
+    expect(shouldShowOmpTodoCard(makeState({ phases: [], pendingAction: 'refresh' }))).toBe(true)
+    expect(shouldShowOmpTodoCard(makeState())).toBe(true)
   })
 
   it('renders waiting message when state is not available', () => {

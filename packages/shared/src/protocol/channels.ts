@@ -226,6 +226,9 @@ export const RPC_CHANNELS = {
     GET_LOGIN_PROVIDERS: 'omp:getLoginProviders',
     LOGIN_PROVIDER: 'omp:loginProvider',
     GET_DIAGNOSTICS_SUMMARY: 'omp:getDiagnosticsSummary',
+    GET_FEATURE_CENTER_STATE: 'omp:getFeatureCenterState',
+    OPEN_FEATURE_CENTER_PATH: 'omp:openFeatureCenterPath',
+    SAVE_FEATURE_CENTER_CONFIG: 'omp:saveFeatureCenterConfig',
   },
   dialog: {
     OPEN_FOLDER: 'dialog:openFolder',

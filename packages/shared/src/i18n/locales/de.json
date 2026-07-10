@@ -1074,6 +1074,8 @@
   "settings.notifications.desktopNotifications": "Desktop-Benachrichtigungen",
   "settings.notifications.desktopNotificationsDesc": "Benachrichtigt werden, wenn die KI die Arbeit in einem Chat abgeschlossen hat.",
   "settings.notifications.title": "Benachrichtigungen",
+  "settings.omp.description": "Runtime, Rollen, Advisor, Skills",
+  "settings.omp.title": "Oh My Pi",
   "settings.permissions.aboutPermissions": "Über Berechtigungen",
   "settings.permissions.aboutText1": "Berechtigungen steuern, wie viel Autonomie Ihr Agent hat. Im Explore-Modus kann der Agent nur lesen und recherchieren – ideal, um ein Problem zu verstehen, bevor Änderungen vorgenommen werden. Wenn Sie bereit sind, wechseln Sie in den Execute-Modus, damit der Agent den Plan eigenständig umsetzen kann.",
   "settings.permissions.aboutText2": "Ein guter Workflow: Starten Sie im Explore-Modus, damit der Agent recherchieren kann, überprüfen Sie den vorgeschlagenen Plan und führen Sie ihn dann mit Zuversicht aus.",

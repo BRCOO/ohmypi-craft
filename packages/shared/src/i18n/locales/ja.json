@@ -1074,6 +1074,8 @@
   "settings.notifications.desktopNotifications": "デスクトップ通知",
   "settings.notifications.desktopNotificationsDesc": "AIがチャットでの作業を完了したときに通知を受け取ります。",
   "settings.notifications.title": "通知",
+  "settings.omp.description": "Runtime, roles, Advisor, Skills",
+  "settings.omp.title": "Oh My Pi",
   "settings.permissions.aboutPermissions": "権限について",
   "settings.permissions.aboutText1": "権限はエージェントの自律性の範囲を制御します。Exploreモードでは、エージェントは読み取りと調査のみ行えます。変更を加える前に問題を理解するのに最適です。準備ができたら、Executeモードに切り替えてエージェントが計画を自律的に実行できるようにします。",
   "settings.permissions.aboutText2": "推奨ワークフロー：まずExploreでエージェントに調査させ、提案された計画を確認してから、自信を持って実行します。",

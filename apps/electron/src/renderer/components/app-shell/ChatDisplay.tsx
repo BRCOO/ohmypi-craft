@@ -85,7 +85,7 @@ import {
   type AdminApprovalResponse,
   type ExtensionUiStructuredResponse,
 } from "./input"
-import { OmpTodoCard } from "./OmpTodoCard"
+import { OmpTodoCard, shouldShowOmpTodoCard } from "./OmpTodoCard"
 import { OmpSubagentBar } from "./OmpSubagentBar"
 import { OmpSubagentDetail } from "./OmpSubagentDetail"
 import type { FreeFormSubmitOptions } from "./input/FreeFormInput"
@@ -2026,7 +2026,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
             </div>
           )}
 
-          {session.ompTodoState && (
+          {session.ompTodoState && shouldShowOmpTodoCard(session.ompTodoState) && (
             <OmpTodoCard
               sessionId={session.id}
               state={session.ompTodoState}

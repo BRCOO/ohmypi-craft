@@ -1074,6 +1074,8 @@
   "settings.notifications.desktopNotifications": "桌面通知",
   "settings.notifications.desktopNotificationsDesc": "AI 在聊天中完成工作时发送通知。",
   "settings.notifications.title": "通知",
+  "settings.omp.description": "Runtime, roles, Advisor, Skills",
+  "settings.omp.title": "Oh My Pi",
   "settings.permissions.aboutPermissions": "关于权限",
   "settings.permissions.aboutText1": "权限控制智能体的自主程度。在探索模式下，智能体只能读取和研究——非常适合在提交更改前理解问题。准备好后，切换到执行模式让智能体自主实施方案。",
   "settings.permissions.aboutText2": "推荐工作流: 先在探索模式下让智能体调查，审查建议的方案，然后放心执行。",

@@ -1074,6 +1074,8 @@
   "settings.notifications.desktopNotifications": "Desktop notifications",
   "settings.notifications.desktopNotificationsDesc": "Get notified when AI finishes working in a chat.",
   "settings.notifications.title": "Notifications",
+  "settings.omp.description": "Runtime, roles, Advisor, Skills",
+  "settings.omp.title": "Oh My Pi",
   "settings.permissions.aboutPermissions": "About Permissions",
   "settings.permissions.aboutText1": "Permissions control how much autonomy your agent has. In Explore mode, the agent can only read and research — perfect for understanding a problem before committing to changes. When you're ready, switch to Execute mode to let the agent implement the plan autonomously.",
   "settings.permissions.aboutText2": "A good workflow: start in Explore to let the agent investigate, review the proposed plan, then execute with confidence.",

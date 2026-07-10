@@ -306,6 +306,7 @@
         "@craft-agent/shared": "workspace:*",
         "@earendil-works/pi-ai": "0.79.9",
         "jose": "^6.0.0",
+        "js-yaml": "^4.1.1",
         "sharp": "0.34.5",
         "ws": "^8.19.0",
       },

@@ -1074,6 +1074,8 @@
   "settings.notifications.desktopNotifications": "Notificaciones de escritorio",
   "settings.notifications.desktopNotificationsDesc": "Recibe una notificación cuando la IA termine de trabajar en un chat.",
   "settings.notifications.title": "Notificaciones",
+  "settings.omp.description": "Runtime, roles, Advisor, Skills",
+  "settings.omp.title": "Oh My Pi",
   "settings.permissions.aboutPermissions": "Acerca de los permisos",
   "settings.permissions.aboutText1": "Los permisos controlan cuánta autonomía tiene tu agente. En el modo Explore, el agente solo puede leer e investigar — perfecto para entender un problema antes de confirmar cambios. Cuando estés listo, cambia al modo Execute para que el agente implemente el plan de forma autónoma.",
   "settings.permissions.aboutText2": "Un buen flujo de trabajo: empieza en Explore para que el agente investigue, revisa el plan propuesto y luego ejecuta con confianza.",
