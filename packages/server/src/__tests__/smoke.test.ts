@@ -176,7 +176,9 @@ describe('headless server smoke test', () => {
     // Send SIGTERM
     server.proc.kill('SIGTERM')
     const exitCode = await server.proc.exited
-    expect(exitCode).toBe(0)
+    // Bun on Windows reports signal termination as 128 + signal (143 for SIGTERM)
+    // even when the process exits after the requested termination.
+    expect(process.platform === 'win32' ? [0, 143] : [0]).toContain(exitCode)
 
     // Mark as stopped so afterEach doesn't double-kill
     server = null

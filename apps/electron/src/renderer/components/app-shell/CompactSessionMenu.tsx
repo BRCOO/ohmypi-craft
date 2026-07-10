@@ -80,6 +80,7 @@ import { getSessionStatus, hasUnreadMeta, hasMessagesMeta } from '@/utils/sessio
 import { getFileManagerName } from '@/lib/platform'
 import { useMessagingConnect, type MessagingPlatform } from '@/components/messaging/MessagingSessionMenuItem'
 import { useSessionMenuActions } from '@/hooks/useSessionMenuActions'
+import { OmpBranchDialog } from './OmpBranchDialog'
 
 type View = 'root' | 'status' | 'labels' | 'share' | 'messaging'
 
@@ -161,12 +162,7 @@ export function CompactSessionMenu({
     [isControlled, onOpenChange],
   )
   const [view, setView] = React.useState<View>('root')
-
-  // Reset to root pane every time the drawer closes so the next open
-  // doesn't surprise the user with a sub-pane from the previous session.
-  React.useEffect(() => {
-    if (!open) setView('root')
-  }, [open])
+  const [pendingBranchAfterClose, setPendingBranchAfterClose] = React.useState(false)
 
   // Close+reset the drawer if the underlying session changes while it's open.
   // Otherwise action handlers retarget to the new session (e.g. user opens
@@ -186,6 +182,20 @@ export function CompactSessionMenu({
   const isOmpSession = item.ompSessionLink?.provider === 'omp'
 
   const actions = useSessionMenuActions({ item, onLabelsChange })
+
+  // Reset to root pane every time the drawer closes so the next open
+  // doesn't surprise the user with a sub-pane from the previous session.
+  // Also drains any pending OMP branch request that was queued while the drawer
+  // was still animating closed.
+  React.useEffect(() => {
+    if (!open) {
+      setView('root')
+      if (pendingBranchAfterClose) {
+        setPendingBranchAfterClose(false)
+        void actions.branchOmpSession()
+      }
+    }
+  }, [open, pendingBranchAfterClose, actions.branchOmpSession])
 
   const flatLabelItems = React.useMemo(
     (): LabelMenuItem[] => createLabelMenuItems(labels),
@@ -272,6 +282,7 @@ export function CompactSessionMenu({
       )
 
   return (
+    <>
     <Drawer open={open} onOpenChange={setOpen}>
       {triggerNode}
 
@@ -309,7 +320,10 @@ export function CompactSessionMenu({
               onOpenShareSub={() => setView('share')}
               onSendToWorkspace={closeAfter(onSendToWorkspace)}
               onOpenMessagingSub={() => setView('messaging')}
-              onOmpBranch={closeAfter(actions.branchOmpSession)}
+              onOmpBranch={() => {
+                setOpen(false)
+                setPendingBranchAfterClose(true)
+              }}
               onOmpHandoff={closeAfter(actions.handoffOmpSession)}
               onOmpExportHtml={closeAfter(actions.exportOmpSessionHtml)}
               onOpenStatusSub={() => setView('status')}
@@ -363,6 +377,14 @@ export function CompactSessionMenu({
         </div>
       </DrawerContent>
     </Drawer>
+
+    <OmpBranchDialog
+      open={actions.ompBranchDialog.open}
+      options={actions.ompBranchDialog.options}
+      onClose={actions.closeOmpBranchDialog}
+      onSelect={actions.selectOmpBranchOption}
+    />
+    </>
   )
 }
 

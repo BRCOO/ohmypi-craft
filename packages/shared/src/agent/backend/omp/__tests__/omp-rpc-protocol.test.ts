@@ -22,6 +22,9 @@ import {
   parseOmpHostUriCancel,
   parseOmpHostUriRequest,
   parseOmpLastAssistantTextResponseData,
+  parseOmpLoginProvider,
+  parseOmpLoginProvidersResponseData,
+  parseOmpLoginResult,
   parseOmpMessagesResponseData,
   parseOmpPromptResponseData,
   parseOmpPromptResult,
@@ -31,9 +34,18 @@ import {
   parseOmpSetHostToolsResponseData,
   parseOmpSetHostUriSchemesResponseData,
   parseOmpSetTodosResponseData,
+  parseOmpConfigUpdateFrame,
+  parseOmpExtensionErrorFrame,
+  parseOmpMessageEndFrame,
+  parseOmpMessageStartFrame,
+  parseOmpMessageUpdateFrame,
+  parseOmpReadyFrame,
   parseOmpSessionInfoUpdate,
+  parseOmpSessionShutdownFrame,
   parseOmpSessionState,
   parseOmpSessionStats,
+  parseOmpStderrFrame,
+  parseOmpToolExecutionUpdateFrame,
   parseOmpSubagentFrame,
   parseOmpSubagentMessagesResponseData,
   parseOmpSubagentSnapshot,
@@ -595,5 +607,168 @@ describe('OMP RPC protocol parsers', () => {
     const messages = [{ role: 'user', content: 'hello' }];
     expect(parseOmpMessagesResponseData({ messages })).toEqual({ messages });
     expect(parseOmpMessagesResponseData({ messages: 'nope' })).toBeNull();
+  });
+
+  it('parses OMP login providers and login results', () => {
+    const provider = { id: 'deepseek', name: 'DeepSeek', available: true, authenticated: false };
+    expect(parseOmpLoginProvider(provider)).toEqual(provider);
+    expect(parseOmpLoginProvider({ ...provider, id: '' })).toBeNull();
+    expect(parseOmpLoginProvider({ ...provider, name: '   ' })).toBeNull();
+    expect(parseOmpLoginProvider({ ...provider, available: 'yes' })).toBeNull();
+    expect(parseOmpLoginProvider({ ...provider, authenticated: 1 })).toBeNull();
+
+    expect(parseOmpLoginProvidersResponseData({ providers: [provider] })).toEqual({ providers: [provider] });
+    expect(parseOmpLoginProvidersResponseData({ providers: [provider, { id: 'bad' }] })).toBeNull();
+    expect(parseOmpLoginProvidersResponseData({ providers: 'nope' })).toBeNull();
+
+    expect(parseOmpLoginResult({ providerId: 'deepseek' })).toEqual({ providerId: 'deepseek' });
+    expect(parseOmpLoginResult({ providerId: '' })).toBeNull();
+    expect(parseOmpLoginResult({ providerId: 42 })).toBeNull();
+  });
+
+  it('parses Batch 04 event frames', () => {
+    expect(parseOmpReadyFrame({ type: 'ready' })).toEqual({ type: 'ready' });
+    expect(parseOmpReadyFrame({
+      type: 'ready',
+      protocolVersion: '1',
+      ompVersion: '1.2.3',
+      sessionId: 'sess-1',
+    })).toEqual({
+      type: 'ready',
+      protocolVersion: '1',
+      ompVersion: '1.2.3',
+      sessionId: 'sess-1',
+    });
+    expect(parseOmpReadyFrame({ type: 'not-ready' })).toBeNull();
+
+    expect(parseOmpMessageStartFrame({
+      type: 'message_start',
+      messageId: 'm1',
+      role: 'assistant',
+      turnId: 't1',
+      index: 0,
+    })).toEqual({
+      type: 'message_start',
+      messageId: 'm1',
+      role: 'assistant',
+      parentMessageId: undefined,
+      turnId: 't1',
+      index: 0,
+    });
+    expect(parseOmpMessageStartFrame({ type: 'message_start' })).toEqual({
+      type: 'message_start',
+      messageId: undefined,
+      role: undefined,
+      parentMessageId: undefined,
+      turnId: undefined,
+      index: undefined,
+    });
+
+    expect(parseOmpMessageUpdateFrame({
+      type: 'message_update',
+      messageId: 'm1',
+      assistant_message_event: { type: 'text_delta', delta: 'hi' },
+    })).toEqual({
+      type: 'message_update',
+      messageId: 'm1',
+      delta: undefined,
+      content: undefined,
+      assistantMessageEvent: { type: 'text_delta', delta: 'hi' },
+    });
+
+    expect(parseOmpMessageEndFrame({
+      type: 'message_end',
+      messageId: 'm1',
+      sdkMessageId: 'sdk-1',
+      message: { role: 'assistant', text: 'hi' },
+    })).toEqual({
+      type: 'message_end',
+      messageId: 'm1',
+      sdkMessageId: 'sdk-1',
+      message: { role: 'assistant', text: 'hi' },
+    });
+
+    expect(parseOmpToolExecutionUpdateFrame({
+      type: 'tool_execution_update',
+      toolCallId: 'tc-1',
+      stdout: 'out',
+      stderr: 'err',
+    })).toEqual({
+      type: 'tool_execution_update',
+      toolCallId: 'tc-1',
+      partialResult: undefined,
+      stdout: 'out',
+      stderr: 'err',
+      progress: undefined,
+      artifact: undefined,
+      image: undefined,
+    });
+
+    expect(parseOmpConfigUpdateFrame({
+      type: 'config_update',
+      config: { thinkingLevel: 'high', model: 'deepseek/deepseek-v4' },
+    })).toEqual({
+      type: 'config_update',
+      config: { thinkingLevel: 'high', model: 'deepseek/deepseek-v4' },
+    });
+    expect(parseOmpConfigUpdateFrame({ type: 'config_update', thinkingLevel: 'high' })).toEqual({
+      type: 'config_update',
+      config: undefined,
+    });
+
+    expect(parseOmpStderrFrame({ type: 'stderr', text: 'oops', level: 'warn' })).toEqual({
+      type: 'stderr',
+      text: 'oops',
+      level: 'warn',
+    });
+    expect(parseOmpStderrFrame({ type: 'stderr', text: 'oops' })).toEqual({
+      type: 'stderr',
+      text: 'oops',
+      level: undefined,
+    });
+    expect(parseOmpStderrFrame({ type: 'stderr', level: 'invalid' })).toEqual({
+      type: 'stderr',
+      text: undefined,
+      level: undefined,
+    });
+
+    expect(parseOmpSessionShutdownFrame({
+      type: 'session_shutdown',
+      reason: 'crash',
+      errorMessage: 'boom',
+    })).toEqual({
+      type: 'session_shutdown',
+      reason: 'crash',
+      errorMessage: 'boom',
+    });
+    expect(parseOmpSessionShutdownFrame({ type: 'session_shutdown', reason: 'invalid' })).toEqual({
+      type: 'session_shutdown',
+      reason: undefined,
+      errorMessage: undefined,
+    });
+
+    expect(parseOmpExtensionErrorFrame({
+      type: 'extension_error',
+      extensionId: 'ext-1',
+      source: 'src',
+      message: 'oops',
+      stackSummary: 'at foo',
+      recoverable: true,
+    })).toEqual({
+      type: 'extension_error',
+      extensionId: 'ext-1',
+      source: 'src',
+      message: 'oops',
+      stackSummary: 'at foo',
+      recoverable: true,
+    });
+    expect(parseOmpExtensionErrorFrame({ type: 'extension_error' })).toEqual({
+      type: 'extension_error',
+      extensionId: undefined,
+      source: undefined,
+      message: undefined,
+      stackSummary: undefined,
+      recoverable: undefined,
+    });
   });
 });

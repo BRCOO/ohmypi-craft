@@ -1,4 +1,4 @@
-import { RPC_CHANNELS, type LlmConnectionSetup, type OmpRuntimeStatus, type SetOmpCommandPathResult } from '@craft-agent/shared/protocol'
+import { RPC_CHANNELS, type LlmConnectionSetup, type OmpDiagnosticsSummary, type OmpLoginProviderDto, type OmpLoginProvidersResult, type OmpLoginSessionResult, type OmpRuntimeStatus, type SetOmpCommandPathResult } from '@craft-agent/shared/protocol'
 import { getLlmConnections, getLlmConnection, addLlmConnection, updateLlmConnection, deleteLlmConnection, getDefaultLlmConnection, setDefaultLlmConnection, touchLlmConnection, isCompatProvider, isAnthropicProvider, getDefaultModelsForConnection, getDefaultModelForConnection, type LlmConnection, type LlmConnectionWithStatus, toBedrockNativeId, deriveBedrockRegionPrefix } from '@craft-agent/shared/config'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { clearOmpCommandPath, getOmpCommandPath, setOmpCommandPath, setSetupDeferred } from '@craft-agent/shared/config/storage'
@@ -9,6 +9,7 @@ import {
   testBackendConnection,
   validateStoredBackendConnection,
 } from '@craft-agent/shared/agent/backend'
+import { probeOmpAuth, getOmpDiagnosticsSummary } from '@craft-agent/shared/agent/backend'
 import { getModelRefreshService } from '@craft-agent/server-core/model-fetchers'
 import { parseTestConnectionError, createBuiltInConnection, validateModelList, piAuthProviderDisplayName, validateSetupTestInput, setupTestRequiresApiKey, resolveCustomEndpointSetup } from '@craft-agent/server-core/domain'
 import { getWorkspaceOrThrow, buildBackendHostRuntimeContext } from '@craft-agent/server-core/handlers'
@@ -48,6 +49,9 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.omp.GET_STATUS,
   RPC_CHANNELS.omp.SET_COMMAND_PATH,
   RPC_CHANNELS.omp.CLEAR_COMMAND_PATH,
+  RPC_CHANNELS.omp.GET_LOGIN_PROVIDERS,
+  RPC_CHANNELS.omp.LOGIN_PROVIDER,
+  RPC_CHANNELS.omp.GET_DIAGNOSTICS_SUMMARY,
 ] as const
 
 export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerDeps): void {
@@ -239,22 +243,29 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
             hostRuntime: buildBackendHostRuntimeContext(deps.platform),
             timeoutMs: 15_000,
           })
-          if (!result.models.length) {
-            return { success: false, error: 'OMP returned no models. Check the OMP runtime and provider credentials.' }
-          }
 
-          pendingConnection.models = result.models
-          updates.models = result.models
           pendingConnection.modelSelectionMode = 'automaticallySyncedFromProvider'
           updates.modelSelectionMode = 'automaticallySyncedFromProvider'
 
-          const liveDefault = result.serverDefault ?? result.models[0]?.id
-          if (liveDefault) {
-            pendingConnection.defaultModel = liveDefault
-            updates.defaultModel = liveDefault
-          }
+          if (result.models.length > 0) {
+            pendingConnection.models = result.models
+            updates.models = result.models
 
-          deps.platform.logger?.info(`OMP setup live model discovery succeeded: ${result.models.length} models`)
+            const liveDefault = result.serverDefault ?? result.models[0]?.id
+            if (liveDefault) {
+              pendingConnection.defaultModel = liveDefault
+              updates.defaultModel = liveDefault
+            }
+
+            deps.platform.logger?.info(`OMP setup live model discovery succeeded: ${result.models.length} models`)
+          } else {
+            // OMP is reachable but returned no models (likely no provider is logged in yet).
+            // Save the connection anyway so the onboarding/settings login flow can run
+            // and refresh models after the user authenticates.
+            pendingConnection.models = []
+            updates.models = []
+            deps.platform.logger?.warn('OMP setup returned no models; connection saved pending provider login.')
+          }
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error)
           deps.platform.logger?.warn(`OMP setup live model discovery failed: ${msg}`)
@@ -477,6 +488,108 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
     clearOmpCommandPath()
     const status = await checkCurrentOmpRuntime(undefined)
     return { success: true, status }
+  })
+
+  server.handle(RPC_CHANNELS.omp.GET_DIAGNOSTICS_SUMMARY, async (): Promise<OmpDiagnosticsSummary> => {
+    return getOmpDiagnosticsSummary({
+      configuredCommand: getOmpCommandPath(),
+      cwd: deps.platform.appRootPath || process.cwd(),
+      timeoutMs: 30_000,
+    })
+  })
+
+  server.handle(RPC_CHANNELS.omp.GET_LOGIN_PROVIDERS, async (): Promise<OmpLoginProvidersResult> => {
+    const status = await checkCurrentOmpRuntime()
+    if (!status.ok) {
+      return {
+        success: false,
+        error: status.error || 'OMP runtime is not available. Check the OMP command path.',
+      }
+    }
+
+    try {
+      const result = await probeOmpAuth({
+        rawCommand: getOmpCommandPath(),
+        cwd: deps.platform.appRootPath || process.cwd(),
+        timeoutMs: 30_000,
+      })
+
+      if (!result.success) {
+        return {
+          success: false,
+          error: result.message,
+        }
+      }
+
+      const providers = (result.providers ?? []).map((provider): OmpLoginProviderDto => ({
+        id: provider.id,
+        name: provider.name,
+        available: provider.available,
+        authenticated: provider.authenticated,
+      }))
+
+      return { success: true, providers }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      deps.platform.logger?.warn(`[OMP GET_LOGIN_PROVIDERS] ${msg}`)
+      return { success: false, error: `Failed to read OMP login providers: ${msg}` }
+    }
+  })
+
+  server.handle(RPC_CHANNELS.omp.LOGIN_PROVIDER, async (ctx, providerId: string): Promise<OmpLoginSessionResult> => {
+    if (!providerId || typeof providerId !== 'string') {
+      return { success: false, error: 'Provider ID is required.' }
+    }
+
+    const status = await checkCurrentOmpRuntime()
+    if (!status.ok) {
+      return {
+        success: false,
+        error: status.error || 'OMP runtime is not available. Check the OMP command path.',
+      }
+    }
+
+    try {
+      const result = await probeOmpAuth({
+        rawCommand: getOmpCommandPath(),
+        cwd: deps.platform.appRootPath || process.cwd(),
+        timeoutMs: 300_000,
+        loginProviderId: providerId,
+        onOpenUrl: (payload) => {
+          const targetUrl = payload.url || payload.launchUrl
+          if (!targetUrl) return
+          deps.platform.logger?.info(`[OMP LOGIN] Opening browser for ${providerId}: ${targetUrl}`)
+          if (ctx.clientId) {
+            server.invokeClient(ctx.clientId, CLIENT_OPEN_EXTERNAL, targetUrl).catch((err) => {
+              const fallback = err instanceof Error ? err.message : String(err)
+              deps.platform.logger?.warn(`[OMP LOGIN] Client open_external failed (${fallback}), trying platform fallback`)
+              deps.platform.openExternal?.(targetUrl).catch(() => {})
+            })
+          } else {
+            deps.platform.openExternal?.(targetUrl).catch(() => {})
+          }
+        },
+      })
+
+      if (!result.success) {
+        return {
+          success: false,
+          error: result.message,
+        }
+      }
+
+      return {
+        success: true,
+        providerId,
+        openUrl: result.openUrl,
+        launchUrl: result.launchUrl,
+        instructions: result.instructions,
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      deps.platform.logger?.warn(`[OMP LOGIN_PROVIDER] ${msg}`)
+      return { success: false, error: `OMP login failed: ${msg}` }
+    }
   })
 
   // ============================================================

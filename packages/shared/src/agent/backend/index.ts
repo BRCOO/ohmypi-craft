@@ -93,6 +93,9 @@ export {
   DEFAULT_OMP_MODEL,
   checkOmpRuntime,
   resolveOmpRuntimeCommand,
+  probeOmpAuth,
+  getOmpDiagnosticsSummary,
+  checkOmpVersionCompatibility,
 } from './omp/index.ts';
 export type {
   OmpControlState,
@@ -108,6 +111,14 @@ export type {
   OmpRpcAdaptedFrame,
   OmpRpcAvailableSlashCommand,
   OmpRpcResponseFrame,
+  OmpSubagentState,
+  OmpSubagentStateItem,
+  OmpSubagentTranscriptCursor,
+  OmpAuthProbeOptions,
+  OmpAuthProbeResult,
+  OmpAuthProbeErrorCode,
+  OmpDiagnosticsSummary,
+  OmpVersionCheckResult,
 } from './omp/index.ts';
 
 // Agent implementations are imported directly by factory.ts

@@ -109,10 +109,41 @@ codegraph explore "OmpRpcEventAdapter message_start tool_execution_update config
 
 ## 交接说明
 
-完成后写清：
+Batch 04 已完成。当前实现覆盖以下 OMP event frame：
 
-- 已支持的 OMP event frame 清单。
-- 未识别/降级处理策略。
-- 诊断字段清单和隐私保护策略。
-- 是否发现上游事件字段不稳定。
+- `message_start` / `message_update` / `message_end`：建立 OMP messageId → Craft turnId 映射，文本/thinking delta 分路，重复 end 去重，保存 sdkMessageId、stopReason、usage 和 provider metadata。
+- `tool_execution_start` / `tool_execution_update` / `tool_execution_end`：toolCallId 稳定映射到 Craft toolUseId，update 支持 stdout/stderr/progress/artifact URI，end 支持结构化/图片/非文本结果。
+- `config_update`：同步模型、思考等级、队列策略、自动压缩/重试等运行时开关。
+- `session_info_update`：同步 sessionId、sessionFile、title，不覆盖用户显式修改的 Craft 标题。
+- `session_shutdown`：区分 normal/switch/crash/external，fatal 级才产生聊天错误。
+- `extension_error`：按 recoverable 分级为 info/error，显示扩展来源和错误摘要。
+- `stderr`：按 debug/noise/warn/fatal 分级，避免把普通诊断当用户错误。
+- `ready`：读取 protocolVersion/ompVersion，启动后通过 `get_state` 获取真实会话状态，版本不兼容时给出非阻塞 warning。
+
+降级策略：
+
+- 未知 frame 只计数并采样日志，不会挂起会话。
+- 乱序/缺失 end 通过 `messageMap` 和 `completedThinkingBlocks` 去重兜底。
+- 未识别内容块降级为纯文本或 JSON 快照，不抛异常。
+- 版本探测失败不阻塞启动，仅写入诊断 warning。
+
+诊断字段清单（`getOmpDiagnosticsSummary` / Settings AI 页“复制 OMP 诊断”）：
+
+- CLI 路径、来源（config/env/default）、原始命令、CWD、OMP 版本、协议版本。
+- 模型数量、默认模型、最近运行错误码/错误信息。
+- Provider 列表、已登录数、可用数、总数。
+- Agent/config/auth 目录存在性。
+- `versionCompatibility.compatible` / `warning`。
+
+隐私保护策略：
+
+- 诊断对象不包含 API key、token、OAuth code、完整 prompt、消息正文、session 内容。
+- URI/artifact 审计只记录路径/大小/结果，不记录正文。
+- 登录进度日志不输出 callback code。
+
+版本兼容策略：
+
+- `MIN_OMP_VERSION = 0.0.0`，`MIN_PROTOCOL_VERSION = 1`。
+- 未知版本视为兼容但带 warning；版本低于阈值才报不兼容。
+- 适配器优先向前兼容，不因为 OMP 领先而拒绝运行。
 

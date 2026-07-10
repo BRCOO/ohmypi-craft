@@ -13,6 +13,7 @@ import {
   Circle,
   MessageCircleDashed,
   BrainCircuit,
+  Bot,
   FileText,
   ArrowUpRight,
   Ban,
@@ -25,6 +26,7 @@ import {
   FilePenLine,
   GitBranch,
 } from 'lucide-react'
+import type { OmpSubagentStateDto } from '@craft-agent/shared/protocol'
 import { cn } from '../../lib/utils'
 import { Markdown } from '../markdown'
 import { Spinner } from '../ui/LoadingIndicator'
@@ -367,6 +369,10 @@ export interface TurnCardProps {
   openAnnotationRequest?: OpenAnnotationRequest | null
   /** Annotation interaction mode (viewer uses tooltip-only to suppress the island) */
   annotationInteractionMode?: AnnotationInteractionMode
+  /** Runtime OMP subagent state used to link Task/Agent tool cards to subagent details */
+  ompSubagentState?: OmpSubagentStateDto
+  /** Callback to open the detail panel for a linked OMP subagent */
+  onOpenSubagent?: (subagentId: string) => void
 }
 
 // ============================================================================
@@ -1251,13 +1257,17 @@ interface ActivityGroupRowProps {
   sessionFolderPath?: string
   /** Display mode: 'detailed' shows all info, 'informative' hides MCP/API names and params */
   displayMode?: 'informative' | 'detailed'
+  /** Runtime OMP subagent state used to link this Task group to a subagent detail */
+  ompSubagentState?: OmpSubagentStateDto
+  /** Callback to open the detail panel for a linked OMP subagent */
+  onOpenSubagent?: (subagentId: string) => void
 }
 
 /**
  * Renders a Task subagent with its child activities grouped together.
  * Provides visual containment and collapsible children.
  */
-function ActivityGroupRow({ group, expandedGroups: externalExpandedGroups, onExpandedGroupsChange, onOpenActivityDetails, animationIndex = 0, sessionFolderPath, displayMode = 'detailed' }: ActivityGroupRowProps) {
+function ActivityGroupRow({ group, expandedGroups: externalExpandedGroups, onExpandedGroupsChange, onOpenActivityDetails, animationIndex = 0, sessionFolderPath, displayMode = 'detailed', ompSubagentState, onOpenSubagent }: ActivityGroupRowProps) {
   // Use local state if no controlled state provided
   const [localExpandedGroups, setLocalExpandedGroups] = useState<Set<string>>(new Set())
   const expandedGroups = externalExpandedGroups ?? localExpandedGroups
@@ -1280,6 +1290,9 @@ function ActivityGroupRow({ group, expandedGroups: externalExpandedGroups, onExp
   const subagentType = group.parent.toolInput?.subagent_type as string | undefined
   const isComplete = group.parent.status === 'completed' || group.parent.status === 'error'
   const hasError = group.parent.status === 'error'
+  const linkedSubagent = ompSubagentState?.subagents.find(
+    (s) => s.parentToolCallId && s.parentToolCallId === group.parent.toolUseId,
+  )
 
   return (
     <motion.div
@@ -1339,6 +1352,21 @@ function ActivityGroupRow({ group, expandedGroups: externalExpandedGroups, onExp
               </span>
             )}
           </span>
+        )}
+
+        {/* Link to OMP subagent detail when this Task card is backed by a tracked subagent */}
+        {linkedSubagent && onOpenSubagent && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpenSubagent(linkedSubagent.id)
+            }}
+            className="ml-1 inline-flex items-center gap-1 rounded-[4px] bg-blue-500/10 px-1.5 py-0.5 text-[10px] text-blue-100/80 hover:bg-blue-500/20 shrink-0"
+          >
+            <Bot className="size-3" />
+            <span>Subagent</span>
+          </button>
         )}
 
         {/* Spacer to push details button to right */}
@@ -2828,6 +2856,8 @@ export const TurnCard = React.memo(function TurnCard({
   hasActiveFollowUpAnnotations = false,
   openAnnotationRequest,
   annotationInteractionMode = 'interactive',
+  ompSubagentState,
+  onOpenSubagent,
 }: TurnCardProps) {
   // Derive the turn phase from props using the state machine.
   // This provides a single source of truth for lifecycle state,
@@ -3082,6 +3112,8 @@ export const TurnCard = React.memo(function TurnCard({
                           animationIndex={index}
                           sessionFolderPath={sessionFolderPath}
                           displayMode={displayMode}
+                          ompSubagentState={ompSubagentState}
+                          onOpenSubagent={onOpenSubagent}
                         />
                       ) : (
                         <motion.div

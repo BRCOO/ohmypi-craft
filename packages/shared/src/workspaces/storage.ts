@@ -39,6 +39,15 @@ const DEFAULT_WORKSPACES_DIR = join(CONFIG_DIR, 'workspaces');
 // Path Utilities
 // ============================================================
 
+function joinPreservingBaseStyle(basePath: string, ...segments: string[]): string {
+  const separator = basePath.includes('\\') && !basePath.includes('/') ? '\\' : '/';
+  const base = basePath.replace(/[\\/]+$/, '');
+  const cleanSegments = segments
+    .filter(Boolean)
+    .map(segment => segment.replace(/^[\\/]+|[\\/]+$/g, ''));
+  return [base, ...cleanSegments].filter(Boolean).join(separator);
+}
+
 /**
  * Get the default workspaces directory (~/.craft-agent/workspaces/)
  */
@@ -69,7 +78,7 @@ export function getWorkspacePath(workspaceId: string): string {
  * @param rootPath - Absolute path to workspace root folder
  */
 export function getWorkspaceSourcesPath(rootPath: string): string {
-  return join(rootPath, 'sources');
+  return joinPreservingBaseStyle(rootPath, 'sources');
 }
 
 /**
@@ -77,7 +86,7 @@ export function getWorkspaceSourcesPath(rootPath: string): string {
  * @param rootPath - Absolute path to workspace root folder
  */
 export function getWorkspaceSessionsPath(rootPath: string): string {
-  return join(rootPath, 'sessions');
+  return joinPreservingBaseStyle(rootPath, 'sessions');
 }
 
 /**
@@ -85,7 +94,7 @@ export function getWorkspaceSessionsPath(rootPath: string): string {
  * @param rootPath - Absolute path to workspace root folder
  */
 export function getWorkspaceSkillsPath(rootPath: string): string {
-  return join(rootPath, 'skills');
+  return joinPreservingBaseStyle(rootPath, 'skills');
 }
 
 // ============================================================

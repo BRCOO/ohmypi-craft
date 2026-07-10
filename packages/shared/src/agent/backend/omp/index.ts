@@ -1,9 +1,13 @@
 export { OmpRpcBackend, DEFAULT_OMP_MODEL, resolveOmpModelSelection } from './omp-rpc-backend.ts';
+export { probeOmpAuth } from './omp-auth-probe.ts';
+export type { OmpAuthProbeOptions, OmpAuthProbeResult, OmpAuthProbeErrorCode } from './omp-auth-probe.ts';
 export type { OmpModelSelection } from './omp-rpc-backend.ts';
 export { discoverOmpModels } from './omp-model-discovery.ts';
 export type { OmpModelDiscoveryOptions, OmpModelDiscoveryDependencies } from './omp-model-discovery.ts';
-export { checkOmpRuntime, detectOmpVersion } from './omp-runtime-diagnostics.ts';
-export type { OmpRuntimeDiagnosticsOptions, OmpRuntimeDiagnosticsDependencies } from './omp-runtime-diagnostics.ts';
+export { checkOmpRuntime, detectOmpVersion, getOmpDiagnosticsSummary } from './omp-runtime-diagnostics.ts';
+export type { OmpRuntimeDiagnosticsOptions, OmpRuntimeDiagnosticsDependencies, OmpDiagnosticsSummary } from './omp-runtime-diagnostics.ts';
+export { checkOmpVersionCompatibility } from './omp-version-check.ts';
+export type { OmpVersionCheckResult } from './omp-version-check.ts';
 export { resolveOmpCommand, resolveOmpRuntimeCommand } from './omp-command.ts';
 export type { ResolvedOmpCommand, ResolvedOmpRuntimeCommand, OmpCommandSource } from './omp-command.ts';
 export { normalizeOmpModels, resolveOmpServerDefault, DEFAULT_OMP_CONTEXT_WINDOW } from './omp-models.ts';
@@ -41,4 +45,9 @@ export type {
   OmpRpcResponseFrame,
 } from './omp-rpc-protocol.ts';
 export type { OmpTodoState, OmpTodoReminderState } from './omp-todo-state.ts';
+export type {
+  OmpSubagentState,
+  OmpSubagentStateItem,
+  OmpSubagentTranscriptCursor,
+} from './omp-subagent-state.ts';
 export type { OmpRpcDiagnosticsSnapshot } from './omp-rpc-diagnostics.ts';

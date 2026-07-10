@@ -173,6 +173,9 @@ export const CHANNEL_MAP = {
   getOmpRuntimeStatus: invoke(RPC_CHANNELS.omp.GET_STATUS),
   setOmpCommandPath: invoke(RPC_CHANNELS.omp.SET_COMMAND_PATH),
   clearOmpCommandPath: invoke(RPC_CHANNELS.omp.CLEAR_COMMAND_PATH),
+  getOmpLoginProviders: invoke(RPC_CHANNELS.omp.GET_LOGIN_PROVIDERS),
+  loginOmpProvider: invoke(RPC_CHANNELS.omp.LOGIN_PROVIDER),
+  getOmpDiagnosticsSummary: invoke(RPC_CHANNELS.omp.GET_DIAGNOSTICS_SUMMARY),
 
   // Session-specific model
   getSessionModel: invoke(RPC_CHANNELS.sessions.GET_MODEL),

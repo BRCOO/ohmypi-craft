@@ -21,6 +21,9 @@ export interface OmpRpcDiagnosticsSnapshot {
   processGeneration: number;
   ready: boolean;
   stateSynchronized: boolean;
+  ompVersion?: string;
+  protocolVersionReported?: string;
+  versionWarning?: string;
   session?: {
     sessionId: string;
     sessionFile?: string;
@@ -69,6 +72,9 @@ export class OmpRpcDiagnostics {
   private processGeneration = 0;
   private ready = false;
   private state: OmpRpcSessionState | null = null;
+  private ompVersion: string | undefined;
+  private protocolVersionReported: string | undefined;
+  private versionWarning: string | undefined;
   private framesReceived = 0;
   private framesByType: Record<string, number> = {};
   private malformedLines = 0;
@@ -101,6 +107,12 @@ export class OmpRpcDiagnostics {
 
   markReady(): void {
     this.ready = true;
+  }
+
+  setVersionInfo(ompVersion?: string, protocolVersion?: string, versionWarning?: string): void {
+    this.ompVersion = ompVersion;
+    this.protocolVersionReported = protocolVersion;
+    this.versionWarning = versionWarning;
   }
 
   setSessionState(state: OmpRpcSessionState): void {
@@ -184,6 +196,9 @@ export class OmpRpcDiagnostics {
       processGeneration: this.processGeneration,
       ready: this.ready,
       stateSynchronized: state !== null,
+      ompVersion: this.ompVersion,
+      protocolVersionReported: this.protocolVersionReported,
+      versionWarning: this.versionWarning,
       session: state
         ? {
             sessionId: state.sessionId,

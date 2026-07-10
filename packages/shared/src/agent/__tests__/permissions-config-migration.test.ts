@@ -81,6 +81,7 @@ describe('ensureDefaultPermissions migration', () => {
     expect(blockedCommandHints.some(h => h.command === 'printf')).toBe(true);
     expect(blockedCommandHints.some(h => h.command === 'sed')).toBe(true);
 
+    process.chdir(originalCwd);
     rmSync(tempRoot, { recursive: true, force: true });
     rmSync(tempConfig, { recursive: true, force: true });
   });

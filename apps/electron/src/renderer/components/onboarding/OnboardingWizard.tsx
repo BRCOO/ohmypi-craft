@@ -6,6 +6,7 @@ import { CredentialsStep, type CredentialStatus } from "./CredentialsStep"
 import { LocalModelStep, type LocalModelSubmitData } from "./LocalModelStep"
 import { CompletionStep } from "./CompletionStep"
 import { GitBashWarning, type GitBashStatus } from "./GitBashWarning"
+import { OmpLoginStep } from "./OmpLoginStep"
 import type { ApiKeySubmitData } from "../apisetup"
 import type { CustomEndpointApi } from '@config/llm-connections'
 
@@ -15,6 +16,7 @@ export type OnboardingStep =
   | 'provider-select'
   | 'local-model'
   | 'credentials'
+  | 'omp-login'
   | 'complete'
 
 export type LoginStatus = 'idle' | 'waiting' | 'success' | 'error'
@@ -30,6 +32,7 @@ export interface OnboardingState {
   gitBashStatus?: GitBashStatus
   isRecheckingGitBash?: boolean
   isCheckingGitBash?: boolean
+  ompConnectionSlug?: string
 }
 
 interface OnboardingWizardProps {
@@ -65,6 +68,9 @@ interface OnboardingWizardProps {
 
   // Local model
   onSubmitLocalModel?: (data: LocalModelSubmitData) => void
+
+  // OMP login
+  onOmpLoginComplete?: () => void
 
   // Edit mode (pre-fill existing connection values)
   editInitialValues?: {
@@ -112,6 +118,8 @@ export function OnboardingWizard({
   onSkipSetup,
   // Local model
   onSubmitLocalModel,
+  // OMP login
+  onOmpLoginComplete,
   // Edit mode
   editInitialValues,
   className
@@ -174,6 +182,15 @@ export function OnboardingWizard({
             editInitialValues={editInitialValues}
             onCancelOAuth={onCancelOAuth}
             copilotDeviceCode={copilotDeviceCode}
+          />
+        )
+
+      case 'omp-login':
+        return (
+          <OmpLoginStep
+            connectionSlug={state.ompConnectionSlug!}
+            onBack={onBack}
+            onComplete={onOmpLoginComplete ?? onFinish}
           />
         )
 

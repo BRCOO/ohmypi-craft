@@ -20,6 +20,10 @@ import {
   getSessionDownloadsPath,
 } from '../src/sessions/storage.ts';
 
+function portable(path: string): string {
+  return path.replace(/\\/g, '/');
+}
+
 // ============================================================
 // validateSessionId
 // ============================================================
@@ -264,7 +268,7 @@ describe('path normalization safety', () => {
 
   it('normalized path still stays within workspace', () => {
     const result = getSessionPath(workspaceRoot, '../../../tmp');
-    const normalized = normalize(result);
+    const normalized = portable(normalize(result));
 
     // Even after normalization, path should be safe
     expect(normalized.startsWith(workspaceRoot)).toBe(true);
@@ -274,7 +278,7 @@ describe('path normalization safety', () => {
     // Simulate what happens in the real code
     const maliciousInput = '../../../../tmp';
     const sanitized = sanitizeSessionId(maliciousInput); // Returns 'tmp'
-    const result = join(workspaceRoot, 'sessions', sanitized);
+    const result = portable(join(workspaceRoot, 'sessions', sanitized));
 
     expect(result).toBe(`${workspaceRoot}/sessions/tmp`);
     expect(result.startsWith(workspaceRoot)).toBe(true);

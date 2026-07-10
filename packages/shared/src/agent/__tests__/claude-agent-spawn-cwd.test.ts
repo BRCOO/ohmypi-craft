@@ -45,7 +45,16 @@ describe('isExistingDirectory', () => {
 
   it('returns false for a broken symlink (target missing)', () => {
     const linkPath = join(tempDir, 'broken-link');
-    symlinkSync(join(tempDir, 'no-such-target'), linkPath);
+    try {
+      symlinkSync(join(tempDir, 'no-such-target'), linkPath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'EPERM' && code !== 'EACCES' && code !== 'ENOTSUP') {
+        throw err;
+      }
+      // Windows without Developer Mode/admin rights cannot create symlinks.
+      // The helper should still treat the absent link path as non-existing.
+    }
     // lstatSync returns SymbolicLink stats, isDirectory() is false → "missing"
     expect(isExistingDirectory(linkPath)).toBe(false);
   });

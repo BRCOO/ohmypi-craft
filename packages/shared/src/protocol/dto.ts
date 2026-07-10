@@ -250,6 +250,30 @@ export interface OmpTodoStateDto {
   updatedAt: number
 }
 
+export interface OmpSubagentTranscriptCursorDto {
+  fromByte: number
+  nextByte?: number
+  hasMore: boolean
+}
+
+export interface OmpSubagentStateItemDto extends OmpSubagentSnapshotDto {
+  transcriptEntries: unknown[]
+  transcriptMessages: unknown[]
+  cursor?: OmpSubagentTranscriptCursorDto
+  transcriptError?: string
+  transcriptLoading: boolean
+}
+
+export interface OmpSubagentStateDto {
+  available: boolean
+  sessionId?: string
+  subagents: OmpSubagentStateItemDto[]
+  revision: number
+  pendingAction?: 'refresh' | 'load-transcript'
+  error?: string
+  updatedAt: number
+}
+
 export type OmpTodoMutationDto =
   | { type: 'replace'; phases: OmpTodoPhaseDto[] }
   | { type: 'addPhase'; name?: string; index?: number }
@@ -329,6 +353,8 @@ export interface Session {
   ompControlState?: OmpControlStateDto
   /** Runtime-only OMP phased Todo state. Not persisted in Craft JSONL. */
   ompTodoState?: OmpTodoStateDto
+  /** Runtime-only OMP subagent state. Not persisted in Craft JSONL. */
+  ompSubagentState?: OmpSubagentStateDto
   /** Persisted OMP-native session identity for provider transcript continuity. */
   ompSessionLink?: OmpSessionLink
 }
@@ -398,6 +424,7 @@ export type SessionEvent =
   | { type: 'text_delta'; sessionId: string; delta: string; isThinking?: boolean; turnId?: string }
   | { type: 'text_complete'; sessionId: string; text: string; isIntermediate?: boolean; isThinking?: boolean; turnId?: string; parentToolUseId?: string; timestamp?: number; messageId?: string }
   | { type: 'tool_start'; sessionId: string; toolName: string; toolUseId: string; toolInput: Record<string, unknown>; toolIntent?: string; toolDisplayName?: string; toolDisplayMeta?: ToolDisplayMeta; turnId?: string; parentToolUseId?: string; timestamp?: number }
+  | { type: 'tool_update'; sessionId: string; toolUseId: string; content: string; isError?: boolean; turnId?: string; parentToolUseId?: string; timestamp?: number }
   | { type: 'tool_result'; sessionId: string; toolUseId: string; toolName: string; result: string; turnId?: string; parentToolUseId?: string; isError?: boolean; timestamp?: number }
   | { type: 'error'; sessionId: string; error: string; timestamp?: number }
   | { type: 'typed_error'; sessionId: string; error: TypedError; timestamp?: number }
@@ -411,6 +438,7 @@ export type SessionEvent =
   | { type: 'working_directory_changed'; sessionId: string; workingDirectory: string }
   | { type: 'omp_control_state_changed'; sessionId: string; state: OmpControlStateDto }
   | { type: 'omp_todo_state_changed'; sessionId: string; state: OmpTodoStateDto }
+  | { type: 'omp_subagent_state_changed'; sessionId: string; state: OmpSubagentStateDto }
   | { type: 'permission_request'; sessionId: string; request: PermissionRequest }
   | { type: 'credential_request'; sessionId: string; request: CredentialRequest }
   | { type: 'extension_ui_request'; sessionId: string; request: ExtensionUiRequest }
@@ -480,6 +508,8 @@ export type SessionCommand =
   | { type: 'mutateOmpTodos'; expectedRevision: number; mutation: OmpTodoMutationDto }
   | { type: 'importOmpTodosMarkdown'; expectedRevision: number; markdown: string }
   | { type: 'exportOmpTodosMarkdown' }
+  | { type: 'refreshOmpSubagents' }
+  | { type: 'loadOmpSubagentMessages'; subagentId: string; fromByte?: number }
   | { type: 'updateWorkingDirectory'; dir: string }
   | { type: 'setSources'; sourceSlugs: string[] }
   | { type: 'setLabels'; labels: string[] }
@@ -493,6 +523,8 @@ export type SessionCommand =
   | { type: 'branchOmpSession'; entryId: string; craftMessageId: string }
   | { type: 'handoffOmpSession'; customInstructions?: string }
   | { type: 'exportOmpSessionHtml'; outputPath?: string }
+  | { type: 'getOmpLoginProviders' }
+  | { type: 'loginOmpProvider'; providerId: string }
   | { type: 'setConnection'; connectionSlug: string }
   | { type: 'setPendingPlanExecution'; planPath: string; draftInputSnapshot?: string }
   | { type: 'markCompactionComplete' }
@@ -688,6 +720,24 @@ export interface SetOmpCommandPathResult {
   error?: string
 }
 
+export interface OmpDiagnosticsSummary {
+  runtime: OmpRuntimeStatus
+  providers?: {
+    providers: OmpLoginProviderDto[]
+    authenticated: number
+    available: number
+    total: number
+  }
+  agentDir?: string
+  configFileExists?: boolean
+  authDirExists?: boolean
+  versionCompatibility?: {
+    ompVersion?: string
+    compatible: boolean
+    warning?: string
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Source / skill types
 // ---------------------------------------------------------------------------
@@ -801,6 +851,28 @@ export interface OmpTodoMarkdownExportResult {
   error?: string
 }
 
+export interface OmpLoginProviderDto {
+  id: string
+  name: string
+  available: boolean
+  authenticated: boolean
+}
+
+export interface OmpLoginProvidersResult {
+  success: boolean
+  providers?: OmpLoginProviderDto[]
+  error?: string
+}
+
+export interface OmpLoginSessionResult {
+  success: boolean
+  providerId?: string
+  openUrl?: string
+  launchUrl?: string
+  instructions?: string
+  error?: string
+}
+
 export type SessionCommandResult =
   | void
   | ShareResult
@@ -811,6 +883,8 @@ export type SessionCommandResult =
   | OmpHandoffSessionResult
   | OmpExportHtmlResult
   | OmpTodoMarkdownExportResult
+  | OmpLoginProvidersResult
+  | OmpLoginSessionResult
 
 // ---------------------------------------------------------------------------
 // Plan types

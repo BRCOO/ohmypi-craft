@@ -74,6 +74,15 @@ import {
   type OmpTodoStateAction,
 } from './omp-todo-state.ts';
 import {
+  cloneOmpSubagentState,
+  createOmpSubagentState,
+  reduceOmpSubagentState,
+  type OmpSubagentState,
+  type OmpSubagentStateAction,
+  type OmpSubagentStateItem,
+  type OmpSubagentTranscriptCursor,
+} from './omp-subagent-state.ts';
+import {
   type OmpControlState,
   DEFAULT_OMP_RPC_LONG_REQUEST_TIMEOUT_MS,
   DEFAULT_OMP_RPC_REQUEST_TIMEOUT_MS,
@@ -88,21 +97,29 @@ import {
   parseOmpBranchResult,
   parseOmpCancellationResult,
   parseOmpCompactionResult,
+  parseOmpConfigUpdateFrame,
   parseOmpExportHtmlResponseData,
+  parseOmpExtensionErrorFrame,
   parseOmpHandoffResult,
+  parseOmpLoginProvidersResponseData,
+  parseOmpLoginResult,
+  parseOmpReadyFrame,
   parseOmpSetHostToolsResponseData,
   parseOmpSetHostUriSchemesResponseData,
   parseOmpLastAssistantTextResponseData,
   parseOmpMessagesResponseData,
   parseOmpPromptResponseData,
   parseOmpRuntimeEvent,
+  parseOmpSessionShutdownFrame,
   parseOmpSetTodosResponseData,
   parseOmpSessionState,
   parseOmpSessionStats,
+  parseOmpStderrFrame,
   parseOmpSubagentFrame,
   parseOmpSubagentMessagesResponseData,
   parseOmpSubagentsResponseData,
   parseOmpTodoEvent,
+  parseOmpToolExecutionUpdateFrame,
   extractOmpTodoPhasesFromTranscriptEntries,
   type OmpSubagentFrame,
   type OmpSubagentSnapshot,
@@ -114,7 +131,9 @@ import {
   type OmpRpcBranchResult,
   type OmpRpcCancellationResult,
   type OmpRpcCommand,
+  type OmpRpcConfigUpdateFrame,
   type OmpRpcExportHtmlResponseData,
+  type OmpRpcExtensionErrorFrame,
   type OmpRpcExtensionUiResponse,
   type OmpRpcHandoffResult,
   type OmpRpcHostToolCallFrame,
@@ -124,11 +143,19 @@ import {
   type OmpRpcHostUriCancelFrame,
   type OmpRpcHostUriRequestFrame,
   type OmpRpcHostUriResultFrame,
+  type OmpRpcLoginProvider,
+  type OmpRpcLoginResult,
+  type OmpRpcReadyFrame,
+  type OmpRpcSessionShutdownFrame,
   type OmpRpcSessionState,
   type OmpRpcSessionInfoUpdateFrame,
+  type OmpRpcStderrFrame,
+  type OmpRuntimeConfig,
   type OmpRuntimeState,
+  type OmpStderrLevel,
   type OmpThinkingLevel,
 } from './omp-rpc-protocol.ts';
+import { checkOmpVersionCompatibility } from './omp-version-check.ts';
 import type { OmpTodoMutationDto } from '../../../protocol/dto.ts';
 
 export const DEFAULT_OMP_MODEL = 'omp/default';
@@ -198,12 +225,34 @@ export interface OmpModelSelection {
   modelId: string;
 }
 
+export interface OmpLoginOptions {
+  onOpenUrl?: (payload: { url?: string; launchUrl?: string; instructions?: string }) => void;
+  signal?: AbortSignal;
+}
+
+export interface OmpLoginResult {
+  providerId: string;
+  openUrl?: string;
+  launchUrl?: string;
+  instructions?: string;
+}
+
 interface PendingRequest {
   resolve(value: unknown): void;
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout>;
   command: string;
   startedAt: number;
+}
+
+interface PendingLogin {
+  requestId: string;
+  onOpenUrl?: (payload: { url?: string; launchUrl?: string; instructions?: string }) => void;
+  openUrlPayload?: { url?: string; launchUrl?: string; instructions?: string };
+  resolve(result: OmpLoginResult): void;
+  reject(error: Error): void;
+  timer: ReturnType<typeof setTimeout>;
+  onAbort?: () => void;
 }
 
 interface ActiveTurn {
@@ -359,6 +408,7 @@ export class OmpRpcBackend extends BaseAgent {
   private todoState: OmpTodoState = createOmpTodoState();
   private todoRefresh: Promise<OmpTodoState> | null = null;
   private todoWrite: Promise<OmpTodoState> | null = null;
+  private subagentState: OmpSubagentState = createOmpSubagentState();
   private subagentRefresh: Promise<void> | null = null;
   private subagentRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private hostBridgeRegistration: Promise<void> | null = null;
@@ -368,6 +418,7 @@ export class OmpRpcBackend extends BaseAgent {
   private pendingHostToolPermissions = new Map<string, PendingHostToolPermission>();
   private ignoredHostToolPermissionIds = new Set<string>();
   private pendingHostUriRequests = new Map<string, PendingHostUriRequest>();
+  private pendingLogin: PendingLogin | null = null;
   private availableCommands: OmpRpcAvailableSlashCommand[] = [];
   private controlStateUpdatedAt = Date.now();
   private remoteThinkingLevel: OmpThinkingLevel | null = null;
@@ -387,6 +438,7 @@ export class OmpRpcBackend extends BaseAgent {
   private readonly attachmentReadFile?: (path: string) => Buffer;
   onControlStateChange: ((state: OmpControlState) => void) | null = null;
   onTodoStateChange: ((state: OmpTodoState) => void) | null = null;
+  onSubagentStateChange: ((state: OmpSubagentState) => void) | null = null;
 
   constructor(config: BackendConfig, options: OmpRpcBackendOptions = {}) {
     super(config, DEFAULT_OMP_MODEL);
@@ -832,6 +884,94 @@ export class OmpRpcBackend extends BaseAgent {
 
   getOmpTodoState(): OmpTodoState {
     return cloneOmpTodoState(this.todoState);
+  }
+
+  getOmpSubagentState(): OmpSubagentState {
+    return cloneOmpSubagentState(this.subagentState);
+  }
+
+  async getOmpLoginProviders(): Promise<OmpRpcLoginProvider[]> {
+    await this.ensureSubprocess();
+    const data = await this.send({ type: 'get_login_providers' });
+    const parsed = parseOmpLoginProvidersResponseData(data);
+    if (!parsed) throw new Error('OMP get_login_providers returned an invalid provider list');
+    return parsed.providers;
+  }
+
+  async loginOmpProvider(providerId: string, options: OmpLoginOptions = {}): Promise<OmpLoginResult> {
+    await this.ensureSubprocess();
+    if (this.pendingLogin) {
+      throw new Error('An OMP login flow is already in progress');
+    }
+
+    const { id: requestId, promise: requestPromise } = this.createRequest({ type: 'login', providerId });
+
+    return new Promise<OmpLoginResult>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingLogin = null;
+        reject(new Error(`OMP login for ${providerId} timed out`));
+      }, DEFAULT_OMP_RPC_LONG_REQUEST_TIMEOUT_MS);
+
+      const onAbort = () => {
+        this.pendingLogin = null;
+        clearTimeout(timer);
+        reject(new Error(`OMP login for ${providerId} was cancelled`));
+      };
+
+      this.pendingLogin = {
+        requestId,
+        onOpenUrl: options.onOpenUrl,
+        resolve: (result) => {
+          this.pendingLogin = null;
+          clearTimeout(timer);
+          options.signal?.removeEventListener('abort', onAbort);
+          resolve(result);
+        },
+        reject: (error) => {
+          this.pendingLogin = null;
+          clearTimeout(timer);
+          options.signal?.removeEventListener('abort', onAbort);
+          reject(error);
+        },
+        timer,
+        onAbort,
+      };
+
+      options.signal?.addEventListener('abort', onAbort, { once: true });
+
+      requestPromise.then((data) => {
+        const parsed = parseOmpLoginResult(data);
+        if (!parsed) {
+          this.pendingLogin?.reject(new Error('OMP login returned an invalid result'));
+          return;
+        }
+        const openUrlPayload = this.pendingLogin?.openUrlPayload;
+        this.pendingLogin?.resolve({
+          providerId: parsed.providerId,
+          ...(openUrlPayload
+            ? {
+                openUrl: openUrlPayload.url,
+                launchUrl: openUrlPayload.launchUrl,
+                instructions: openUrlPayload.instructions,
+              }
+            : {}),
+        });
+      }).catch((error) => {
+        this.pendingLogin?.reject(error);
+      });
+    });
+  }
+
+  async refreshOmpSubagents(): Promise<OmpSubagentState> {
+    await this.ensureSubprocess();
+    await this.refreshOmpSubagentsInternal();
+    return this.getOmpSubagentState();
+  }
+
+  async loadOmpSubagentMessages(subagentId: string, fromByte?: number): Promise<OmpSubagentState> {
+    await this.ensureSubprocess();
+    await this.loadSubagentMessagesInternal(subagentId, fromByte);
+    return this.getOmpSubagentState();
   }
 
   async refreshOmpTodos(): Promise<OmpTodoState> {
@@ -1306,6 +1446,23 @@ export class OmpRpcBackend extends BaseAgent {
     }
 
     this.diagnostics.recordFrame(raw.type);
+
+    if (this.pendingLogin && raw.type === 'extension_ui_request' && raw.method === 'open_url') {
+      const pending = this.pendingLogin;
+      pending.openUrlPayload = {
+        url: typeof raw.url === 'string' ? raw.url : undefined,
+        launchUrl: typeof raw.launchUrl === 'string' ? raw.launchUrl : undefined,
+        instructions: typeof raw.instructions === 'string' ? raw.instructions : undefined,
+      };
+      try {
+        pending.onOpenUrl?.(pending.openUrlPayload);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        pending.reject(new Error(`Host open-url callback failed: ${message}`));
+      }
+      return;
+    }
+
     const runtimeEvent = parseOmpRuntimeEvent(raw);
     if (runtimeEvent) {
       if (runtimeEvent.type === 'retry_fallback_succeeded' && runtimeEvent.role === 'default') {
@@ -1355,6 +1512,10 @@ export class OmpRpcBackend extends BaseAgent {
       this.beginStateSynchronization(generation);
     }
 
+    if (adapted.readyFrame) {
+      this.handleReadyFrame(adapted.readyFrame);
+    }
+
     if (adapted.response) {
       const responseId = adapted.response.id;
       const pending = responseId ? this.pending.get(responseId) : undefined;
@@ -1375,11 +1536,46 @@ export class OmpRpcBackend extends BaseAgent {
     if (adapted.thinkingLevel) {
       this.remoteThinkingLevel = adapted.thinkingLevel;
       if (this.sessionState) this.sessionState.thinkingLevel = adapted.thinkingLevel;
+      this.updateRuntimeState({
+        type: 'config_update',
+        config: { thinkingLevel: adapted.thinkingLevel },
+      });
       this.touchControlState();
     }
 
     if (adapted.queueState) {
       this.patchQueueState(adapted.queueState);
+    }
+
+    if (adapted.configUpdate?.config) {
+      const config = adapted.configUpdate.config;
+      const runtimeConfig: OmpRuntimeConfig = {};
+      if (config.model && typeof config.model === 'string') {
+        runtimeConfig.model = config.model;
+        super.setModel(config.model);
+        this.selectedModelKey = config.model;
+      }
+      const level = config.thinkingLevel ?? config.thinking_level;
+      if (
+        level === 'off'
+        || level === 'minimal'
+        || level === 'low'
+        || level === 'medium'
+        || level === 'high'
+        || level === 'xhigh'
+      ) {
+        runtimeConfig.thinkingLevel = level;
+      }
+      if (typeof config.autoCompactionEnabled === 'boolean') runtimeConfig.autoCompactionEnabled = config.autoCompactionEnabled;
+      if (typeof config.autoRetryEnabled === 'boolean') runtimeConfig.autoRetryEnabled = config.autoRetryEnabled;
+      const steeringMode = config.steeringMode ?? config.steering_mode;
+      if (steeringMode === 'all' || steeringMode === 'one-at-a-time') runtimeConfig.steeringMode = steeringMode;
+      const followUpMode = config.followUpMode ?? config.follow_up_mode;
+      if (followUpMode === 'all' || followUpMode === 'one-at-a-time') runtimeConfig.followUpMode = followUpMode;
+      const interruptMode = config.interruptMode ?? config.interrupt_mode;
+      if (interruptMode === 'immediate' || interruptMode === 'wait') runtimeConfig.interruptMode = interruptMode;
+
+      this.updateRuntimeState({ type: 'config_update', config: runtimeConfig });
     }
 
     if (adapted.availableCommands) {
@@ -1388,6 +1584,44 @@ export class OmpRpcBackend extends BaseAgent {
 
     if (adapted.sessionInfoUpdate) {
       this.applySessionInfoUpdate(adapted.sessionInfoUpdate);
+      this.updateRuntimeState({
+        type: 'session_info_update',
+        sessionId: adapted.sessionInfoUpdate.sessionId,
+      });
+    }
+
+    if (adapted.sessionShutdown) {
+      this.updateRuntimeState({
+        type: 'session_shutdown',
+        reason: adapted.sessionShutdown.reason ?? 'normal',
+        errorMessage: adapted.sessionShutdown.errorMessage,
+      });
+    }
+
+    if (adapted.extensionError) {
+      this.updateRuntimeState({
+        type: 'extension_error',
+        error: {
+          extensionId: adapted.extensionError.extensionId,
+          source: adapted.extensionError.source,
+          message: adapted.extensionError.message ?? 'Unknown extension error',
+        },
+      });
+    }
+
+    if (adapted.stderr) {
+      const level = this.classifyStderrLevel(adapted.stderr);
+      this.updateRuntimeState({
+        type: 'stderr',
+        level,
+        text: adapted.stderr.text ?? '',
+      });
+      if (level === 'fatal') {
+        this.eventQueue.enqueue({
+          type: 'error',
+          message: adapted.stderr.text ?? 'OMP fatal error',
+        });
+      }
     }
 
     if (adapted.hostToolCall) {
@@ -1538,6 +1772,13 @@ export class OmpRpcBackend extends BaseAgent {
     }
     this.pending.clear();
     this.selectedModelKey = null;
+
+    if (this.pendingLogin) {
+      const pending = this.pendingLogin;
+      this.pendingLogin = null;
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
   }
 
   private killSubprocess(): void {
@@ -1572,8 +1813,14 @@ export class OmpRpcBackend extends BaseAgent {
     this.abortAllPendingHostToolExecutions('OMP RPC backend disconnected');
     this.resolvePendingHostToolPermissions(false);
     this.pendingHostUriRequests.clear();
+    if (this.pendingLogin) {
+      const pending = this.pendingLogin;
+      this.pendingLogin = null;
+      clearTimeout(pending.timer);
+    }
     this.updateRuntimeState({ type: 'unavailable', error: 'OMP runtime is not connected' });
     this.updateTodoState({ type: 'unavailable', error: 'OMP runtime is not connected' });
+    this.updateSubagentState({ type: 'unavailable', error: 'OMP runtime is not connected' });
     this.remoteThinkingLevel = null;
     this.thinkingLevelUpdate = null;
     this.diagnostics.clearProcessState(this.processGeneration);
@@ -3031,14 +3278,14 @@ export class OmpRpcBackend extends BaseAgent {
     try {
       await this.send({ type: 'set_subagent_subscription', level: 'progress' });
       if (generation !== this.processGeneration || child !== this.child) return;
-      await this.refreshOmpSubagents(generation, child);
+      await this.refreshOmpSubagentsInternal(generation, child);
     } catch (error) {
       if (generation !== this.processGeneration || child !== this.child) return;
       this.debug(`OMP subagent discovery failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  private async refreshOmpSubagents(
+  private async refreshOmpSubagentsInternal(
     generation = this.processGeneration,
     child = this.child,
   ): Promise<void> {
@@ -3047,12 +3294,13 @@ export class OmpRpcBackend extends BaseAgent {
 
     let refresh!: Promise<void>;
     refresh = (async () => {
+      this.updateSubagentState({ type: 'pending', action: 'refresh' });
       try {
         const data = await this.send({ type: 'get_subagents' });
         if (generation !== this.processGeneration || child !== this.child) return;
         const parsed = parseOmpSubagentsResponseData(data);
         if (!parsed) {
-          this.debug('OMP get_subagents returned an invalid subagent list');
+          this.updateSubagentState({ type: 'failed', action: 'refresh', error: 'OMP get_subagents returned an invalid subagent list' });
           return;
         }
 
@@ -3060,10 +3308,12 @@ export class OmpRpcBackend extends BaseAgent {
           this.hydrateSubagentTodos(subagent, generation, child)
         )));
         if (generation !== this.processGeneration || child !== this.child) return;
-        this.updateTodoState({ type: 'subagents_snapshot', subagents: hydrated });
+        this.applySubagentSnapshot(hydrated);
       } catch (error) {
         if (generation !== this.processGeneration || child !== this.child) return;
-        this.debug(`OMP subagent refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+        const message = error instanceof Error ? error.message : String(error);
+        this.updateSubagentState({ type: 'failed', action: 'refresh', error: message });
+        this.debug(`OMP subagent refresh failed: ${message}`);
       } finally {
         if (this.subagentRefresh === refresh) this.subagentRefresh = null;
       }
@@ -3078,84 +3328,123 @@ export class OmpRpcBackend extends BaseAgent {
     generation: number,
     child: ChildProcessWithoutNullStreams,
   ): Promise<OmpSubagentSnapshot> {
-    if (!subagent.sessionFile) return this.mergeSubagentSnapshot(subagent);
+    if (!subagent.sessionFile) return subagent;
 
     try {
       const data = await this.send({
         type: 'get_subagent_messages',
         subagentId: subagent.id,
       });
-      if (generation !== this.processGeneration || child !== this.child) return this.mergeSubagentSnapshot(subagent);
+      if (generation !== this.processGeneration || child !== this.child) return subagent;
       const parsed = parseOmpSubagentMessagesResponseData(data);
-      if (!parsed) return this.mergeSubagentSnapshot(subagent);
+      if (!parsed) return subagent;
       const todoPhases = extractOmpTodoPhasesFromTranscriptEntries(parsed.entries);
-      return this.mergeSubagentSnapshot({
+      return {
         ...subagent,
         ...(todoPhases ? { todoPhases } : {}),
-      });
+      };
     } catch (error) {
       if (generation === this.processGeneration && child === this.child) {
         this.debug(`OMP subagent Todo transcript read failed for ${subagent.id}: ${error instanceof Error ? error.message : String(error)}`);
       }
-      return this.mergeSubagentSnapshot(subagent);
+      return subagent;
     }
   }
 
-  private mergeSubagentSnapshot(next: OmpSubagentSnapshot): OmpSubagentSnapshot {
-    const existing = this.todoState.subagents.find((subagent) => subagent.id === next.id);
-    return {
-      ...next,
-      todoPhases: next.todoPhases ?? existing?.todoPhases,
-    };
+  private async loadSubagentMessagesInternal(
+    subagentId: string,
+    fromByte?: number,
+  ): Promise<void> {
+    const subagent = this.subagentState.subagents.find((s) => s.id === subagentId);
+    if (!subagent) throw new Error(`OMP subagent ${subagentId} not found`);
+
+    const cursorFromByte = fromByte ?? subagent.cursor?.nextByte ?? 0;
+    this.updateSubagentState({ type: 'transcript_pending', id: subagentId });
+    try {
+      const data = await this.send({
+        type: 'get_subagent_messages',
+        subagentId,
+        sessionFile: subagent.sessionFile,
+        fromByte: cursorFromByte,
+      });
+      const parsed = parseOmpSubagentMessagesResponseData(data);
+      if (!parsed) {
+        this.updateSubagentState({
+          type: 'transcript_failed',
+          id: subagentId,
+          error: 'OMP get_subagent_messages returned an invalid result',
+        });
+        return;
+      }
+      const cursor: OmpSubagentTranscriptCursor = {
+        fromByte: parsed.fromByte,
+        nextByte: parsed.nextByte,
+        // OMP returns the complete available transcript tail for the requested
+        // byte offset. It does not expose file size or an explicit hasMore flag,
+        // so a successful read should be treated as drained to the current EOF.
+        hasMore: false,
+      };
+      this.updateSubagentState({
+        type: 'transcript_loaded',
+        id: subagentId,
+        entries: parsed.entries,
+        messages: parsed.messages,
+        cursor,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.updateSubagentState({ type: 'transcript_failed', id: subagentId, error: message });
+      throw error;
+    }
+  }
+
+  private applySubagentSnapshot(subagents: OmpSubagentSnapshot[]): void {
+    this.updateSubagentState({ type: 'snapshot', subagents });
+    // Keep the legacy Todo state in sync so older renderers keep working.
+    this.updateTodoState({ type: 'subagents_snapshot', subagents });
   }
 
   private applySubagentFrame(frame: OmpSubagentFrame): void {
     if (frame.type === 'subagent_lifecycle') {
       if (frame.payload.status !== 'started') {
+        this.updateSubagentState({ type: 'remove', id: frame.payload.id });
         this.updateTodoState({ type: 'subagent_remove', id: frame.payload.id });
         return;
       }
 
-      const existing = this.todoState.subagents.find((subagent) => subagent.id === frame.payload.id);
-      this.updateTodoState({
-        type: 'subagent_upsert',
-        subagent: this.mergeSubagentSnapshot({
-          id: frame.payload.id,
-          index: frame.payload.index,
-          agent: frame.payload.agent,
-          agentSource: frame.payload.agentSource,
-          description: frame.payload.description ?? existing?.description,
-          status: 'running',
-          task: existing?.task,
-          assignment: existing?.assignment,
-          sessionFile: frame.payload.sessionFile ?? existing?.sessionFile,
-          parentToolCallId: frame.payload.parentToolCallId ?? existing?.parentToolCallId,
-          lastUpdate: Date.now(),
-          progress: existing?.progress,
-        }),
-      });
+      const snapshot: OmpSubagentSnapshot = {
+        id: frame.payload.id,
+        index: frame.payload.index,
+        agent: frame.payload.agent,
+        agentSource: frame.payload.agentSource,
+        description: frame.payload.description,
+        status: 'running',
+        sessionFile: frame.payload.sessionFile,
+        parentToolCallId: frame.payload.parentToolCallId,
+        lastUpdate: Date.now(),
+      };
+      this.updateSubagentState({ type: 'upsert', subagent: snapshot });
+      this.updateTodoState({ type: 'subagent_upsert', subagent: snapshot });
       return;
     }
 
     const progress = frame.payload.progress;
-    const existing = this.todoState.subagents.find((subagent) => subagent.id === progress.id);
-    this.updateTodoState({
-      type: 'subagent_upsert',
-      subagent: this.mergeSubagentSnapshot({
-        id: progress.id,
-        index: frame.payload.index,
-        agent: frame.payload.agent,
-        agentSource: frame.payload.agentSource,
-        description: progress.description ?? existing?.description,
-        status: progress.status,
-        task: frame.payload.task,
-        assignment: frame.payload.assignment,
-        sessionFile: frame.payload.sessionFile ?? existing?.sessionFile,
-        parentToolCallId: frame.payload.parentToolCallId ?? existing?.parentToolCallId,
-        lastUpdate: Date.now(),
-        progress,
-      }),
-    });
+    const snapshot: OmpSubagentSnapshot = {
+      id: progress.id,
+      index: frame.payload.index,
+      agent: frame.payload.agent,
+      agentSource: frame.payload.agentSource,
+      description: progress.description,
+      status: progress.status,
+      task: frame.payload.task,
+      assignment: frame.payload.assignment,
+      sessionFile: frame.payload.sessionFile,
+      parentToolCallId: frame.payload.parentToolCallId,
+      lastUpdate: Date.now(),
+      progress,
+    };
+    this.updateSubagentState({ type: 'upsert', subagent: snapshot });
+    this.updateTodoState({ type: 'subagent_upsert', subagent: snapshot });
   }
 
   private scheduleSubagentRefresh(reason: string): void {
@@ -3164,7 +3453,7 @@ export class OmpRpcBackend extends BaseAgent {
     const child = this.child;
     this.subagentRefreshTimer = setTimeout(() => {
       this.subagentRefreshTimer = null;
-      void this.refreshOmpSubagents(generation, child).catch((error) => {
+      void this.refreshOmpSubagentsInternal(generation, child).catch((error) => {
         this.debug(`OMP subagent refresh failed after ${reason}: ${error instanceof Error ? error.message : String(error)}`);
       });
     }, 250);
@@ -3204,16 +3493,39 @@ export class OmpRpcBackend extends BaseAgent {
     if (this.sessionState && this.sessionState.sessionId !== state.sessionId) {
       this.runtimeState = createOmpRuntimeState();
       this.todoState = createOmpTodoState();
+      this.subagentState = createOmpSubagentState();
     }
     this.sessionState = state;
     this.runtimeState = reduceOmpRuntimeState(this.runtimeState, { type: 'session_state', state });
     this.touchControlState();
     this.applyTodoSessionState(state.sessionId, state.todoPhases);
+    this.updateSubagentState({ type: 'session_state', sessionId: state.sessionId });
   }
 
   private updateRuntimeState(action: OmpRuntimeStateAction): void {
     this.runtimeState = reduceOmpRuntimeState(this.runtimeState, action);
     this.touchControlState();
+  }
+
+  private handleReadyFrame(frame: OmpRpcReadyFrame): void {
+    const check = checkOmpVersionCompatibility(frame.ompVersion, frame.protocolVersion);
+    this.diagnostics.setVersionInfo(frame.ompVersion, frame.protocolVersion, check.warning);
+    this.updateRuntimeState({
+      type: 'version_info',
+      ompVersion: frame.ompVersion,
+      protocolVersion: frame.protocolVersion,
+      versionWarning: check.warning,
+    });
+  }
+
+  private classifyStderrLevel(frame: OmpRpcStderrFrame): OmpStderrLevel {
+    if (frame.level) return frame.level;
+    const text = frame.text ?? '';
+    const lower = text.toLowerCase();
+    if (lower.includes('fatal') || lower.includes('panic') || lower.includes('uncaught exception')) return 'fatal';
+    if (lower.includes('error') || lower.includes('failed') || lower.includes('exception')) return 'warn';
+    if (lower.includes('warn')) return 'warn';
+    return 'noise';
   }
 
   private applyTodoSessionState(sessionId: string | undefined, phases: OmpTodoPhase[]): void {
@@ -3227,6 +3539,11 @@ export class OmpRpcBackend extends BaseAgent {
   private updateTodoState(action: OmpTodoStateAction): void {
     this.todoState = reduceOmpTodoState(this.todoState, action);
     this.onTodoStateChange?.(this.getOmpTodoState());
+  }
+
+  private updateSubagentState(action: OmpSubagentStateAction): void {
+    this.subagentState = reduceOmpSubagentState(this.subagentState, action);
+    this.onSubagentStateChange?.(this.getOmpSubagentState());
   }
 
   private scheduleTodoRefresh(reason: string): void {

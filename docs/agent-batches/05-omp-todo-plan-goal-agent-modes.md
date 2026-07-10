@@ -1,5 +1,11 @@
 # Batch 05 — OMP Todo、Plan、Goal 与高级代理模式
 
+> 状态：**已完成**（2026-07-10）。
+>
+> 已实现：OMP Todo 协议解析、reducer、Markdown 导入/导出、后端状态桥接、`OmpTodoCard` 桌面组件及组件测试。
+>
+> Plan Mode / Goal Mode / Advisor / Loop / TTSR 因上游 OMP 当前只在 TUI 暴露、RPC 无稳定事件/命令，已在本批次文档中记录暂缓说明和产品映射建议。
+>
 > 适合派给一个产品/状态流都能处理的 agent。目标是把 OMP 的“工作方式”补出来，而不只是补 RPC 命令。
 
 ## 目标
@@ -110,10 +116,36 @@ codegraph explore "OMP todo plan goal set_todos OmpTodoCard Plan approval Goal S
 
 ## 交接说明
 
-完成后写清：
+### OMP Todo（已完成）
 
-- OMP Todo 与 Craft task/todo 的映射决策。
-- Plan Mode 和 Craft Explore/Execute 的关系。
-- Goal Mode 哪些动作已实现。
-- Advisor/Loop/TTSR 哪些是入口、哪些是暂缓。
+- OMP `TodoPhase` / `TodoItem` 与 Craft 本地的 `sessionStatus`/`task` 标签是独立概念；OMP Todo 只作为 OMP 会话的运行时快照展示，不写入 Craft JSONL。
+- 支持从 `get_state.todoPhases` 恢复、通过 `set_todos` 写回完整快照。
+- Reducer 覆盖 add/rename/remove phase、add/edit/start/complete/abandon/reopen/remove task；Start 会降级原 in-progress，Done/Drop 会自动提升下一个 pending。
+- Markdown 导入/导出支持相位和四种状态标记（`[ ]`、`[~]`、`[x]`、`[-]`），导入前会提示隐藏的 `details`/`notes` 元数据可能丢失。
+- 桌面 `OmpTodoCard` 显示在 OMP 会话的 composer 上方；子智能体 Todo 单独展示，不与主 Todo 混在一起。
+- 组件测试覆盖：当前任务摘要、空状态、等待状态、子智能体摘要、pending action badge。
+
+### Plan Mode（已决策 / 待上游 RPC 扩展）
+
+- 上游 OMP Plan Mode 主要通过 TUI `resolve` 工具、`local://` plan artifact 和内部 `PlanModeState` 驱动；当前 RPC 模式没有稳定的 `plan_mode_*` 事件帧。
+- 本批次明确产品映射：当 OMP 通过 `host_tool_call`/`extension_ui_request` 请求 plan approval 时，复用现有 `CompactAcceptPlanDrawer` / plan approval 消息组件；在 RPC 协议未暴露前，不把 Plan Mode 做成虚假可用入口。
+- 与 Craft Explore/Execute 的关系：Craft Explore/Execute 控制“是否允许工具自动执行”，OMP Plan Mode 控制“是否先提交计划再执行”；两者并存时以 OMP Plan Mode 为准，Craft 执行模式只影响计划批准后的工具调用策略。
+
+### Goal Mode（已决策 / 待上游 RPC 扩展）
+
+- 上游 `GoalModeState` 和 `GoalRuntime` 当前未通过 RPC 暴露 `goal_updated` 事件或 `set_goal` 命令。
+- 本批次明确：不预先实现虚假状态卡；实际同步需上游协议扩展或探测到等价的 `extension_ui_request`/`host_tool_call`。
+
+### Advisor / Loop / TTSR / Magic Keywords（已暂缓）
+
+- Advisor、Loop、TTSR、`/btw`、`/tan`、`/omfg` 等能力目前主要依赖 TUI 状态或内部提示注入，RPC 协议未提供对应命令/事件。
+- 本批次暂不实现虚假入口；后续如需支持，必须先向上游确认 RPC 扩展方案或设计桌面等价流程。
+
+## 验收记录
+
+- `bun run typecheck:all` ✅
+- `bun run scripts/check-i18n-parity.ts` ✅
+- OMP 相关测试 175 pass / 0 fail ✅
+- `OmpTodoCard` 组件测试 5 pass / 0 fail ✅
+- Plan Mode / Goal Mode / Advisor / Loop / TTSR 已按本批次约定记录暂缓说明，未实现虚假入口。
 

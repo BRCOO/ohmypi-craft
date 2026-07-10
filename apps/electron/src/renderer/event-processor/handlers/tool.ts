@@ -5,7 +5,7 @@
  * Pure functions that return new state - no side effects.
  */
 
-import type { SessionState, ToolStartEvent, ToolResultEvent, TaskBackgroundedEvent, ShellBackgroundedEvent, TaskProgressEvent, TaskCompletedEvent } from '../types'
+import type { SessionState, ToolStartEvent, ToolResultEvent, ToolUpdateEvent, TaskBackgroundedEvent, ShellBackgroundedEvent, TaskProgressEvent, TaskCompletedEvent } from '../types'
 import type { Message } from '../../../shared/types'
 import { isParentTaskTool } from '@craft-agent/shared/utils/toolNames'
 import {
@@ -58,6 +58,50 @@ export function handleToolStart(
     toolIntent: event.toolIntent,
     toolDisplayName: event.toolDisplayName,
     toolDisplayMeta: event.toolDisplayMeta,
+  }
+
+  return {
+    session: appendMessage(session, toolMessage),
+    streaming,
+  }
+}
+
+/**
+ * Handle tool_update - stream partial tool output before completion
+ *
+ * Appends update content to the existing tool message content so the UI
+ * can render live tool output without waiting for tool_result.
+ */
+export function handleToolUpdate(
+  state: SessionState,
+  event: ToolUpdateEvent
+): SessionState {
+  const { session, streaming } = state
+
+  const toolIndex = findToolMessage(session.messages, event.toolUseId)
+
+  if (toolIndex !== -1) {
+    const existingMessage = session.messages[toolIndex]
+    const previousContent = existingMessage.content || ''
+    const separator = previousContent && event.content ? '\n' : ''
+    const updatedSession = updateMessageAt(session, toolIndex, {
+      content: `${previousContent}${separator}${event.content}`,
+      isError: event.isError === true ? true : existingMessage.isError,
+    })
+    return { session: updatedSession, streaming }
+  }
+
+  // No matching tool_start found — create a sparse tool message from the update.
+  const toolMessage: Message = {
+    id: generateMessageId(),
+    role: 'tool',
+    content: event.content,
+    timestamp: event.timestamp ?? Date.now(),
+    toolUseId: event.toolUseId,
+    toolStatus: 'executing',
+    turnId: event.turnId,
+    parentToolUseId: event.parentToolUseId,
+    isError: event.isError,
   }
 
   return {

@@ -31,6 +31,7 @@ class FakeChild extends EventEmitter {
   subagents: Array<Record<string, unknown>> = [];
   subagentEntries = new Map<string, unknown[]>();
   lastAssistantText: string | null = null;
+  loginProviders: Array<Record<string, unknown>> = [];
   killed = false;
 
   constructor() {
@@ -172,6 +173,17 @@ class FakeChild extends EventEmitter {
             id: frame.id,
             command: frame.type as string,
             success: true,
+          }));
+        }
+        if (frame.type === 'get_login_providers') {
+          queueMicrotask(() => this.emitFrame({
+            type: 'response',
+            id: frame.id,
+            command: 'get_login_providers',
+            success: true,
+            data: {
+              providers: this.loginProviders,
+            },
           }));
         }
       }
@@ -2512,6 +2524,135 @@ describe('OmpRpcBackend Todo bridge', () => {
     await waitFor(() => backend.getOmpTodoState().subagents.length === 0);
     backend.destroy();
   });
+
+  it('refreshOmpSubagents populates subagentState and emits onSubagentStateChange', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children);
+    child.subagents = [
+      {
+        id: 'sub-2',
+        index: 1,
+        agent: 'explore',
+        agentSource: 'bundled',
+        description: 'Explore agent',
+        status: 'running',
+        task: 'Explore the codebase',
+        sessionFile: 'D:/sessions/sub-2.jsonl',
+        lastUpdate: 1,
+      },
+    ];
+
+    const changes: unknown[] = [];
+    backend.onSubagentStateChange = (state) => changes.push(state);
+    await backend.refreshOmpSubagents();
+
+    const state = backend.getOmpSubagentState();
+    expect(state.available).toBe(true);
+    expect(state.subagents).toHaveLength(1);
+    expect(state.subagents[0]!.id).toBe('sub-2');
+    expect(changes.length).toBeGreaterThanOrEqual(1);
+    backend.destroy();
+  });
+
+  it('loadOmpSubagentMessages appends transcript entries and records cursor', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children);
+    child.subagents = [
+      {
+        id: 'sub-3',
+        index: 0,
+        agent: 'reviewer',
+        agentSource: 'project',
+        description: 'Reviewer',
+        status: 'running',
+        sessionFile: 'D:/sessions/sub-3.jsonl',
+        lastUpdate: 1,
+      },
+    ];
+    child.subagentEntries.set('sub-3', [
+      { type: 'message', role: 'user' },
+      { type: 'message', role: 'assistant' },
+    ]);
+
+    await backend.refreshOmpSubagents();
+    await backend.loadOmpSubagentMessages('sub-3');
+
+    const subagent = backend.getOmpSubagentState().subagents[0]!;
+    expect(subagent.transcriptEntries).toHaveLength(2);
+    expect(subagent.transcriptMessages).toHaveLength(0);
+    expect(subagent.cursor).toBeDefined();
+    expect(subagent.cursor!.fromByte).toBe(0);
+    expect(subagent.cursor!.nextByte).toBe(100);
+    expect(subagent.cursor!.hasMore).toBe(false);
+    backend.destroy();
+  });
+
+  it('subagent_lifecycle frame adds a running subagent and completion removes it', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children);
+
+    backend.onSubagentStateChange = () => {};
+    child.emitFrame({
+      type: 'subagent_lifecycle',
+      payload: {
+        id: 'sub-4',
+        index: 0,
+        agent: 'fixer',
+        agentSource: 'bundled',
+        status: 'started',
+        parentToolCallId: 'toolu-1',
+      },
+    });
+
+    await waitFor(() => backend.getOmpSubagentState().subagents.length === 1);
+    expect(backend.getOmpSubagentState().subagents[0]!.parentToolCallId).toBe('toolu-1');
+
+    child.emitFrame({
+      type: 'subagent_lifecycle',
+      payload: {
+        id: 'sub-4',
+        index: 0,
+        agent: 'fixer',
+        agentSource: 'bundled',
+        status: 'completed',
+      },
+    });
+    await waitFor(() => backend.getOmpSubagentState().subagents.length === 0);
+    backend.destroy();
+  });
+
+  it('subagent_progress frame upserts progress fields', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children);
+    backend.onSubagentStateChange = () => {};
+
+    child.emitFrame({
+      type: 'subagent_progress',
+      payload: {
+        index: 0,
+        agent: 'writer',
+        agentSource: 'project',
+        task: 'Write docs',
+        assignment: 'Draft API docs',
+        sessionFile: 'D:/sessions/sub-5.jsonl',
+        parentToolCallId: 'toolu-2',
+        progress: {
+          id: 'sub-5',
+          status: 'running',
+          currentTool: 'write',
+          requests: 3,
+          tokens: 900,
+        },
+      },
+    });
+
+    await waitFor(() => backend.getOmpSubagentState().subagents.length === 1);
+    const subagent = backend.getOmpSubagentState().subagents[0]!;
+    expect(subagent.id).toBe('sub-5');
+    expect(subagent.progress?.currentTool).toBe('write');
+    expect(subagent.progress?.requests).toBe(3);
+    backend.destroy();
+  });
 });
 
 describe('OmpRpcBackend runtime controls', () => {
@@ -2698,5 +2839,68 @@ describe('OmpRpcBackend runtime controls', () => {
     expect(runtime.contextUsage).toBeUndefined();
     expect(runtime.stats).toBeUndefined();
     expect(runtime.available).toBe(true);
+  });
+});
+
+describe('OmpRpcBackend login providers', () => {
+  it('returns OMP login providers', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children);
+    child.loginProviders = [
+      { id: 'deepseek', name: 'DeepSeek', available: true, authenticated: false },
+      { id: 'anthropic', name: 'Anthropic', available: true, authenticated: true },
+    ];
+
+    const providers = await backend.getOmpLoginProviders();
+    expect(providers).toHaveLength(2);
+    expect(providers[0]?.id).toBe('deepseek');
+    expect(providers[1]?.authenticated).toBe(true);
+    backend.destroy();
+  });
+
+  it('starts a login flow and surfaces the open_url payload', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children);
+    const calls: Array<{ url?: string; launchUrl?: string; instructions?: string }> = [];
+
+    const loginPromise = backend.loginOmpProvider('deepseek', {
+      onOpenUrl: (payload) => calls.push(payload),
+    });
+    await waitFor(() => child.frames.some((frame) => frame.type === 'login'));
+    const loginRequest = child.frames.findLast((frame) => frame.type === 'login')!;
+    child.emitFrame({
+      type: 'extension_ui_request',
+      id: `${loginRequest.id}-url`,
+      method: 'open_url',
+      url: 'https://auth.example.com',
+      instructions: 'Open the URL',
+    });
+    child.emitFrame({
+      type: 'response',
+      id: loginRequest.id,
+      command: 'login',
+      success: true,
+      data: { providerId: 'deepseek' },
+    });
+
+    const result = await loginPromise;
+    expect(result.providerId).toBe('deepseek');
+    expect(result.openUrl).toBe('https://auth.example.com');
+    expect(result.instructions).toBe('Open the URL');
+    expect(calls).toHaveLength(1);
+    backend.destroy();
+  });
+
+  it('rejects login when OMP returns an invalid result', async () => {
+    const { backend, children } = createHarness({ requestTimeoutMs: 200 });
+    const child = await startReady(backend, children);
+
+    const loginPromise = backend.loginOmpProvider('deepseek');
+    await waitFor(() => child.frames.some((frame) => frame.type === 'login'));
+    const loginRequest = child.frames.findLast((frame) => frame.type === 'login')!;
+    child.emitFrame({ type: 'response', id: loginRequest.id, command: 'login', success: true, data: {} });
+
+    await expect(loginPromise).rejects.toThrow('invalid result');
+    backend.destroy();
   });
 });

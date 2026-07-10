@@ -86,6 +86,8 @@ import {
   type ExtensionUiStructuredResponse,
 } from "./input"
 import { OmpTodoCard } from "./OmpTodoCard"
+import { OmpSubagentBar } from "./OmpSubagentBar"
+import { OmpSubagentDetail } from "./OmpSubagentDetail"
 import type { FreeFormSubmitOptions } from "./input/FreeFormInput"
 import type { RichTextInputHandle } from "@/components/ui/rich-text-input"
 import { useBackgroundTasks } from "@/hooks/useBackgroundTasks"
@@ -570,6 +572,8 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     anchorY?: number
     nonce: number
   } | null>(null)
+  const [subagentDetailOpen, setSubagentDetailOpen] = React.useState(false)
+  const [subagentDetailInitialId, setSubagentDetailInitialId] = React.useState<string | undefined>(undefined)
   const followUpOpenNonceRef = React.useRef(0)
 
   // Navigation for session branching
@@ -595,6 +599,16 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   const { tasks: backgroundTasks, killTask } = useBackgroundTasks({
     sessionId: session?.id ?? ''
   })
+
+  // OMP subagent detail
+  const openSubagentDetail = React.useCallback((subagentId?: string) => {
+    setSubagentDetailInitialId(subagentId)
+    setSubagentDetailOpen(true)
+  }, [])
+  const closeSubagentDetail = React.useCallback(() => {
+    setSubagentDetailOpen(false)
+    setSubagentDetailInitialId(undefined)
+  }, [])
 
   // TurnCard expansion state — persisted to localStorage across session switches
   const {
@@ -1780,6 +1794,8 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                         compactMode={compactMode}
                         sendMessageKey={sendMessageKey}
                         openAnnotationRequest={openAnnotationRequest}
+                        ompSubagentState={session.ompSubagentState}
+                        onOpenSubagent={openSubagentDetail}
                         onBranch={session?.supportsBranching ? async (messageId: string, options?: { newPanel?: boolean }) => {
                           if (!session) return
                           try {
@@ -2000,11 +2016,30 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
             </div>
           )}
 
+          {session.ompSubagentState && session.ompSubagentState.subagents.length > 0 && (
+            <div className="px-3 pb-2">
+              <OmpSubagentBar
+                state={session.ompSubagentState}
+                isProcessing={session.isProcessing}
+                onOpenDetail={openSubagentDetail}
+              />
+            </div>
+          )}
+
           {session.ompTodoState && (
             <OmpTodoCard
               sessionId={session.id}
               state={session.ompTodoState}
               isProcessing={session.isProcessing}
+            />
+          )}
+
+          {subagentDetailOpen && session.ompSubagentState && (
+            <OmpSubagentDetail
+              sessionId={session.id}
+              state={session.ompSubagentState}
+              initialSubagentId={subagentDetailInitialId}
+              onClose={closeSubagentDetail}
             />
           )}
 

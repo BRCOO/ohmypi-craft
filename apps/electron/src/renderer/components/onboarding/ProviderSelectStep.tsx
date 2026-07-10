@@ -70,8 +70,8 @@ export function ProviderSelectStep({ onSelect, onSkip, errorMessage }: ProviderS
     },
     {
       id: 'omp',
-      name: 'Oh My Pi / OMP',
-      description: 'Use Oh My Pi RPC and automatically sync its available models.',
+      name: t("onboarding.providerSelect.omp"),
+      description: t("onboarding.providerSelect.ompDesc"),
       icon: PROVIDER_ICONS.omp,
     },
     {

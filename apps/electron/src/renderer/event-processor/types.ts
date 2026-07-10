@@ -5,7 +5,7 @@
  * All agent events flow through a single pure function for consistent state transitions.
  */
 
-import type { Session, Message, PermissionRequest, CredentialRequest, ExtensionUiRequest, TypedError, PermissionMode, SessionStatus, AuthRequest, ToolDisplayMeta, OmpControlStateDto, OmpTodoStateDto, OmpCommandResultMeta } from '../../shared/types'
+import type { Session, Message, PermissionRequest, CredentialRequest, ExtensionUiRequest, TypedError, PermissionMode, SessionStatus, AuthRequest, ToolDisplayMeta, OmpControlStateDto, OmpTodoStateDto, OmpSubagentStateDto, OmpCommandResultMeta } from '../../shared/types'
 
 /**
  * Streaming state for a session - replaces streamingTextRef
@@ -81,6 +81,21 @@ export interface ToolResultEvent {
   toolUseId: string
   toolName?: string
   result: string
+  isError?: boolean
+  turnId?: string
+  parentToolUseId?: string
+  /** Timestamp from main process for consistent ordering */
+  timestamp?: number
+}
+
+/**
+ * Tool update event - streams partial tool output before completion
+ */
+export interface ToolUpdateEvent {
+  type: 'tool_update'
+  sessionId: string
+  toolUseId: string
+  content: string
   isError?: boolean
   turnId?: string
   parentToolUseId?: string
@@ -302,6 +317,15 @@ export interface OmpTodoStateChangedEvent {
 }
 
 /**
+ * OMP subagent state changed.
+ */
+export interface OmpSubagentStateChangedEvent {
+  type: 'omp_subagent_state_changed'
+  sessionId: string
+  state: OmpSubagentStateDto
+}
+
+/**
  * Working directory error event - server rejected the path (cross-platform, not found, etc.)
  */
 export interface WorkingDirectoryErrorEvent {
@@ -517,6 +541,7 @@ export type AgentEvent =
   | TextCompleteEvent
   | ToolStartEvent
   | ToolResultEvent
+  | ToolUpdateEvent
   | CompleteEvent
   | ErrorEvent
   | TypedErrorEvent
@@ -542,6 +567,7 @@ export type AgentEvent =
   | WorkingDirectoryChangedEvent
   | OmpControlStateChangedEvent
   | OmpTodoStateChangedEvent
+  | OmpSubagentStateChangedEvent
   | WorkingDirectoryErrorEvent
   | PermissionModeChangedEvent
   | SessionModelChangedEvent

@@ -482,6 +482,24 @@ export function handleOmpTodoStateChanged(
 }
 
 /**
+ * Handle OMP subagent state updates.
+ */
+export function handleOmpSubagentStateChanged(
+  state: SessionState,
+  event: import('../types').OmpSubagentStateChangedEvent
+): ProcessResult {
+  const { session, streaming } = state
+
+  return {
+    state: {
+      session: { ...session, ompSubagentState: event.state },
+      streaming,
+    },
+    effects: [],
+  }
+}
+
+/**
  * Handle permission_mode_changed - return effect for parent to handle session options
  */
 export function handlePermissionModeChanged(

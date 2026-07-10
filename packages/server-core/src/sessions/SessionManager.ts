@@ -811,6 +811,21 @@ interface OmpSessionAgent extends AgentBackend {
   setOmpSessionName(name: string): Promise<void>
 }
 
+interface OmpSubagentAgent extends AgentBackend {
+  onSubagentStateChange: ((state: import('@craft-agent/shared/agent/backend').OmpSubagentState) => void) | null
+  getOmpSubagentState(): import('@craft-agent/shared/agent/backend').OmpSubagentState
+  refreshOmpSubagents(): Promise<import('@craft-agent/shared/agent/backend').OmpSubagentState>
+  loadOmpSubagentMessages(subagentId: string, fromByte?: number): Promise<import('@craft-agent/shared/agent/backend').OmpSubagentState>
+}
+
+interface OmpLoginAgent extends AgentBackend {
+  getOmpLoginProviders(): Promise<import('@craft-agent/shared/agent/backend/omp/omp-rpc-protocol').OmpRpcLoginProvider[]>
+  loginOmpProvider(
+    providerId: string,
+    options?: import('@craft-agent/shared/agent/backend/omp/omp-rpc-backend').OmpLoginOptions,
+  ): Promise<import('@craft-agent/shared/agent/backend/omp/omp-rpc-backend').OmpLoginResult>
+}
+
 function isOmpControllableAgent(agent: AgentInstance | null | undefined): agent is OmpControllableAgent {
   const candidate = agent as Partial<OmpControllableAgent> | null | undefined
   return !!candidate
@@ -841,6 +856,21 @@ function isOmpTodoAgent(agent: AgentInstance | null | undefined): agent is OmpTo
     && typeof candidate.mutateOmpTodos === 'function'
     && typeof candidate.importOmpTodosMarkdown === 'function'
     && typeof candidate.exportOmpTodosMarkdown === 'function'
+}
+
+function isOmpSubagentAgent(agent: AgentInstance | null | undefined): agent is OmpSubagentAgent {
+  const candidate = agent as Partial<OmpSubagentAgent> | null | undefined
+  return !!candidate
+    && typeof candidate.getOmpSubagentState === 'function'
+    && typeof candidate.refreshOmpSubagents === 'function'
+    && typeof candidate.loadOmpSubagentMessages === 'function'
+}
+
+function isOmpLoginAgent(agent: AgentInstance | null | undefined): agent is OmpLoginAgent {
+  const candidate = agent as Partial<OmpLoginAgent> | null | undefined
+  return !!candidate
+    && typeof candidate.getOmpLoginProviders === 'function'
+    && typeof candidate.loginOmpProvider === 'function'
 }
 
 function isOmpSessionAgent(agent: AgentInstance | null | undefined): agent is OmpSessionAgent {
@@ -984,6 +1014,60 @@ function toOmpTodoStateDto(state: OmpTodoState): OmpTodoStateDto {
           maxAttempts: state.reminder.maxAttempts,
         }
       : undefined,
+    updatedAt: state.updatedAt,
+  }
+}
+
+function toOmpSubagentStateDto(
+  state: import('@craft-agent/shared/agent/backend').OmpSubagentState,
+): import('@craft-agent/shared/protocol').OmpSubagentStateDto {
+  const toTodoPhaseDto = (phase: { name: string; tasks: Array<{ content: string; status: string; details?: string; notes?: string[] }> }) => ({
+    name: phase.name,
+    tasks: phase.tasks.map((task) => ({
+      content: task.content,
+      status: task.status as import('@craft-agent/shared/protocol').OmpTodoStatusDto,
+      details: task.details,
+      notes: task.notes ? [...task.notes] : undefined,
+    })),
+  })
+
+  return {
+    available: state.available,
+    sessionId: state.sessionId,
+    subagents: state.subagents.map((subagent) => ({
+      id: subagent.id,
+      index: subagent.index,
+      agent: subagent.agent,
+      agentSource: subagent.agentSource,
+      description: subagent.description,
+      status: subagent.status,
+      task: subagent.task,
+      assignment: subagent.assignment,
+      sessionFile: subagent.sessionFile,
+      lastUpdate: subagent.lastUpdate,
+      progress: subagent.progress
+        ? {
+            ...subagent.progress,
+            recentTools: subagent.progress.recentTools?.map((tool) => ({ ...tool })),
+            recentOutput: subagent.progress.recentOutput ? [...subagent.progress.recentOutput] : undefined,
+            modelOverride: Array.isArray(subagent.progress.modelOverride)
+              ? [...subagent.progress.modelOverride]
+              : subagent.progress.modelOverride,
+            retryState: subagent.progress.retryState ? { ...subagent.progress.retryState } : undefined,
+            retryFailure: subagent.progress.retryFailure ? { ...subagent.progress.retryFailure } : undefined,
+          }
+        : undefined,
+      parentToolCallId: subagent.parentToolCallId,
+      todoPhases: subagent.todoPhases?.map(toTodoPhaseDto),
+      transcriptEntries: subagent.transcriptEntries,
+      transcriptMessages: subagent.transcriptMessages,
+      cursor: subagent.cursor,
+      transcriptError: subagent.transcriptError,
+      transcriptLoading: subagent.transcriptLoading,
+    })),
+    revision: state.revision,
+    pendingAction: state.pendingAction,
+    error: state.error,
     updatedAt: state.updatedAt,
   }
 }
@@ -1164,6 +1248,8 @@ interface ManagedSession {
   ompControlState?: OmpControlStateDto
   // Runtime-only OMP phased Todo snapshot bridged to the renderer.
   ompTodoState?: OmpTodoStateDto
+  // Runtime-only OMP subagent state bridged to the renderer.
+  ompSubagentState?: import('@craft-agent/shared/protocol').OmpSubagentStateDto
   // Whether the previous turn was interrupted (for context injection on next message).
   // Ephemeral — not persisted to disk. Cleared after one-shot injection.
   wasInterrupted?: boolean
@@ -1482,6 +1568,34 @@ export class SessionManager implements ISessionManager {
       this.publishOmpTodoState(current, state)
     }
     this.publishOmpTodoState(managed, agent.getOmpTodoState())
+  }
+
+  private publishOmpSubagentState(
+    managed: ManagedSession,
+    state: import('@craft-agent/shared/agent/backend').OmpSubagentState,
+  ): void {
+    const dto = toOmpSubagentStateDto(state)
+    managed.ompSubagentState = dto
+    this.sendEvent({
+      type: 'omp_subagent_state_changed',
+      sessionId: managed.id,
+      state: dto,
+    }, managed.workspace.id)
+  }
+
+  private wireOmpSubagentBridge(managed: ManagedSession): void {
+    const agent = managed.agent
+    if (!isOmpSubagentAgent(agent)) {
+      managed.ompSubagentState = undefined
+      return
+    }
+
+    agent.onSubagentStateChange = (state) => {
+      const current = this.sessions.get(managed.id)
+      if (!current || current.agent !== agent) return
+      this.publishOmpSubagentState(current, state)
+    }
+    this.publishOmpSubagentState(managed, agent.getOmpSubagentState())
   }
 
   /** Wait until initialize() has completed (sessions loaded from disk).
@@ -3723,6 +3837,7 @@ export class SessionManager implements ISessionManager {
       sessionLog.info(`Created ${provider} agent for session ${managed.id} (model: ${backendContext.resolvedModel})${managed.sdkSessionId ? ' (resuming)' : ''}`)
       this.wireOmpControlBridge(managed)
       this.wireOmpTodoBridge(managed)
+      this.wireOmpSubagentBridge(managed)
 
       // ============================================================
       // Post-construction: debug callback, auth callback, postInit()
@@ -7500,6 +7615,18 @@ export class SessionManager implements ISessionManager {
     return { managed, agent }
   }
 
+  async refreshOmpSubagents(sessionId: string): Promise<void> {
+    const { managed, agent } = await this.getOmpSubagentAgent(sessionId)
+    await agent.refreshOmpSubagents()
+    this.publishOmpSubagentState(managed, agent.getOmpSubagentState())
+  }
+
+  async loadOmpSubagentMessages(sessionId: string, subagentId: string, fromByte?: number): Promise<void> {
+    const { managed, agent } = await this.getOmpSubagentAgent(sessionId)
+    await agent.loadOmpSubagentMessages(subagentId, fromByte)
+    this.publishOmpSubagentState(managed, agent.getOmpSubagentState())
+  }
+
   private async getOmpTodoAgent(sessionId: string): Promise<{
     managed: ManagedSession
     agent: OmpTodoAgent
@@ -7509,6 +7636,66 @@ export class SessionManager implements ISessionManager {
     const agent = await this.getOrCreateAgent(managed)
     if (!isOmpTodoAgent(agent)) {
       throw new Error('OMP Todo controls are only available for OMP sessions')
+    }
+    return { managed, agent }
+  }
+
+  private async getOmpSubagentAgent(sessionId: string): Promise<{
+    managed: ManagedSession
+    agent: OmpSubagentAgent
+  }> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+    const agent = await this.getOrCreateAgent(managed)
+    if (!isOmpSubagentAgent(agent)) {
+      throw new Error('OMP subagent controls are only available for OMP sessions')
+    }
+    return { managed, agent }
+  }
+
+  async getOmpLoginProviders(sessionId: string): Promise<import('@craft-agent/shared/protocol').OmpLoginProvidersResult> {
+    try {
+      const { agent } = await this.getOmpLoginAgent(sessionId)
+      const providers = await agent.getOmpLoginProviders()
+      return { success: true, providers }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      sessionLog.warn('Failed to get OMP login providers', { sessionId, error: message })
+      return { success: false, error: message }
+    }
+  }
+
+  async loginOmpProvider(
+    sessionId: string,
+    providerId: string,
+    onOpenUrl?: (payload: { url?: string; launchUrl?: string; instructions?: string }) => void,
+  ): Promise<import('@craft-agent/shared/protocol').OmpLoginSessionResult> {
+    try {
+      const { agent } = await this.getOmpLoginAgent(sessionId)
+      const result = await agent.loginOmpProvider(providerId, { onOpenUrl })
+      return {
+        success: true,
+        providerId: result.providerId,
+        openUrl: result.openUrl,
+        launchUrl: result.launchUrl,
+        instructions: result.instructions,
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      sessionLog.warn('Failed to login OMP provider', { sessionId, providerId, error: message })
+      return { success: false, error: message }
+    }
+  }
+
+  private async getOmpLoginAgent(sessionId: string): Promise<{
+    managed: ManagedSession
+    agent: OmpLoginAgent
+  }> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+    const agent = await this.getOrCreateAgent(managed)
+    if (!isOmpLoginAgent(agent)) {
+      throw new Error('OMP login is only available for OMP sessions')
     }
     return { managed, agent }
   }
@@ -7875,6 +8062,49 @@ export class SessionManager implements ISessionManager {
             timestamp,
           }, workspaceId)
         }
+        break
+      }
+
+      case 'tool_update': {
+        const existingToolMsg = managed.messages.find(m => m.toolUseId === event.toolUseId)
+        const parentToolUseId = existingToolMsg?.parentToolUseId || event.parentToolUseId
+        const updateText = event.content || ''
+
+        if (existingToolMsg) {
+          // Append live output to the tool message content. The full result will
+          // still be written to toolResult when tool_result arrives.
+          const previousContent = existingToolMsg.content || ''
+          const separator = previousContent && updateText ? '\n' : ''
+          existingToolMsg.content = `${previousContent}${separator}${updateText}`
+          if (event.isError) {
+            existingToolMsg.isError = true
+          }
+        } else {
+          // No matching tool_start yet — create a sparse executing message.
+          const toolMessage: Message = {
+            id: generateMessageId(),
+            role: 'tool',
+            content: updateText,
+            timestamp: this.monotonic(),
+            toolUseId: event.toolUseId,
+            toolStatus: 'executing',
+            parentToolUseId,
+            turnId: event.turnId,
+            isError: event.isError,
+          }
+          managed.messages.push(toolMessage)
+        }
+
+        this.sendEvent({
+          type: 'tool_update',
+          sessionId,
+          toolUseId: event.toolUseId,
+          content: updateText,
+          isError: event.isError,
+          turnId: event.turnId,
+          parentToolUseId,
+          timestamp: existingToolMsg?.timestamp ?? this.monotonic(),
+        }, workspaceId)
         break
       }
 

@@ -12,6 +12,10 @@ import {
   type OmpModelDiscoveryDependencies,
 } from './omp-model-discovery.ts';
 import { resolveOmpRuntimeCommand } from './omp-command.ts';
+import { probeOmpAuth } from './omp-auth-probe.ts';
+import { checkOmpVersionCompatibility } from './omp-version-check.ts';
+import { access } from 'node:fs/promises';
+import { join } from 'node:path';
 
 export interface OmpRuntimeDiagnosticsOptions {
   configuredCommand?: unknown;
@@ -148,4 +152,142 @@ export async function checkOmpRuntime(
       checkedAt: Date.now(),
     };
   }
+}
+
+export interface OmpDiagnosticsSummary {
+  runtime: OmpRuntimeStatus;
+  /** Provider list and high-level auth status from OMP, when reachable. */
+  providers?: {
+    providers: import('./omp-rpc-protocol.ts').OmpRpcLoginProvider[];
+    authenticated: number;
+    available: number;
+    total: number;
+  };
+  /** Absolute path to the OMP agent/config directory, if CLI is usable. */
+  agentDir?: string;
+  /** Whether the main config file (config.yml) exists. */
+  configFileExists?: boolean;
+  /** Whether the OMP auth directory exists. */
+  authDirExists?: boolean;
+  /** Version compatibility conclusion from the runtime probe. */
+  versionCompatibility?: {
+    ompVersion?: string;
+    compatible: boolean;
+    warning?: string;
+  };
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function probeOmpAgentDir(
+  command: string,
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number; spawnProcess?: typeof spawn },
+): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const spawnProcess = options.spawnProcess ?? spawn;
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawnProcess(command, [...args, 'config', 'path'], {
+        cwd: options.cwd,
+        env: options.env ? { ...process.env, ...options.env } : process.env,
+        windowsHide: true,
+      });
+    } catch {
+      resolve(undefined);
+      return;
+    }
+
+    let settled = false;
+    let output = '';
+    const timer = setTimeout(() => {
+      if (!child.killed) child.kill();
+      finish();
+    }, options.timeoutMs ?? 3_000);
+
+    const finish = (value?: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    child.stdout.on('data', (chunk) => {
+      output = (output + String(chunk)).slice(-4096);
+    });
+    child.stderr.on('data', () => {});
+    child.on('error', () => finish());
+    child.on('exit', () => {
+      const trimmed = output.trim();
+      finish(trimmed || undefined);
+    });
+  });
+}
+
+export async function getOmpDiagnosticsSummary(
+  options: OmpRuntimeDiagnosticsOptions = {},
+  dependencies: OmpRuntimeDiagnosticsDependencies = {},
+): Promise<OmpDiagnosticsSummary> {
+  const runtime = await checkOmpRuntime(options, dependencies);
+
+  if (!runtime.ok) {
+    return {
+      runtime,
+      versionCompatibility: runtime.version
+        ? { ompVersion: runtime.version, ...checkOmpVersionCompatibility(runtime.version, undefined) }
+        : undefined,
+    };
+  }
+
+  const [authResult, agentDir] = await Promise.all([
+    probeOmpAuth({
+      rawCommand: runtime.rawCommand,
+      cwd: runtime.cwd,
+      env: options.env,
+      timeoutMs: options.timeoutMs ?? 30_000,
+    }, { spawnProcess: dependencies.spawnProcess }),
+    probeOmpAgentDir(runtime.command, runtime.args, {
+      cwd: runtime.cwd,
+      env: options.env,
+      timeoutMs: 3_000,
+      spawnProcess: dependencies.spawnProcess,
+    }),
+  ]);
+
+  const providers = authResult.success
+    ? {
+        providers: authResult.providers ?? [],
+        authenticated: authResult.providers?.filter(p => p.authenticated).length ?? 0,
+        available: authResult.providers?.filter(p => p.available).length ?? 0,
+        total: authResult.providers?.length ?? 0,
+      }
+    : undefined;
+
+  let configFileExists: boolean | undefined;
+  let authDirExists: boolean | undefined;
+  if (agentDir) {
+    [configFileExists, authDirExists] = await Promise.all([
+      pathExists(join(agentDir, 'config.yml')),
+      pathExists(join(agentDir, 'auth')),
+    ]);
+  }
+
+  return {
+    runtime,
+    providers,
+    agentDir,
+    configFileExists,
+    authDirExists,
+    versionCompatibility: {
+      ompVersion: runtime.version,
+      ...checkOmpVersionCompatibility(runtime.version, undefined),
+    },
+  };
 }

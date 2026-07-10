@@ -125,14 +125,8 @@ function createErrorServer(): MockServer {
         }
 
         if (envelope.type === 'request') {
-          // Respond with error
-          const response: MessageEnvelope = {
-            id: envelope.id,
-            type: 'response',
-            channel: envelope.channel,
-            error: { code: 'HANDLER_ERROR', message: 'test error' },
-          }
-          ws.send(serializeEnvelope(response))
+          // Request captured; the test sends the error response explicitly so
+          // this mock stays deterministic under Bun's test WebSocket scheduler.
         }
       },
       open(ws) {
@@ -226,7 +220,24 @@ describe('CliRpcClient', () => {
     server = createErrorServer()
     const client = new CliRpcClient(server.url)
     await client.connect()
-    await expect(client.invoke('system:versions')).rejects.toThrow('test error')
+    const pending = client.invoke('system:versions')
+
+    let request: MessageEnvelope | null = null
+    for (let i = 0; i < 20; i++) {
+      request = server.lastMessage()
+      if (request?.type === 'request') break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+
+    expect(request?.type).toBe('request')
+    server.sendToAll({
+      id: request!.id,
+      type: 'response',
+      channel: request!.channel,
+      error: { code: 'HANDLER_ERROR', message: 'test error' },
+    })
+
+    await expect(pending).rejects.toThrow('test error')
     client.destroy()
   })
 
@@ -388,6 +399,7 @@ describe('CliRpcClient', () => {
 // ---------------------------------------------------------------------------
 
 function generateSelfSignedCert(): { cert: string; key: string } | null {
+  if (process.platform === 'win32') return null
   try {
     const keyResult = Bun.spawnSync({
       cmd: ['openssl', 'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1',

@@ -1,10 +1,16 @@
 import type {
   OmpCompactionResult,
+  OmpQueueMode,
   OmpRpcSessionState,
+  OmpRuntimeConfig,
   OmpRuntimeEvent,
+  OmpRuntimeExtensionErrorEntry,
   OmpRuntimePendingAction,
   OmpRuntimeState,
+  OmpRuntimeStderrEntry,
+  OmpSessionShutdownReason,
   OmpSessionStats,
+  OmpStderrLevel,
 } from './omp-rpc-protocol.ts';
 
 export type OmpRuntimeStateAction =
@@ -18,7 +24,13 @@ export type OmpRuntimeStateAction =
   | { type: 'auto_retry_set'; enabled: boolean }
   | { type: 'retry_aborted' }
   | { type: 'runtime_event'; event: OmpRuntimeEvent }
-  | { type: 'unavailable'; error?: string };
+  | { type: 'unavailable'; error?: string }
+  | { type: 'config_update'; config: OmpRuntimeConfig }
+  | { type: 'session_info_update'; sessionId?: string; sessionFile?: string; sessionName?: string }
+  | { type: 'session_shutdown'; reason: OmpSessionShutdownReason; errorMessage?: string }
+  | { type: 'version_info'; ompVersion?: string; protocolVersion?: string; versionWarning?: string }
+  | { type: 'stderr'; level: OmpStderrLevel; text: string }
+  | { type: 'extension_error'; error: Omit<OmpRuntimeExtensionErrorEntry, 'at'> };
 
 export function createOmpRuntimeState(now = Date.now()): OmpRuntimeState {
   return {
@@ -26,6 +38,8 @@ export function createOmpRuntimeState(now = Date.now()): OmpRuntimeState {
     retry: { phase: 'idle' },
     available: false,
     updatedAt: now,
+    recentStderr: [],
+    recentExtensionErrors: [],
   };
 }
 
@@ -49,6 +63,9 @@ export function cloneOmpRuntimeState(state: OmpRuntimeState): OmpRuntimeState {
     },
     retry: { ...state.retry },
     fallback: state.fallback ? { ...state.fallback } : undefined,
+    config: state.config ? { ...state.config } : undefined,
+    recentStderr: state.recentStderr ? [...state.recentStderr] : undefined,
+    recentExtensionErrors: state.recentExtensionErrors ? [...state.recentExtensionErrors] : undefined,
   };
 }
 
@@ -157,7 +174,72 @@ export function reduceOmpRuntimeState(
         ...createOmpRuntimeState(now),
         error: action.error,
       };
+
+    case 'config_update': {
+      const config: OmpRuntimeConfig = { ...(state.config ?? {}), ...action.config };
+      return {
+        ...state,
+        config,
+        autoCompactionEnabled: config.autoCompactionEnabled ?? state.autoCompactionEnabled,
+        autoRetryEnabled: config.autoRetryEnabled ?? state.autoRetryEnabled,
+        updatedAt: now,
+      };
+    }
+
+    case 'session_info_update':
+      return {
+        ...state,
+        updatedAt: now,
+      };
+
+    case 'session_shutdown':
+      return {
+        ...state,
+        sessionShutdown: {
+          reason: action.reason,
+          errorMessage: action.errorMessage,
+          at: now,
+        },
+        updatedAt: now,
+      };
+
+    case 'version_info':
+      return {
+        ...state,
+        ompVersion: action.ompVersion,
+        protocolVersion: action.protocolVersion,
+        versionWarning: action.versionWarning,
+        updatedAt: now,
+      };
+
+    case 'stderr':
+      return {
+        ...state,
+        recentStderr: appendLimited(
+          state.recentStderr ?? [],
+          { level: action.level, text: action.text, at: now },
+          32,
+        ),
+        updatedAt: now,
+      };
+
+    case 'extension_error':
+      return {
+        ...state,
+        recentExtensionErrors: appendLimited(
+          state.recentExtensionErrors ?? [],
+          { ...action.error, at: now },
+          16,
+        ),
+        updatedAt: now,
+      };
   }
+}
+
+function appendLimited<T>(items: T[], item: T, max: number): T[] {
+  const next = [...items, item];
+  if (next.length > max) next.splice(0, next.length - max);
+  return next;
 }
 
 function reduceRuntimeEvent(

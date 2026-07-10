@@ -223,6 +223,9 @@ export const RPC_CHANNELS = {
     GET_STATUS: 'omp:getStatus',
     SET_COMMAND_PATH: 'omp:setCommandPath',
     CLEAR_COMMAND_PATH: 'omp:clearCommandPath',
+    GET_LOGIN_PROVIDERS: 'omp:getLoginProviders',
+    LOGIN_PROVIDER: 'omp:loginProvider',
+    GET_DIAGNOSTICS_SUMMARY: 'omp:getDiagnosticsSummary',
   },
   dialog: {
     OPEN_FOLDER: 'dialog:openFolder',

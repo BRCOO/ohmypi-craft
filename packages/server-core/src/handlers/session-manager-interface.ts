@@ -91,6 +91,14 @@ export interface ISessionManager {
     markdown: string,
   ): Promise<void>
   exportOmpTodosMarkdown(sessionId: string): Promise<import('@craft-agent/shared/protocol').OmpTodoMarkdownExportResult>
+  refreshOmpSubagents(sessionId: string): Promise<void>
+  loadOmpSubagentMessages(sessionId: string, subagentId: string, fromByte?: number): Promise<void>
+  getOmpLoginProviders(sessionId: string): Promise<import('@craft-agent/shared/protocol').OmpLoginProvidersResult>
+  loginOmpProvider(
+    sessionId: string,
+    providerId: string,
+    onOpenUrl?: (payload: { url?: string; launchUrl?: string; instructions?: string }) => void,
+  ): Promise<import('@craft-agent/shared/protocol').OmpLoginSessionResult>
   updateWorkingDirectory(sessionId: string, path: string): void
   setSessionSources(sessionId: string, sourceSlugs: string[]): Promise<void>
   setSessionLabels(sessionId: string, labels: string[]): void

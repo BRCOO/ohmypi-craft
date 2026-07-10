@@ -6,7 +6,7 @@
  */
 
 import { homedir } from 'os';
-import { resolve, join, normalize, isAbsolute } from 'path';
+import { resolve, join, normalize, isAbsolute, posix as pathPosix } from 'path';
 import { existsSync } from 'fs';
 
 /**
@@ -41,6 +41,13 @@ export function expandPath(inputPath: string, basePath?: string): string {
   // Handle ${HOME} and $HOME variables
   expanded = expanded.replace(/\$\{HOME\}/g, home);
   expanded = expanded.replace(/\$HOME(?=\/|$)/g, home);
+
+  // Preserve POSIX absolute paths even when this code runs on Windows. These
+  // paths can be server-side/remote/WSL paths and should not become \tmp\...
+  // simply because the desktop host is Windows.
+  if (expanded.startsWith('/') && !expanded.startsWith('//')) {
+    return pathPosix.normalize(expanded);
+  }
 
   // If still not absolute, resolve from base path
   if (!isAbsolute(expanded)) {

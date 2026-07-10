@@ -16,13 +16,13 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import { HeaderMenu } from '@/components/ui/HeaderMenu'
 import { routes } from '@/lib/navigate'
-import { X, MoreHorizontal, Pencil, Trash2, Star, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, RefreshCcw, Settings2, MessageSquareMore, Zap, Clock, Check } from 'lucide-react'
+import { X, MoreHorizontal, Pencil, Trash2, Star, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, RefreshCcw, Settings2, MessageSquareMore, Zap, Clock, Check, ExternalLink, Loader2, ClipboardCopy, Globe, GitBranch, Terminal, Layers, Search } from 'lucide-react'
 import type { CredentialHealthStatus, CredentialHealthIssue } from '../../../shared/types'
 import { Spinner, FullscreenOverlayBase, Tooltip, TooltipTrigger, TooltipContent } from '@craft-agent/ui'
 import { useSetAtom } from 'jotai'
 import { fullscreenOverlayOpenAtom } from '@/atoms/overlay'
 import { motion, AnimatePresence } from 'motion/react'
-import type { LlmConnectionWithStatus, OmpRuntimeStatus, ThinkingLevel, WorkspaceSettings, Workspace } from '../../../shared/types'
+import type { LlmConnectionWithStatus, OmpDiagnosticsSummary, OmpLoginProviderDto, OmpRuntimeStatus, ThinkingLevel, WorkspaceSettings, Workspace } from '../../../shared/types'
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVELS } from '@craft-agent/shared/agent/thinking-levels'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import {
@@ -672,8 +672,14 @@ export default function AiSettingsPage() {
   const [rtkRechecking, setRtkRechecking] = useState(false)
   const [rtkGain, setRtkGain] = useState<{ totalCommands: number; totalInput: number; totalOutput: number; totalSaved: number; avgSavingsPct: number; totalTimeMs: number; avgTimeMs: number } | null>(null)
   const [ompStatus, setOmpStatus] = useState<OmpRuntimeStatus | null>(null)
+  const [ompDiagnostics, setOmpDiagnostics] = useState<OmpDiagnosticsSummary | null>(null)
+  const [ompDiagnosticsLoading, setOmpDiagnosticsLoading] = useState(false)
   const [ompCommandInput, setOmpCommandInput] = useState('')
   const [ompChecking, setOmpChecking] = useState(false)
+  const [ompProviders, setOmpProviders] = useState<OmpLoginProviderDto[]>([])
+  const [ompProvidersLoading, setOmpProvidersLoading] = useState(false)
+  const [ompProvidersError, setOmpProvidersError] = useState<string | undefined>()
+  const [ompLoggingInProviderId, setOmpLoggingInProviderId] = useState<string | undefined>()
   const [ompSaving, setOmpSaving] = useState(false)
   const [ompRefreshingModels, setOmpRefreshingModels] = useState(false)
 
@@ -1047,9 +1053,14 @@ export default function AiSettingsPage() {
   const refreshOmpStatus = useCallback(async () => {
     if (!window.electronAPI) return null
     setOmpChecking(true)
+    setOmpDiagnosticsLoading(true)
     try {
-      const status = await window.electronAPI.getOmpRuntimeStatus()
+      const [status, diagnostics] = await Promise.all([
+        window.electronAPI.getOmpRuntimeStatus(),
+        window.electronAPI.getOmpDiagnosticsSummary(),
+      ])
       setOmpStatus(status)
+      setOmpDiagnostics(diagnostics)
       if (status.source === 'config') setOmpCommandInput(status.rawCommand)
       return status
     } catch (error) {
@@ -1058,8 +1069,21 @@ export default function AiSettingsPage() {
       return null
     } finally {
       setOmpChecking(false)
+      setOmpDiagnosticsLoading(false)
     }
   }, [])
+
+  const handleCopyOmpDiagnostics = useCallback(async () => {
+    if (!window.electronAPI || !ompDiagnostics) return
+    try {
+      const text = JSON.stringify(ompDiagnostics, null, 2)
+      await navigator.clipboard.writeText(text)
+      toast.success('OMP diagnostics copied to clipboard')
+    } catch (error) {
+      console.error('Failed to copy OMP diagnostics:', error)
+      toast.error('Failed to copy OMP diagnostics')
+    }
+  }, [ompDiagnostics])
 
   const handleSaveOmpCommand = useCallback(async () => {
     if (!window.electronAPI) return
@@ -1128,6 +1152,63 @@ export default function AiSettingsPage() {
       setOmpRefreshingModels(false)
     }
   }, [llmConnections, refreshLlmConnections, refreshOmpStatus])
+
+  const loadOmpProviders = useCallback(async () => {
+    if (!window.electronAPI) return
+    setOmpProvidersLoading(true)
+    setOmpProvidersError(undefined)
+    try {
+      const result = await window.electronAPI.getOmpLoginProviders()
+      if (!result.success) {
+        setOmpProvidersError(result.error || 'Failed to load OMP providers')
+        setOmpProviders([])
+        return
+      }
+      setOmpProviders(result.providers ?? [])
+    } catch (error) {
+      setOmpProvidersError(error instanceof Error ? error.message : 'Failed to load OMP providers')
+      setOmpProviders([])
+    } finally {
+      setOmpProvidersLoading(false)
+    }
+  }, [])
+
+  const handleLoginOmpProvider = useCallback(async (provider: OmpLoginProviderDto) => {
+    if (!window.electronAPI) return
+    setOmpLoggingInProviderId(provider.id)
+    setOmpProvidersError(undefined)
+    try {
+      const result = await window.electronAPI.loginOmpProvider(provider.id)
+      if (!result.success) {
+        toast.error(result.error || 'OMP login failed')
+        return
+      }
+      const openedUrl = result.openUrl || result.launchUrl
+      if (openedUrl) {
+        toast.info('Browser opened. Complete login, then return here.')
+      }
+      await loadOmpProviders()
+      // Refresh models if any provider is now authenticated.
+      const authenticated = (await window.electronAPI.getOmpLoginProviders()).providers?.some(p => p.authenticated)
+      if (authenticated) {
+        await handleRefreshOmpModels()
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'OMP login failed')
+    } finally {
+      setOmpLoggingInProviderId(undefined)
+    }
+  }, [loadOmpProviders, handleRefreshOmpModels])
+
+  // Load OMP provider list whenever the runtime becomes ready.
+  useEffect(() => {
+    if (ompStatus?.ok) {
+      loadOmpProviders()
+    } else {
+      setOmpProviders([])
+      setOmpProvidersError(undefined)
+    }
+  }, [ompStatus?.ok, loadOmpProviders])
 
   const refreshRtkGain = useCallback(async () => {
     const gain = await window.electronAPI?.getRtkGain()
@@ -1254,7 +1335,22 @@ export default function AiSettingsPage() {
                     >
                       {ompRefreshingModels ? 'Refreshing' : 'Refresh models'}
                     </Button>
+                    <Button
+                      size="sm"
+                      onClick={handleCopyOmpDiagnostics}
+                      disabled={ompDiagnosticsLoading || !ompDiagnostics}
+                      className="bg-background shadow-minimal text-foreground hover:bg-foreground/5 rounded-lg"
+                    >
+                      <ClipboardCopy className="mr-1.5 size-3.5" />
+                      Copy diagnostics
+                    </Button>
                   </SettingsRow>
+                  {ompDiagnostics?.versionCompatibility?.warning && (
+                    <div className="px-4 pb-2 text-xs text-amber-600 dark:text-amber-400">
+                      <AlertTriangle className="inline size-3 mr-1" />
+                      {ompDiagnostics.versionCompatibility.warning}
+                    </div>
+                  )}
                   <div className="px-4 pb-4 pt-1 space-y-2">
                     <div className="text-xs font-medium text-foreground/70">OMP command or executable path</div>
                     <div className="flex gap-2">
@@ -1286,6 +1382,99 @@ export default function AiSettingsPage() {
                         Default from OMP: {ompStatus.defaultModel}
                       </div>
                     )}
+                  </div>
+                </SettingsCard>
+              </SettingsSection>
+
+              {/* Oh My Pi providers */}
+              <SettingsSection title={t('settings.ai.ompProviders.title')} description={t('settings.ai.ompProviders.description')}>
+                <SettingsCard>
+                  {ompProvidersLoading ? (
+                    <div className="flex items-center justify-center gap-2 px-4 py-6 text-sm text-muted-foreground">
+                      <Loader2 className="size-4 animate-spin" />
+                      {t('settings.ai.ompProviders.loading')}
+                    </div>
+                  ) : ompProvidersError ? (
+                    <div className="px-4 py-4 text-sm text-destructive">
+                      {ompProvidersError}
+                    </div>
+                  ) : ompProviders.length === 0 ? (
+                    <div className="px-4 py-4 text-sm text-muted-foreground">
+                      {t('settings.ai.ompProviders.noProviders')}
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-border/50">
+                      {ompProviders.map(provider => (
+                        <div
+                          key={provider.id}
+                          className="flex items-center justify-between gap-3 px-4 py-3"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium">{provider.name}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {provider.authenticated
+                                ? t('settings.ai.ompProviders.authenticated')
+                                : provider.available
+                                  ? t('settings.ai.ompProviders.available')
+                                  : t('settings.ai.ompProviders.unavailable')}
+                            </div>
+                          </div>
+                          {provider.authenticated ? (
+                            <CheckCircle2 className="size-5 shrink-0 text-emerald-500" />
+                          ) : provider.available ? (
+                            <Button
+                              size="sm"
+                              onClick={() => handleLoginOmpProvider(provider)}
+                              disabled={ompLoggingInProviderId === provider.id}
+                              className="bg-background shadow-minimal text-foreground hover:bg-foreground/5 rounded-lg"
+                            >
+                              {ompLoggingInProviderId === provider.id ? (
+                                <>
+                                  <Loader2 className="mr-1.5 size-3 animate-spin" />
+                                  {t('settings.ai.ompProviders.loggingIn')}
+                                </>
+                              ) : (
+                                <>
+                                  <ExternalLink className="mr-1.5 size-3" />
+                                  {t('settings.ai.ompProviders.login')}
+                                </>
+                              )}
+                            </Button>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </SettingsCard>
+              </SettingsSection>
+
+              {/* OMP subsystem status */}
+              <SettingsSection title="Oh My Pi subsystems" description="Status of Browser, LSP, GitHub, SSH, and MCP as reported by OMP.">
+                <SettingsCard>
+                  <div className="divide-y divide-border/50">
+                    {[
+                      { icon: Globe, label: 'Browser', description: 'OMP does not report browser status via RPC' },
+                      { icon: Layers, label: 'LSP', description: 'OMP does not report LSP server status via RPC' },
+                      { icon: GitBranch, label: 'GitHub', description: 'OMP does not report GitHub auth status via RPC' },
+                      { icon: Terminal, label: 'SSH', description: 'OMP does not report SSH host status via RPC' },
+                      { icon: Search, label: 'MCP / Tool discovery', description: 'OMP does not report MCP server status via RPC' },
+                    ].map(({ icon: Icon, label, description }) => (
+                      <div key={label} className="flex items-start gap-3 px-4 py-3">
+                        <span className="mt-0.5 flex size-7 items-center justify-center rounded-lg bg-foreground/5 text-foreground/70">
+                          <Icon className="size-3.5" />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 text-sm font-medium">
+                            {label}
+                            <span className="inline-flex items-center rounded-full bg-amber-400/10 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400">
+                              <AlertTriangle className="mr-1 size-3" />
+                              Not reported
+                            </span>
+                          </div>
+                          <div className="text-xs text-muted-foreground">{description}</div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </SettingsCard>
               </SettingsSection>
@@ -1425,6 +1614,7 @@ export default function AiSettingsPage() {
                   onSubmitLocalModel={apiSetupOnboarding.handleSubmitLocalModel}
                   onStartOAuth={apiSetupOnboarding.handleStartOAuth}
                   onFinish={handleApiSetupFinish}
+                  onOmpLoginComplete={apiSetupOnboarding.handleOmpLoginComplete}
                   isWaitingForCode={apiSetupOnboarding.isWaitingForCode}
                   onSubmitAuthCode={apiSetupOnboarding.handleSubmitAuthCode}
                   onCancelOAuth={apiSetupOnboarding.handleCancelOAuth}

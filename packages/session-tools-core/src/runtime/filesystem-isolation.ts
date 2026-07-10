@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { posix as pathPosix, resolve } from 'node:path';
 
 export interface FilesystemIsolationPlan {
   status: 'enforced' | 'unavailable';
@@ -40,7 +40,10 @@ export function buildDarwinSandboxProfile(
   sessionDir: string,
   options?: FilesystemIsolationOptions,
 ): string {
-  const escapedRoot = escapeSandboxPath(resolve(sessionDir));
+  const sessionRoot = sessionDir.startsWith('/') && !sessionDir.startsWith('//')
+    ? pathPosix.resolve(sessionDir)
+    : resolve(sessionDir);
+  const escapedRoot = escapeSandboxPath(sessionRoot);
   const profileParts = [
     '(version 1)',
     '(deny default)',

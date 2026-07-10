@@ -7,7 +7,7 @@ import { perf } from '@craft-agent/shared/utils'
 import { isValidThinkingLevel, THINKING_LEVEL_IDS } from '@craft-agent/shared/agent/thinking-levels'
 
 const VALID_THINKING_LEVELS_LIST = THINKING_LEVEL_IDS.map(id => `'${id}'`).join(', ')
-import { pushTyped, type RpcServer } from '@craft-agent/server-core/transport'
+import { CLIENT_OPEN_EXTERNAL, pushTyped, type RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 import { setTransferableHandler } from './transfer'
 
@@ -133,6 +133,21 @@ export const HANDLED_CHANNELS = [
 export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): void {
   const { sessionManager, platform } = deps
   const log = platform.logger
+  const openExternalForClient = (
+    clientId: string | undefined,
+    url: string,
+    label: string,
+  ) => {
+    if (clientId) {
+      server.invokeClient(clientId, CLIENT_OPEN_EXTERNAL, url).catch((err) => {
+        const fallback = err instanceof Error ? err.message : String(err)
+        log.warn(`${label} client open_external failed (${fallback}), trying platform fallback`)
+        platform.openExternal?.(url).catch(() => {})
+      })
+      return
+    }
+    platform.openExternal?.(url).catch(() => {})
+  }
 
   // Get all sessions for the calling window's workspace
   // Waits for initialization to complete so sessions are never returned empty during startup
@@ -302,7 +317,7 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
 
   // Session commands - consolidated handler for session operations
   server.handle(RPC_CHANNELS.sessions.COMMAND, async (
-    _ctx,
+    ctx,
     sessionId: string,
     command: import('@craft-agent/shared/protocol').SessionCommand
   ) => {
@@ -358,6 +373,10 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
         return sessionManager.importOmpTodosMarkdown(sessionId, command.expectedRevision, command.markdown)
       case 'exportOmpTodosMarkdown':
         return sessionManager.exportOmpTodosMarkdown(sessionId)
+      case 'refreshOmpSubagents':
+        return sessionManager.refreshOmpSubagents(sessionId)
+      case 'loadOmpSubagentMessages':
+        return sessionManager.loadOmpSubagentMessages(sessionId, command.subagentId, command.fromByte)
       case 'updateWorkingDirectory':
         return sessionManager.updateWorkingDirectory(sessionId, command.dir)
       case 'setSources':
@@ -393,6 +412,15 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
         return sessionManager.handoffOmpSession(sessionId, command.customInstructions)
       case 'exportOmpSessionHtml':
         return sessionManager.exportOmpSessionHtml(sessionId, command.outputPath)
+      case 'getOmpLoginProviders':
+        return sessionManager.getOmpLoginProviders(sessionId)
+      case 'loginOmpProvider':
+        return sessionManager.loginOmpProvider(sessionId, command.providerId, (payload) => {
+          const targetUrl = payload.url || payload.launchUrl
+          if (!targetUrl) return
+          log.info(`[OMP LOGIN] Opening browser for ${command.providerId}: ${targetUrl}`)
+          openExternalForClient(ctx.clientId, targetUrl, '[OMP LOGIN]')
+        })
       // Connection selection (locked after first message)
       case 'setConnection':
         log.info(`IPC: setConnection received for session ${sessionId}, connection: ${command.connectionSlug}`)

@@ -1,5 +1,11 @@
 # Batch 01 — OMP 子智能体实时 UI 与 transcript
 
+> 状态：**已完成**（2026-07-09）。
+>
+> 已实现：后端状态聚合、`set_subagent_subscription` / `get_subagents` / `get_subagent_messages` 接入、Craft DTO/动作、桌面可发现入口与详情抽屉、Task/Agent 工具卡跳转、协议/后端/reducer/renderer 测试。
+>
+> 仍待后续批次：真实 OMP smoke、subagent_event 协议确认、worktree/patch/branch/apply/merge 结果展示。
+>
 > 适合派给一个独立 agent 执行。开始前先用 CodeGraph 定位相关符号；不要先做大范围 grep。
 
 ## 目标

@@ -44,6 +44,7 @@ import type { SessionMeta } from '@/atoms/sessions'
 import { getSessionStatus, hasUnreadMeta, hasMessagesMeta } from '@/utils/session'
 import { MessagingSessionMenuItem } from '@/components/messaging/MessagingSessionMenuItem'
 import { useSessionMenuActions } from '@/hooks/useSessionMenuActions'
+import { OmpBranchDialog } from './OmpBranchDialog'
 
 export interface SessionMenuProps {
   /** Session data — display state is derived from this */
@@ -291,6 +292,13 @@ export function SessionMenu({
         <Trash2 className="h-3.5 w-3.5" />
         <span className="flex-1">{t("common.delete")}</span>
       </MenuItem>
+
+      <OmpBranchDialog
+        open={actions.ompBranchDialog.open}
+        options={actions.ompBranchDialog.options}
+        onClose={actions.closeOmpBranchDialog}
+        onSelect={actions.selectOmpBranchOption}
+      />
     </>
   )
 }

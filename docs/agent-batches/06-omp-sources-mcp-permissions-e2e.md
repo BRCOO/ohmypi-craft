@@ -1,5 +1,11 @@
 # Batch 06 — Sources/MCP/权限收口与最终 E2E 成熟度
 
+> 状态：**实现与自动化验收已完成；完整人工 E2E 待补齐**（2026-07-10）。
+>
+> 已完成：Sources/MCP ownership decision note、Host URI scheme 扩展与权限审计、OMP 工具权限映射、Browser/LSP/GitHub/SSH/MCP 状态面板、Windows dev E2E smoke 与 E2E 验收清单。
+>
+> 尚未完成：packaged Electron 人工 E2E，以及清单中标注“未手测”的登录、真实工具权限、Host Tool/URI、Todo、子智能体、分支、handoff/export、崩溃恢复场景。
+>
 > 适合派给一个能做架构收口和端到端验收的 agent。这个批次最好放在前几批之后执行。
 
 ## 目标
@@ -112,10 +118,26 @@ codegraph explore "OMP Host URI MCP sources permissions pre-tool-use browser lsp
 
 ## 交接说明
 
-完成后写清：
+### Sources/MCP Ownership（已决策）
 
-- Sources/MCP ownership 决策。
-- 新增 URI scheme 和权限规则。
-- 哪些工具已经走 Craft 权限，哪些仍是 OMP 内部控制。
-- E2E 实测环境、步骤、失败项和剩余风险。
+详见 `docs/superpowers/decisions/2026-07-10-sources-mcp-ownership.md`。
 
+- **Craft Sources 是桌面端用户可见数据源的唯一事实源**；OMP 的 MCP 配置保持独立，Craft 不复刻。
+- OMP 通过 `craft-workspace://current/sources` 读取脱敏 source 快照；不包含凭证、token、原始配置。
+- `/mcp` 的 add/remove/edit 等变更命令不直接映射到桌面 UI；用户通过 Craft Sources 面板管理。
+- OMP 内部 MCP 服务器仍由 OMP 自己管理，但不进入 Craft 的 source picker，也不受 Craft 的 per-source 权限控制。
+
+### 已完成项
+
+- 扩展 Host URI scheme：`craft-session://current/artifacts/<name>` 写入、`craft-workspace://current/sources` 读取；越权写入默认拒绝并记录审计。
+- OMP Host Tool 与 Host URI 写操作复用 Craft `runPreToolUseChecks` 权限决策，支持 `safe`/`ask`/`allow-all` 三种模式。
+- 在 `apps/electron/src/renderer/pages/settings/AiSettingsPage.tsx` 增加 “Oh My Pi subsystems” 状态面板，显示 Browser/LSP/GitHub/SSH/MCP 当前未被 OMP RPC 报告的状态。
+- 编写 Windows dev / packaged Electron E2E 验收清单：`docs/agent-batches/06-e2e-checklist.md`。
+
+### 验收记录
+
+- `bun run typecheck:all` ✅
+- `bun run scripts/check-i18n-parity.ts` ✅
+- OMP 相关测试 228 pass / 0 fail ✅
+- Windows dev Electron E2E smoke：应用成功启动、创建窗口、加载已有会话，并刷新到 22 个 OMP 模型。实测记录见 `docs/agent-batches/06-e2e-checklist.md`。
+- Packaged Electron E2E：尚未执行；清单中已留空待后续填写。

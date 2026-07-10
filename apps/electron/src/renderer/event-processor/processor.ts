@@ -14,7 +14,7 @@
 
 import type { SessionState, AgentEvent, ProcessResult } from './types'
 import { handleTextDelta, handleTextComplete } from './handlers/text'
-import { handleToolStart, handleToolResult, handleTaskBackgrounded, handleShellBackgrounded, handleTaskProgress, handleTaskCompleted } from './handlers/tool'
+import { handleToolStart, handleToolResult, handleToolUpdate, handleTaskBackgrounded, handleShellBackgrounded, handleTaskProgress, handleTaskCompleted } from './handlers/tool'
 import {
   handleComplete,
   handleError,
@@ -41,6 +41,7 @@ import {
   handleWorkingDirectoryChanged,
   handleOmpControlStateChanged,
   handleOmpTodoStateChanged,
+  handleOmpSubagentStateChanged,
   handlePermissionModeChanged,
   handleSessionModelChanged,
   handleConnectionChanged,
@@ -85,6 +86,11 @@ export function processEvent(
 
     case 'tool_result': {
       const newState = handleToolResult(state, event)
+      return { state: newState, effects: [] }
+    }
+
+    case 'tool_update': {
+      const newState = handleToolUpdate(state, event)
       return { state: newState, effects: [] }
     }
 
@@ -143,6 +149,9 @@ export function processEvent(
 
     case 'omp_todo_state_changed':
       return handleOmpTodoStateChanged(state, event)
+
+    case 'omp_subagent_state_changed':
+      return handleOmpSubagentStateChanged(state, event)
 
     case 'working_directory_error':
       // No state change — just emit a toast effect

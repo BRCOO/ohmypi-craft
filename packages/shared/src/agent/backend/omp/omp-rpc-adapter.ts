@@ -2,36 +2,59 @@ import type { AgentEvent } from '@craft-agent/core/types';
 import type { PermissionRequestType } from '../types.ts';
 import {
   parseOmpAvailableCommandsUpdate,
+  parseOmpConfigUpdateFrame,
+  parseOmpExtensionErrorFrame,
   parseOmpHostToolCall,
   parseOmpHostToolCancel,
   parseOmpHostUriCancel,
   parseOmpHostUriRequest,
+  parseOmpMessageEndFrame,
+  parseOmpMessageStartFrame,
+  parseOmpMessageUpdateFrame,
   parseOmpPromptResult,
   parseOmpQueueControlState,
+  parseOmpReadyFrame,
   parseOmpRpcResponse,
   parseOmpSessionInfoUpdate,
+  parseOmpSessionShutdownFrame,
+  parseOmpStderrFrame,
+  parseOmpToolExecutionUpdateFrame,
   type OmpQueueControlState,
   type OmpRpcAvailableSlashCommand,
+  type OmpRpcConfigUpdateFrame,
+  type OmpRpcExtensionErrorFrame,
   type OmpRpcHostToolCallFrame,
   type OmpRpcHostToolCancelFrame,
   type OmpRpcHostUriCancelFrame,
   type OmpRpcHostUriRequestFrame,
+  type OmpRpcMessageEndFrame,
+  type OmpRpcMessageStartFrame,
+  type OmpRpcMessageUpdateFrame,
   type OmpRpcPromptResultFrame,
+  type OmpRpcReadyFrame,
   type OmpRpcResponseFrame,
   type OmpRpcSessionInfoUpdateFrame,
+  type OmpRpcSessionShutdownFrame,
+  type OmpRpcStderrFrame,
+  type OmpRpcToolExecutionUpdateFrame,
   type OmpThinkingLevel,
 } from './omp-rpc-protocol.ts';
 
 export interface OmpRpcAdaptedFrame {
   events: AgentEvent[];
   ready?: boolean;
+  readyFrame?: OmpRpcReadyFrame;
   complete?: boolean;
   response?: OmpRpcResponseFrame;
   promptResult?: OmpRpcPromptResultFrame;
   thinkingLevel?: OmpThinkingLevel;
   queueState?: Partial<OmpQueueControlState>;
+  configUpdate?: OmpRpcConfigUpdateFrame;
   availableCommands?: OmpRpcAvailableSlashCommand[];
   sessionInfoUpdate?: OmpRpcSessionInfoUpdateFrame;
+  sessionShutdown?: OmpRpcSessionShutdownFrame;
+  extensionError?: OmpRpcExtensionErrorFrame;
+  stderr?: OmpRpcStderrFrame;
   hostToolCall?: OmpRpcHostToolCallFrame;
   hostToolCancel?: OmpRpcHostToolCancelFrame;
   hostUriRequest?: OmpRpcHostUriRequestFrame;
@@ -269,6 +292,9 @@ export class OmpRpcEventAdapter {
   private hasEmittedFinalText = false;
   private toolNames = new Map<string, string>();
   private toolInputs = new Map<string, Record<string, unknown>>();
+  private toolDisplayNames = new Map<string, string>();
+  private toolUpdateBuffers = new Map<string, string>();
+  private messageMap = new Map<string, { turnId: string; sdkMessageId?: string; hasFinalText: boolean }>();
   private commandContext: string | undefined;
 
   startTurn(commandContext?: string): void {
@@ -279,6 +305,9 @@ export class OmpRpcEventAdapter {
     this.hasEmittedFinalText = false;
     this.toolNames.clear();
     this.toolInputs.clear();
+    this.toolDisplayNames.clear();
+    this.toolUpdateBuffers.clear();
+    this.messageMap.clear();
     this.commandContext = commandContext;
   }
 
@@ -290,12 +319,15 @@ export class OmpRpcEventAdapter {
     const type = asString(raw.type) ?? 'unknown';
 
     switch (type) {
-      case 'ready':
+      case 'ready': {
+        const readyFrame = parseOmpReadyFrame(raw);
         return {
           events: [],
           ready: true,
-          sessionId: asString(raw.sessionId) ?? asString(raw.session_id),
+          readyFrame: readyFrame ?? undefined,
+          sessionId: readyFrame?.sessionId ?? asString(raw.sessionId) ?? asString(raw.session_id),
         };
+      }
 
       case 'response': {
         const response = parseOmpRpcResponse(raw);
@@ -345,9 +377,11 @@ export class OmpRpcEventAdapter {
       }
 
       case 'config_update': {
-        const config = asObject(raw.config) ?? raw;
+        const frame = parseOmpConfigUpdateFrame(raw);
+        const config = frame?.config ?? raw;
         const level = config.thinkingLevel ?? config.thinking_level;
         const queueState = parseOmpQueueControlState(config);
+        const result: OmpRpcAdaptedFrame = { events: [], configUpdate: frame ?? undefined };
         if (
           level === 'off'
           || level === 'minimal'
@@ -356,9 +390,10 @@ export class OmpRpcEventAdapter {
           || level === 'high'
           || level === 'xhigh'
         ) {
-          return { events: [], thinkingLevel: level, ...(queueState ? { queueState } : {}) };
+          result.thinkingLevel = level;
         }
-        return { events: [], ...(queueState ? { queueState } : {}) };
+        if (queueState) result.queueState = queueState;
+        return result;
       }
 
       case 'turn_start':
@@ -370,8 +405,25 @@ export class OmpRpcEventAdapter {
         this.hasEmittedFinalText = false;
         return { events: [] };
 
+      case 'message_start': {
+        const frame = parseOmpMessageStartFrame(raw);
+        const messageId = frame?.messageId ?? `omp-msg-${this.turnIndex++}`;
+        const turnId = frame?.turnId ?? this.currentTurnId ?? `omp-turn-${this.turnIndex++}`;
+        if (!this.messageMap.has(messageId)) {
+          this.messageMap.set(messageId, { turnId, hasFinalText: false });
+        }
+        this.thinkingBuffers.clear();
+        this.completedThinkingBlocks.clear();
+        return { events: [] };
+      }
+
       case 'message_update': {
-        const assistantEvent = assistantMessageEvent(raw);
+        const frame = parseOmpMessageUpdateFrame(raw);
+        const messageId = frame?.messageId;
+        const mapped = messageId ? this.messageMap.get(messageId) : undefined;
+        const turnId = mapped?.turnId ?? this.currentTurnId;
+
+        const assistantEvent = frame?.assistantMessageEvent ?? assistantMessageEvent(raw);
         const assistantEventType = asString(assistantEvent.type);
         const index = contentIndex(assistantEvent);
 
@@ -390,7 +442,7 @@ export class OmpRpcEventAdapter {
               type: 'text_delta',
               text: delta,
               isThinking: true,
-              turnId: this.currentTurnId,
+              turnId,
             }],
           };
         }
@@ -406,7 +458,7 @@ export class OmpRpcEventAdapter {
               text,
               isIntermediate: true,
               isThinking: true,
-              turnId: this.currentTurnId,
+              turnId,
             }],
           };
         }
@@ -422,13 +474,22 @@ export class OmpRpcEventAdapter {
           events: [{
             type: 'text_delta',
             text: delta,
-            turnId: this.currentTurnId,
+            turnId,
           }],
         };
       }
 
       case 'message_end': {
-        const message = asObject(raw.message);
+        const frame = parseOmpMessageEndFrame(raw);
+        const messageId = frame?.messageId;
+        const mapped = messageId ? this.messageMap.get(messageId) : undefined;
+        const turnId = mapped?.turnId ?? this.currentTurnId;
+        const sdkMessageId = frame?.sdkMessageId ?? asString(frame?.message?.id);
+        if (mapped && sdkMessageId) {
+          mapped.sdkMessageId = sdkMessageId;
+        }
+
+        const message = frame?.message ?? asObject(raw.message);
         const role = asString(message?.role);
         if (role && role !== 'assistant') return { events: [] };
 
@@ -439,7 +500,7 @@ export class OmpRpcEventAdapter {
         }
 
         const events: AgentEvent[] = [];
-        for (const block of extractThinkingBlocks(raw.message)) {
+        for (const block of extractThinkingBlocks(message)) {
           if (this.completedThinkingBlocks.has(block.index)) continue;
           this.completedThinkingBlocks.add(block.index);
           events.push({
@@ -447,19 +508,21 @@ export class OmpRpcEventAdapter {
             text: block.text,
             isIntermediate: true,
             isThinking: true,
-            turnId: this.currentTurnId,
+            turnId,
           });
         }
 
-        const text = extractMessageText(raw.message) ?? this.textBuffer;
-        if (text && !this.hasEmittedFinalText) {
+        const localHasFinalText = mapped?.hasFinalText ?? this.hasEmittedFinalText;
+        const text = extractMessageText(message) ?? this.textBuffer;
+        if (text && !localHasFinalText) {
+          if (mapped) mapped.hasFinalText = true;
           this.hasEmittedFinalText = true;
           this.textBuffer = '';
           events.push({
             type: 'text_complete',
             text,
-            turnId: this.currentTurnId,
-            sdkMessageId: asString(raw.sdkMessageId) ?? asString(raw.sdk_message_id) ?? asString(message?.id),
+            turnId,
+            sdkMessageId,
           });
         }
         return { events };
@@ -470,9 +533,11 @@ export class OmpRpcEventAdapter {
         const toolName = resolveToolName(raw.toolName ?? raw.tool_name ?? raw.name);
         const input = parseArguments(raw.args ?? raw.arguments ?? raw.input);
         const intent = asString(raw.intent) ?? asString(raw.description);
+        const displayName = asString(raw.displayName) ?? asString(raw.display_name);
 
         this.toolNames.set(toolUseId, toolName);
         this.toolInputs.set(toolUseId, input);
+        if (displayName) this.toolDisplayNames.set(toolUseId, displayName);
         this.hasEmittedFinalText = false;
 
         return {
@@ -482,14 +547,28 @@ export class OmpRpcEventAdapter {
             toolUseId,
             input,
             intent,
-            displayName: asString(raw.displayName) ?? asString(raw.display_name),
+            displayName,
             turnId: this.currentTurnId,
           }],
         };
       }
 
-      case 'tool_execution_update':
-        return { events: [] };
+      case 'tool_execution_update': {
+        const frame = parseOmpToolExecutionUpdateFrame(raw);
+        const toolUseId = frame?.toolCallId ?? resolveToolUseId(raw, 'omp-tool');
+        const content = this.extractToolUpdateContent(frame ? { ...frame } : raw);
+        if (!content) return { events: [] };
+        const buffered = (this.toolUpdateBuffers.get(toolUseId) ?? '') + content;
+        this.toolUpdateBuffers.set(toolUseId, buffered);
+        return {
+          events: [{
+            type: 'tool_update',
+            toolUseId,
+            content,
+            turnId: this.currentTurnId,
+          }],
+        };
+      }
 
       case 'tool_execution_end': {
         const toolUseId = resolveToolUseId(raw, 'omp-tool');
@@ -501,6 +580,8 @@ export class OmpRpcEventAdapter {
 
         this.toolNames.delete(toolUseId);
         this.toolInputs.delete(toolUseId);
+        this.toolDisplayNames.delete(toolUseId);
+        this.toolUpdateBuffers.delete(toolUseId);
         this.hasEmittedFinalText = false;
 
         return {
@@ -592,17 +673,38 @@ export class OmpRpcEventAdapter {
       case 'permission_resolved':
         return { events: [] };
 
-      case 'message_start':
-        this.thinkingBuffers.clear();
-        this.completedThinkingBlocks.clear();
-        return { events: [] };
-
-      case 'stderr':
+      case 'stderr': {
+        const frame = parseOmpStderrFrame(raw);
         return {
-          events: asString(raw.text)
-            ? [{ type: 'error', message: asString(raw.text)! }]
+          events: frame?.text
+            ? [{ type: 'error', message: frame.text }]
             : [],
+          stderr: frame ?? undefined,
         };
+      }
+
+      case 'session_shutdown': {
+        const frame = parseOmpSessionShutdownFrame(raw);
+        return {
+          events: frame?.reason === 'error' || frame?.reason === 'crash' || frame?.reason === 'external'
+            ? [{ type: 'error', message: frame.errorMessage || `OMP session shut down (${frame.reason})` }]
+            : [],
+          sessionShutdown: frame ?? undefined,
+        };
+      }
+
+      case 'extension_error': {
+        const frame = parseOmpExtensionErrorFrame(raw);
+        if (!frame?.message) return { events: [], extensionError: frame ?? undefined };
+        const prefix = frame.extensionId || frame.source ? `[${frame.extensionId || frame.source}] ` : '';
+        return {
+          events: [{
+            type: frame.recoverable === false ? 'error' : 'info',
+            message: `${prefix}${frame.message}`,
+          }],
+          extensionError: frame,
+        };
+      }
 
       case 'command_output':
       {
@@ -664,5 +766,29 @@ export class OmpRpcEventAdapter {
       default:
         return { events: [], unknownFrameType: type };
     }
+  }
+
+  private extractToolUpdateContent(raw: Record<string, unknown>): string | undefined {
+    const stdout = asString(raw.stdout);
+    if (stdout) return stdout;
+    const stderr = asString(raw.stderr);
+    if (stderr) return stderr;
+
+    const partialResult = asObject(raw.partialResult) ?? asObject(raw.partial_result);
+    if (partialResult) {
+      return extractTextFromContent(partialResult.content)
+        ?? asString(partialResult.text)
+        ?? asString(partialResult.output)
+        ?? asString(partialResult.error)
+        ?? undefined;
+    }
+
+    const progress = asObject(raw.progress);
+    if (progress) {
+      const message = asString(progress.message) ?? asString(progress.text);
+      if (message) return message;
+    }
+
+    return asString(raw.text) ?? asString(raw.content) ?? undefined;
   }
 }

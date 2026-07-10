@@ -81,6 +81,7 @@ interface UseOnboardingReturn {
 
   // Completion
   handleFinish: () => void
+  handleOmpLoginComplete: () => void
   handleCancel: () => void
 
   // Direct edit (skip method selection, jump to credentials)
@@ -220,6 +221,7 @@ export function useOnboarding({
     gitBashStatus: undefined,
     isRecheckingGitBash: false,
     isCheckingGitBash: true, // Start as true until check completes
+    ompConnectionSlug: undefined,
   })
 
   // Check Git Bash on Windows at mount. If missing, redirect to git-bash step
@@ -376,6 +378,9 @@ export function useOnboarding({
         break
       case 'local-model':
         setState(s => ({ ...s, step: 'provider-select', credentialStatus: 'idle', errorMessage: undefined }))
+        break
+      case 'omp-login':
+        setState(s => ({ ...s, step: 'provider-select', credentialStatus: 'idle', errorMessage: undefined, ompConnectionSlug: undefined }))
         break
     }
   }, [state.step, state.gitBashStatus, initialStep, onDismiss])
@@ -655,27 +660,33 @@ export function useOnboarding({
     }
 
     if (choice === 'omp') {
+      const connectionSlug = resolveSlugForMethod('omp', editingSlug, existingSlugs)
       setState(s => ({
         ...s,
-        step: 'complete',
+        step: 'omp-login',
         apiSetupMethod: 'omp',
-        credentialStatus: 'validating',
+        credentialStatus: 'idle',
         completionStatus: 'saving',
         errorMessage: undefined,
+        ompConnectionSlug: connectionSlug,
       }))
 
       const saved = await handleSaveConfig(
         undefined,
         { modelSelectionMode: 'automaticallySyncedFromProvider' },
         'omp',
+        connectionSlug,
       )
 
-      setState(s => ({
-        ...s,
-        step: saved ? 'complete' : 'provider-select',
-        credentialStatus: saved ? 'success' : 'error',
-        completionStatus: saved ? 'complete' : 'saving',
-      }))
+      if (!saved) {
+        setState(s => ({
+          ...s,
+          step: 'provider-select',
+          credentialStatus: 'error',
+          completionStatus: 'saving',
+          ompConnectionSlug: undefined,
+        }))
+      }
       return
     }
 
@@ -824,6 +835,16 @@ export function useOnboarding({
     onComplete()
   }, [onComplete])
 
+  // OMP login finished — show the completion screen.
+  const handleOmpLoginComplete = useCallback(() => {
+    setState(s => ({
+      ...s,
+      step: 'complete',
+      credentialStatus: 'success',
+      completionStatus: 'complete',
+    }))
+  }, [])
+
   // Cancel onboarding
   const handleCancel = useCallback(() => {
     setState(s => ({ ...s, step: 'welcome' }))
@@ -880,6 +901,7 @@ export function useOnboarding({
     handleClearError,
     handleSkipSetup,
     handleFinish,
+    handleOmpLoginComplete,
     handleCancel,
     jumpToCredentials,
     reset,

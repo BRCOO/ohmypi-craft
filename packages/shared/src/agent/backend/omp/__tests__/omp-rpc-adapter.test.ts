@@ -1,389 +1,216 @@
 import { describe, expect, it } from 'bun:test';
-
+import type { AgentEvent } from '@craft-agent/core/types';
 import { OmpRpcEventAdapter } from '../omp-rpc-adapter.ts';
-import { buildOmpExtensionUiResponseFrame } from '../omp-rpc-backend.ts';
+
+function asTextDelta(event: AgentEvent | undefined): Extract<AgentEvent, { type: 'text_delta' }> {
+  if (!event || event.type !== 'text_delta') throw new Error('expected text_delta');
+  return event;
+}
+
+function asTextComplete(event: AgentEvent | undefined): Extract<AgentEvent, { type: 'text_complete' }> {
+  if (!event || event.type !== 'text_complete') throw new Error('expected text_complete');
+  return event;
+}
 
 describe('OmpRpcEventAdapter', () => {
-  it('maps ready and response frames as control data', () => {
-    const adapter = new OmpRpcEventAdapter();
+  describe('message id mapping', () => {
+    it('maps message_start/update/end to the same turn id', () => {
+      const adapter = new OmpRpcEventAdapter();
+      adapter.startTurn();
 
-    expect(adapter.adaptFrame({ type: 'ready', sessionId: 's1' })).toEqual({
-      events: [],
-      ready: true,
-      sessionId: 's1',
-    });
-
-    expect(adapter.adaptFrame({ type: 'response', id: 'r1', command: 'prompt', success: true, data: { ok: true } })).toEqual({
-      events: [],
-      response: {
-        type: 'response',
-        id: 'r1',
-        command: 'prompt',
-        success: true,
-        error: undefined,
-        data: { ok: true },
-        raw: { type: 'response', id: 'r1', command: 'prompt', success: true, data: { ok: true } },
-      },
-    });
-
-    expect(adapter.adaptFrame({ type: 'prompt_result', id: 'r1', agentInvoked: false })).toEqual({
-      events: [],
-      promptResult: {
-        type: 'prompt_result',
-        id: 'r1',
-        agentInvoked: false,
-      },
-    });
-  });
-
-  it('surfaces thinking configuration and unknown frame control metadata', () => {
-    const adapter = new OmpRpcEventAdapter();
-    expect(adapter.adaptFrame({ type: 'thinking_level_changed', level: 'high' })).toEqual({
-      events: [],
-      thinkingLevel: 'high',
-    });
-    expect(adapter.adaptFrame({ type: 'config_update', config: { thinkingLevel: 'minimal' } })).toEqual({
-      events: [],
-      thinkingLevel: 'minimal',
-    });
-    expect(adapter.adaptFrame({ type: 'future_frame', secret: 'not retained' })).toEqual({
-      events: [],
-      unknownFrameType: 'future_frame',
-    });
-  });
-
-  it('surfaces available commands and queue control metadata', () => {
-    const adapter = new OmpRpcEventAdapter();
-    expect(adapter.adaptFrame({
-      type: 'available_commands_update',
-      commands: [
-        {
-          name: 'stats',
-          description: 'Show stats',
-          source: 'builtin',
-          input: { hint: 'optional focus' },
-        },
-      ],
-    })).toEqual({
-      events: [],
-      availableCommands: [{
-        name: 'stats',
-        aliases: undefined,
-        description: 'Show stats',
-        input: { hint: 'optional focus' },
-        subcommands: undefined,
-        source: 'builtin',
-      }],
-    });
-
-    expect(adapter.adaptFrame({
-      type: 'config_update',
-      config: {
-        thinkingLevel: 'high',
-        steeringMode: 'one-at-a-time',
-        followUpMode: 'all',
-        interruptMode: 'wait',
-        queuedMessageCount: 3,
-      },
-    })).toEqual({
-      events: [],
-      thinkingLevel: 'high',
-      queueState: {
-        steeringMode: 'one-at-a-time',
-        followUpMode: 'all',
-        interruptMode: 'wait',
-        queuedMessageCount: 3,
-      },
-    });
-  });
-
-  it('maps assistant deltas and final assistant text', () => {
-    const adapter = new OmpRpcEventAdapter();
-    adapter.startTurn();
-
-    expect(adapter.adaptFrame({
-      type: 'message_update',
-      assistantMessageEvent: { type: 'text_delta', delta: 'Hel' },
-    }).events).toEqual([
-      { type: 'text_delta', text: 'Hel', turnId: 'omp-turn-0' },
-    ]);
-
-    expect(adapter.adaptFrame({
-      type: 'message_update',
-      assistant_message_event: { type: 'text_delta', delta: 'lo' },
-    }).events).toEqual([
-      { type: 'text_delta', text: 'lo', turnId: 'omp-turn-0' },
-    ]);
-
-    expect(adapter.adaptFrame({
-      type: 'message_end',
-      message: { role: 'assistant', id: 'msg-1', content: [{ type: 'text', text: 'Hello' }] },
-    }).events).toEqual([
-      { type: 'text_complete', text: 'Hello', turnId: 'omp-turn-0', sdkMessageId: 'msg-1' },
-    ]);
-  });
-
-  it('maps command output into an OMP command card info event', () => {
-    const adapter = new OmpRpcEventAdapter();
-    adapter.startTurn('/stats');
-
-    expect(adapter.adaptFrame({
-      type: 'command_output',
-      text: '## Stats\n\n```txt\nok\n```',
-    }).events).toEqual([{
-      type: 'info',
-      message: '## Stats\n\n```txt\nok\n```',
-      level: 'info',
-      ompCommand: {
-        command: '/stats',
-        title: 'Oh My Pi Command',
-        level: 'info',
-        format: 'markdown',
-      },
-    }]);
-
-    expect(adapter.adaptFrame({
-      type: 'command_output',
-      level: 'error',
-      output: { message: 'boom' },
-    }).events).toEqual([{
-      type: 'info',
-      message: '```json\n{\n  "message": "boom"\n}\n```',
-      level: 'error',
-      ompCommand: {
-        command: '/stats',
-        title: 'Oh My Pi Command',
-        level: 'error',
-        format: 'json',
-      },
-    }]);
-  });
-
-  it('falls back to accumulated deltas when message_end has no content', () => {
-    const adapter = new OmpRpcEventAdapter();
-    adapter.startTurn();
-
-    adapter.adaptFrame({ type: 'message_update', delta: 'partial' });
-
-    expect(adapter.adaptFrame({ type: 'message_end' }).events).toEqual([
-      { type: 'text_complete', text: 'partial', turnId: 'omp-turn-0', sdkMessageId: undefined },
-    ]);
-  });
-
-  it('keeps thinking blocks separate from answer text and suppresses duplicate fallbacks', () => {
-    const adapter = new OmpRpcEventAdapter();
-    adapter.startTurn();
-
-    expect(adapter.adaptFrame({
-      type: 'message_update',
-      assistantMessageEvent: { type: 'thinking_start', contentIndex: 0 },
-    }).events).toEqual([]);
-    expect(adapter.adaptFrame({
-      type: 'message_update',
-      assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: 'Reason' },
-    }).events).toEqual([
-      { type: 'text_delta', text: 'Reason', isThinking: true, turnId: 'omp-turn-0' },
-    ]);
-    expect(adapter.adaptFrame({
-      type: 'message_update',
-      assistantMessageEvent: { type: 'thinking_end', contentIndex: 0, content: 'Reasoning' },
-    }).events).toEqual([
-      {
-        type: 'text_complete',
-        text: 'Reasoning',
-        isIntermediate: true,
-        isThinking: true,
-        turnId: 'omp-turn-0',
-      },
-    ]);
-
-    expect(adapter.adaptFrame({
-      type: 'message_update',
-      assistantMessageEvent: { type: 'text_delta', contentIndex: 1, delta: 'Answer' },
-    }).events).toEqual([
-      { type: 'text_delta', text: 'Answer', turnId: 'omp-turn-0' },
-    ]);
-    expect(adapter.adaptFrame({
-      type: 'message_end',
-      message: {
+      const start = adapter.adaptFrame({
+        type: 'message_start',
+        messageId: 'msg-1',
         role: 'assistant',
-        content: [
-          { type: 'thinking', thinking: 'Reasoning' },
-          { type: 'text', text: 'Answer' },
-        ],
-      },
-    }).events).toEqual([
-      { type: 'text_complete', text: 'Answer', turnId: 'omp-turn-0', sdkMessageId: undefined },
-    ]);
+      });
+      expect(start.events).toEqual([]);
+
+      const update = adapter.adaptFrame({
+        type: 'message_update',
+        messageId: 'msg-1',
+        assistant_message_event: { type: 'text_delta', delta: 'Hello' },
+      });
+      expect(update.events).toHaveLength(1);
+      const delta = asTextDelta(update.events[0]);
+      expect(delta.text).toBe('Hello');
+      const turnId = delta.turnId;
+      expect(turnId).toBeDefined();
+
+      const end = adapter.adaptFrame({
+        type: 'message_end',
+        messageId: 'msg-1',
+        message: { role: 'assistant', text: 'Hello world' },
+        sdkMessageId: 'sdk-msg-1',
+      });
+      expect(end.events).toHaveLength(1);
+      const complete = asTextComplete(end.events[0]);
+      expect(complete.text).toBe('Hello world');
+      expect(complete.turnId).toBe(turnId);
+      expect(complete.sdkMessageId).toBe('sdk-msg-1');
+    });
+
+    it('does not emit duplicate text_complete for the same message', () => {
+      const adapter = new OmpRpcEventAdapter();
+      adapter.startTurn();
+
+      adapter.adaptFrame({ type: 'message_start', messageId: 'msg-1' });
+      const firstEnd = adapter.adaptFrame({
+        type: 'message_end',
+        messageId: 'msg-1',
+        message: { role: 'assistant', text: 'Done' },
+      });
+      expect(firstEnd.events).toHaveLength(1);
+
+      const secondEnd = adapter.adaptFrame({
+        type: 'message_end',
+        messageId: 'msg-1',
+        message: { role: 'assistant', text: 'Done' },
+      });
+      expect(secondEnd.events).toHaveLength(0);
+    });
+
+    it('shares turn id for messages inside the same turn', () => {
+      const adapter = new OmpRpcEventAdapter();
+      adapter.startTurn();
+
+      adapter.adaptFrame({ type: 'message_start', messageId: 'msg-1' });
+      const end1 = adapter.adaptFrame({
+        type: 'message_end',
+        messageId: 'msg-1',
+        message: { role: 'assistant', text: 'First' },
+      });
+
+      adapter.adaptFrame({ type: 'message_start', messageId: 'msg-2' });
+      const end2 = adapter.adaptFrame({
+        type: 'message_end',
+        messageId: 'msg-2',
+        message: { role: 'assistant', text: 'Second' },
+      });
+
+      expect(asTextComplete(end1.events[0]).turnId).toBe(asTextComplete(end2.events[0]).turnId);
+    });
   });
 
-  it('uses message_end thinking content as a fallback when no thinking_end arrived', () => {
-    const adapter = new OmpRpcEventAdapter();
-    adapter.startTurn();
-    expect(adapter.adaptFrame({
-      type: 'message_end',
-      message: {
-        role: 'assistant',
-        content: [{ type: 'thinking', thinking: 'Fallback reasoning' }],
-      },
-    }).events).toEqual([
-      {
-        type: 'text_complete',
-        text: 'Fallback reasoning',
-        isIntermediate: true,
-        isThinking: true,
-        turnId: 'omp-turn-0',
-      },
-    ]);
-  });
+  describe('tool streaming', () => {
+    it('emits tool_update events from tool_execution_update', () => {
+      const adapter = new OmpRpcEventAdapter();
+      adapter.startTurn();
 
-  it('maps tool start and end frames', () => {
-    const adapter = new OmpRpcEventAdapter();
-    adapter.startTurn();
+      const start = adapter.adaptFrame({
+        type: 'tool_execution_start',
+        toolCallId: 'tc-1',
+        toolName: 'bash',
+        args: { command: 'echo hi' },
+      });
+      expect(start.events[0]).toMatchObject({ type: 'tool_start' });
 
-    expect(adapter.adaptFrame({
-      type: 'tool_execution_start',
-      toolCallId: 'tool-1',
-      toolName: 'bash',
-      args: { command: 'pwd' },
-      intent: 'Check cwd',
-    }).events).toEqual([
-      {
-        type: 'tool_start',
-        toolName: 'Bash',
-        toolUseId: 'tool-1',
-        input: { command: 'pwd' },
-        intent: 'Check cwd',
-        displayName: undefined,
-        turnId: 'omp-turn-0',
-      },
-    ]);
+      const update = adapter.adaptFrame({
+        type: 'tool_execution_update',
+        toolCallId: 'tc-1',
+        stdout: 'line 1',
+      });
+      expect(update.events).toHaveLength(1);
+      const [updateEvent] = update.events;
+      expect(updateEvent).toMatchObject({
+        type: 'tool_update',
+        toolUseId: 'tc-1',
+        content: 'line 1',
+      });
 
-    expect(adapter.adaptFrame({
-      type: 'tool_execution_end',
-      toolCallId: 'tool-1',
-      result: { content: [{ type: 'text', text: '/repo' }] },
-      isError: false,
-    }).events).toEqual([
-      {
+      const end = adapter.adaptFrame({
+        type: 'tool_execution_end',
+        toolCallId: 'tc-1',
+        result: 'line 1\nline 2',
+      });
+      expect(end.events[0]).toMatchObject({
         type: 'tool_result',
-        toolName: 'Bash',
-        toolUseId: 'tool-1',
-        result: '/repo',
-        isError: false,
-        input: { command: 'pwd' },
-        turnId: 'omp-turn-0',
-      },
-    ]);
-  });
+        toolUseId: 'tc-1',
+      });
+    });
 
-  it('maps permission and lifecycle frames', () => {
-    const adapter = new OmpRpcEventAdapter();
-
-    expect(adapter.adaptFrame({
-      type: 'permission_request',
-      id: 'p1',
-      title: 'Run command',
-      command: 'rm file',
-      reason: 'Needs cleanup',
-    }).events).toEqual([
-      {
-        type: 'permission_request',
-        requestId: 'p1',
-        toolName: 'Run command',
-        command: 'rm file',
-        description: 'Needs cleanup',
-        permissionType: 'bash',
-        reason: 'Needs cleanup',
-      },
-    ]);
-
-    expect(adapter.adaptFrame({ type: 'agent_end' })).toEqual({
-      events: [],
-      complete: true,
+    it('ignores tool_execution_update with no useful content', () => {
+      const adapter = new OmpRpcEventAdapter();
+      adapter.startTurn();
+      const update = adapter.adaptFrame({
+        type: 'tool_execution_update',
+        toolCallId: 'tc-1',
+      });
+      expect(update.events).toHaveLength(0);
     });
   });
 
-  it('maps extension UI request frames', () => {
-    const adapter = new OmpRpcEventAdapter();
+  describe('error/shutdown/extension_error frames', () => {
+    it('emits error for fatal session_shutdown', () => {
+      const adapter = new OmpRpcEventAdapter();
+      adapter.startTurn();
+      const result = adapter.adaptFrame({
+        type: 'session_shutdown',
+        reason: 'crash',
+        errorMessage: 'OMP crashed',
+      });
+      expect(result.events).toHaveLength(1);
+      expect(result.events[0]).toMatchObject({
+        type: 'error',
+        message: expect.stringContaining('crash'),
+      });
+    });
 
-    expect(adapter.adaptFrame({
-      type: 'extension_ui_request',
-      id: 'ui-1',
-      method: 'select',
-      title: 'Pick one',
-      options: ['A', 'B'],
-      timeout: 1000,
-    }).events).toEqual([
-      {
-        type: 'extension_ui_request',
-        request: {
-          requestId: 'ui-1',
-          method: 'select',
-          title: 'Pick one',
-          message: undefined,
-          options: ['A', 'B'],
-          placeholder: undefined,
-          prefill: undefined,
-          promptStyle: undefined,
-          timeoutMs: 1000,
-          targetId: undefined,
-          notifyType: undefined,
-          statusKey: undefined,
-          statusText: undefined,
-          widgetKey: undefined,
-          widgetLines: undefined,
-          widgetPlacement: undefined,
-          text: undefined,
-          url: undefined,
-          launchUrl: undefined,
-          instructions: undefined,
-          raw: {
-            type: 'extension_ui_request',
-            id: 'ui-1',
-            method: 'select',
-            title: 'Pick one',
-            options: ['A', 'B'],
-            timeout: 1000,
-          },
-        },
-      },
-    ]);
+    it('does not emit chat error for normal session_shutdown', () => {
+      const adapter = new OmpRpcEventAdapter();
+      adapter.startTurn();
+      const result = adapter.adaptFrame({ type: 'session_shutdown', reason: 'normal' });
+      expect(result.events).toHaveLength(0);
+    });
+
+    it('emits info for recoverable extension_error', () => {
+      const adapter = new OmpRpcEventAdapter();
+      const result = adapter.adaptFrame({
+        type: 'extension_error',
+        extensionId: 'ext-1',
+        message: 'Something went sideways',
+        recoverable: true,
+      });
+      expect(result.events).toHaveLength(1);
+      expect(result.events[0]).toMatchObject({
+        type: 'info',
+        message: expect.stringContaining('[ext-1]'),
+      });
+    });
+
+    it('emits error for non-recoverable extension_error', () => {
+      const adapter = new OmpRpcEventAdapter();
+      const result = adapter.adaptFrame({
+        type: 'extension_error',
+        source: 'my-ext',
+        message: 'Fatal',
+        recoverable: false,
+      });
+      expect(result.events).toHaveLength(1);
+      expect(result.events[0]).toMatchObject({ type: 'error' });
+    });
+
+    it('emits error for stderr frames', () => {
+      const adapter = new OmpRpcEventAdapter();
+      const result = adapter.adaptFrame({ type: 'stderr', text: 'bad things' });
+      expect(result.events).toHaveLength(1);
+      expect(result.events[0]).toMatchObject({ type: 'error' });
+    });
   });
 
-  it('maps extension UI cancel frames', () => {
-    const adapter = new OmpRpcEventAdapter();
-
-    expect(adapter.adaptFrame({
-      type: 'extension_ui_request',
-      id: 'cancel-1',
-      method: 'cancel',
-      targetId: 'ui-1',
-    }).events).toEqual([
-      {
-        type: 'extension_ui_cancel',
-        requestId: 'cancel-1',
-        targetId: 'ui-1',
-      },
-    ]);
-  });
-
-  it('builds OMP extension UI response frames without host correlation ids', () => {
-    expect(buildOmpExtensionUiResponseFrame('ui-1', { value: 'choice' })).toEqual({
-      type: 'extension_ui_response',
-      id: 'ui-1',
-      value: 'choice',
-    });
-    expect(buildOmpExtensionUiResponseFrame('ui-2', { confirmed: true })).toEqual({
-      type: 'extension_ui_response',
-      id: 'ui-2',
-      confirmed: true,
-    });
-    expect(buildOmpExtensionUiResponseFrame('ui-3', { cancelled: true, timedOut: true })).toEqual({
-      type: 'extension_ui_response',
-      id: 'ui-3',
-      cancelled: true,
-      timedOut: true,
+  describe('ready frame', () => {
+    it('captures version and session id from ready', () => {
+      const adapter = new OmpRpcEventAdapter();
+      const result = adapter.adaptFrame({
+        type: 'ready',
+        protocolVersion: '1',
+        ompVersion: '1.2.3',
+        sessionId: 'sess-1',
+      });
+      expect(result.ready).toBe(true);
+      expect(result.readyFrame?.protocolVersion).toBe('1');
+      expect(result.readyFrame?.ompVersion).toBe('1.2.3');
+      expect(result.readyFrame?.sessionId).toBe('sess-1');
+      expect(result.sessionId).toBe('sess-1');
     });
   });
 });

@@ -10,6 +10,7 @@ import { CraftMcpClient } from './client.js';
 import { debug } from '../utils/debug.ts';
 import { normalizeMcpUrl } from '../sources/server-builder.ts';
 import type { McpTransport } from '../sources/types.ts';
+import { existsSync } from 'node:fs';
 
 export interface InvalidProperty {
   toolName: string;
@@ -340,6 +341,14 @@ export async function validateStdioMcpConnection(
   let stderrOutput = '';
   // Track which phase failed for richer diagnostics.
   let phase: 'connect' | 'list-tools' | 'unknown' = 'unknown';
+
+  if ((command.includes('/') || command.includes('\\')) && !existsSync(command)) {
+    return {
+      success: false,
+      error: `Command not found: "${command}". Install the required dependency and try again.`,
+      errorType: 'failed',
+    };
+  }
 
   const cleanup = async () => {
     if (client) {

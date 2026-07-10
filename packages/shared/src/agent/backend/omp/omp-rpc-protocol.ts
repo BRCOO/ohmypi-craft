@@ -181,6 +181,82 @@ export interface OmpRpcSessionInfoUpdateFrame {
   title?: string;
 }
 
+export interface OmpRpcReadyFrame {
+  type: 'ready';
+  protocolVersion?: string;
+  ompVersion?: string;
+  sessionId?: string;
+}
+
+export interface OmpRpcMessageStartFrame {
+  type: 'message_start';
+  messageId?: string;
+  role?: string;
+  parentMessageId?: string;
+  turnId?: string;
+  index?: number;
+}
+
+export interface OmpRpcMessageUpdateFrame {
+  type: 'message_update';
+  messageId?: string;
+  delta?: unknown;
+  content?: unknown;
+  assistantMessageEvent?: Record<string, unknown>;
+  assistant_message_event?: Record<string, unknown>;
+}
+
+export interface OmpRpcMessageEndFrame {
+  type: 'message_end';
+  messageId?: string;
+  message?: Record<string, unknown>;
+  sdkMessageId?: string;
+  sdk_message_id?: string;
+}
+
+export interface OmpRpcToolExecutionUpdateFrame {
+  type: 'tool_execution_update';
+  toolCallId?: string;
+  tool_call_id?: string;
+  partialResult?: unknown;
+  partial_result?: unknown;
+  stdout?: string;
+  stderr?: string;
+  progress?: unknown;
+  artifact?: unknown;
+  image?: unknown;
+}
+
+export interface OmpRpcConfigUpdateFrame {
+  type: 'config_update';
+  config?: Record<string, unknown>;
+}
+
+export type OmpStderrLevel = 'debug' | 'noise' | 'warn' | 'fatal';
+
+export interface OmpRpcStderrFrame {
+  type: 'stderr';
+  text?: string;
+  level?: OmpStderrLevel;
+}
+
+export type OmpSessionShutdownReason = 'normal' | 'switch' | 'crash' | 'external' | 'error';
+
+export interface OmpRpcSessionShutdownFrame {
+  type: 'session_shutdown';
+  reason?: OmpSessionShutdownReason;
+  errorMessage?: string;
+}
+
+export interface OmpRpcExtensionErrorFrame {
+  type: 'extension_error';
+  extensionId?: string;
+  source?: string;
+  message?: string;
+  stackSummary?: string;
+  recoverable?: boolean;
+}
+
 export interface OmpRpcMessagesResponseData {
   messages: unknown[];
 }
@@ -266,6 +342,29 @@ export type OmpRuntimePendingAction =
   | 'set-auto-retry'
   | 'abort-retry';
 
+export interface OmpRuntimeConfig {
+  model?: string;
+  thinkingLevel?: OmpThinkingLevel;
+  autoCompactionEnabled?: boolean;
+  autoRetryEnabled?: boolean;
+  steeringMode?: OmpQueueMode;
+  followUpMode?: OmpQueueMode;
+  interruptMode?: OmpInterruptMode;
+}
+
+export interface OmpRuntimeStderrEntry {
+  level: OmpStderrLevel;
+  text: string;
+  at: number;
+}
+
+export interface OmpRuntimeExtensionErrorEntry {
+  extensionId?: string;
+  source?: string;
+  message: string;
+  at: number;
+}
+
 export interface OmpRuntimeState {
   contextUsage?: OmpContextUsage;
   stats?: OmpSessionStats;
@@ -297,6 +396,17 @@ export interface OmpRuntimeState {
   error?: string;
   available: boolean;
   updatedAt: number;
+  ompVersion?: string;
+  protocolVersion?: string;
+  versionWarning?: string;
+  config?: OmpRuntimeConfig;
+  sessionShutdown?: {
+    reason: OmpSessionShutdownReason;
+    errorMessage?: string;
+    at: number;
+  };
+  recentStderr?: OmpRuntimeStderrEntry[];
+  recentExtensionErrors?: OmpRuntimeExtensionErrorEntry[];
 }
 
 export interface OmpRpcAvailableCommandsUpdateFrame {
@@ -453,6 +563,21 @@ export type OmpSubagentFrame = OmpSubagentLifecycleFrame | OmpSubagentProgressFr
 
 export interface OmpRpcSetTodosResponseData {
   todoPhases: OmpTodoPhase[];
+}
+
+export interface OmpRpcLoginProvider {
+  id: string;
+  name: string;
+  available: boolean;
+  authenticated: boolean;
+}
+
+export interface OmpRpcLoginProvidersResponseData {
+  providers: OmpRpcLoginProvider[];
+}
+
+export interface OmpRpcLoginResult {
+  providerId: string;
 }
 
 export type OmpTodoEvent =
@@ -1583,6 +1708,115 @@ export function parseOmpQueueControlState(value: unknown): Partial<OmpQueueContr
   return Object.keys(state).length > 0 ? state : null;
 }
 
+export function parseOmpReadyFrame(value: unknown): OmpRpcReadyFrame | null {
+  const raw = asObject(value);
+  if (raw?.type !== 'ready') return null;
+  return {
+    type: 'ready',
+    protocolVersion: optionalString(raw.protocolVersion) ?? optionalString(raw.protocol_version),
+    ompVersion: optionalString(raw.ompVersion) ?? optionalString(raw.omp_version),
+    sessionId: optionalString(raw.sessionId) ?? optionalString(raw.session_id),
+  };
+}
+
+export function parseOmpMessageStartFrame(value: unknown): OmpRpcMessageStartFrame | null {
+  const raw = asObject(value);
+  if (raw?.type !== 'message_start') return null;
+  return {
+    type: 'message_start',
+    messageId: optionalString(raw.messageId) ?? optionalString(raw.message_id),
+    role: optionalString(raw.role),
+    parentMessageId: optionalString(raw.parentMessageId) ?? optionalString(raw.parent_message_id),
+    turnId: optionalString(raw.turnId) ?? optionalString(raw.turn_id),
+    index: isFiniteNumber(raw.index) ? raw.index : undefined,
+  };
+}
+
+export function parseOmpMessageUpdateFrame(value: unknown): OmpRpcMessageUpdateFrame | null {
+  const raw = asObject(value);
+  if (raw?.type !== 'message_update') return null;
+  return {
+    type: 'message_update',
+    messageId: optionalString(raw.messageId) ?? optionalString(raw.message_id),
+    delta: raw.delta,
+    content: raw.content,
+    assistantMessageEvent: asObject(raw.assistantMessageEvent) ?? asObject(raw.assistant_message_event) ?? undefined,
+  };
+}
+
+export function parseOmpMessageEndFrame(value: unknown): OmpRpcMessageEndFrame | null {
+  const raw = asObject(value);
+  if (raw?.type !== 'message_end') return null;
+  return {
+    type: 'message_end',
+    messageId: optionalString(raw.messageId) ?? optionalString(raw.message_id),
+    message: asObject(raw.message) ?? undefined,
+    sdkMessageId: optionalString(raw.sdkMessageId) ?? optionalString(raw.sdk_message_id),
+  };
+}
+
+export function parseOmpToolExecutionUpdateFrame(value: unknown): OmpRpcToolExecutionUpdateFrame | null {
+  const raw = asObject(value);
+  if (raw?.type !== 'tool_execution_update') return null;
+  return {
+    type: 'tool_execution_update',
+    toolCallId: optionalString(raw.toolCallId) ?? optionalString(raw.tool_call_id),
+    partialResult: raw.partialResult ?? raw.partial_result,
+    stdout: optionalString(raw.stdout),
+    stderr: optionalString(raw.stderr),
+    progress: raw.progress,
+    artifact: raw.artifact,
+    image: raw.image,
+  };
+}
+
+export function parseOmpConfigUpdateFrame(value: unknown): OmpRpcConfigUpdateFrame | null {
+  const raw = asObject(value);
+  if (raw?.type !== 'config_update') return null;
+  return { type: 'config_update', config: asObject(raw.config) ?? undefined };
+}
+
+function isStderrLevel(value: unknown): value is OmpStderrLevel {
+  return value === 'debug' || value === 'noise' || value === 'warn' || value === 'fatal';
+}
+
+export function parseOmpStderrFrame(value: unknown): OmpRpcStderrFrame | null {
+  const raw = asObject(value);
+  if (raw?.type !== 'stderr') return null;
+  return {
+    type: 'stderr',
+    text: optionalString(raw.text),
+    level: isStderrLevel(raw.level) ? raw.level : undefined,
+  };
+}
+
+function isSessionShutdownReason(value: unknown): value is OmpSessionShutdownReason {
+  return value === 'normal' || value === 'switch' || value === 'crash' || value === 'external' || value === 'error';
+}
+
+export function parseOmpSessionShutdownFrame(value: unknown): OmpRpcSessionShutdownFrame | null {
+  const raw = asObject(value);
+  if (raw?.type !== 'session_shutdown') return null;
+  return {
+    type: 'session_shutdown',
+    reason: isSessionShutdownReason(raw.reason) ? raw.reason : undefined,
+    errorMessage: optionalString(raw.errorMessage) ?? optionalString(raw.error_message),
+  };
+}
+
+export function parseOmpExtensionErrorFrame(value: unknown): OmpRpcExtensionErrorFrame | null {
+  const raw = asObject(value);
+  if (raw?.type !== 'extension_error') return null;
+  return {
+    type: 'extension_error',
+    extensionId: optionalString(raw.extensionId) ?? optionalString(raw.extension_id),
+    source: optionalString(raw.source),
+    message: optionalString(raw.message),
+    stackSummary: optionalString(raw.stackSummary) ?? optionalString(raw.stack_summary),
+    recoverable: typeof raw.recoverable === 'boolean' ? raw.recoverable : undefined,
+  };
+}
+
 export function parseOmpRpcResponse(value: unknown): OmpRpcResponseFrame | null {
   const raw = asObject(value);
   if (
@@ -1671,4 +1905,39 @@ export function parseOmpSessionState(value: unknown): OmpRpcSessionState | null 
     todoPhases,
     contextUsage: contextUsage ?? undefined,
   };
+}
+
+export function parseOmpLoginProvider(value: unknown): OmpRpcLoginProvider | null {
+  const raw = asObject(value);
+  if (
+    !raw
+    || !isString(raw.id)
+    || raw.id.trim().length === 0
+    || !isString(raw.name)
+    || raw.name.trim().length === 0
+    || typeof raw.available !== 'boolean'
+    || typeof raw.authenticated !== 'boolean'
+  ) {
+    return null;
+  }
+  return {
+    id: raw.id,
+    name: raw.name,
+    available: raw.available,
+    authenticated: raw.authenticated,
+  };
+}
+
+export function parseOmpLoginProvidersResponseData(value: unknown): OmpRpcLoginProvidersResponseData | null {
+  const raw = asObject(value);
+  if (!raw || !Array.isArray(raw.providers)) return null;
+  const providers = raw.providers.map(parseOmpLoginProvider);
+  if (providers.some(provider => provider === null)) return null;
+  return { providers: providers as OmpRpcLoginProvider[] };
+}
+
+export function parseOmpLoginResult(value: unknown): OmpRpcLoginResult | null {
+  const raw = asObject(value);
+  if (!raw || !isString(raw.providerId) || raw.providerId.trim().length === 0) return null;
+  return { providerId: raw.providerId };
 }

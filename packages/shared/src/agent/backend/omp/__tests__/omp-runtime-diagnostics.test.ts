@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import type { spawn } from 'node:child_process';
 
-import { checkOmpRuntime, detectOmpVersion } from '../omp-runtime-diagnostics.ts';
+import { checkOmpRuntime, detectOmpVersion, getOmpDiagnosticsSummary } from '../omp-runtime-diagnostics.ts';
 
 class FakeChild extends EventEmitter {
   stdout = new PassThrough();
@@ -100,5 +100,88 @@ describe('checkOmpRuntime', () => {
       spawnProcess: spawnFake(child),
     })).resolves.toBeUndefined();
     expect(child.killed).toBe(true);
+  });
+});
+
+describe('getOmpDiagnosticsSummary', () => {
+  it('includes versionCompatibility when model discovery and version probe succeed', async () => {
+    function createRpcChild(): FakeChild {
+      const child = new FakeChild();
+      child.stdin.on('data', (chunk) => {
+        const command = JSON.parse(String(chunk)) as { id: string };
+        if (command.id === 'omp-models') {
+          writeFrame(child, {
+            id: command.id,
+            type: 'response',
+            success: true,
+            data: {
+              models: [{ provider: 'deepseek', id: 'deepseek-v4-flash', name: 'Flash' }],
+            },
+          });
+        }
+        if (command.id === 'omp-state') {
+          writeFrame(child, {
+            id: command.id,
+            type: 'response',
+            success: true,
+            data: { model: { provider: 'deepseek', id: 'deepseek-v4-flash' } },
+          });
+        }
+        if (command.id === 'omp-providers') {
+          writeFrame(child, {
+            id: command.id,
+            type: 'response',
+            success: true,
+            data: {
+              providers: [
+                {
+                  id: 'deepseek',
+                  name: 'DeepSeek',
+                  authType: 'oauth',
+                  authenticated: true,
+                  available: true,
+                },
+              ],
+            },
+          });
+        }
+      });
+      queueMicrotask(() => writeFrame(child, { type: 'ready' }));
+      return child;
+    }
+
+    function createVersionChild(): FakeChild {
+      const child = new FakeChild();
+      queueMicrotask(() => {
+        child.stdout.write('omp/16.3.0\n');
+        child.emit('exit', 0, null);
+      });
+      return child;
+    }
+
+    function createConfigPathChild(): FakeChild {
+      const child = new FakeChild();
+      queueMicrotask(() => {
+        child.stdout.write('\n');
+        child.emit('exit', 0, null);
+      });
+      return child;
+    }
+
+    const factory = ((command: string, args: string[]) => {
+      if (args.includes('--version')) return createVersionChild();
+      if (args.includes('config') && args.includes('path')) return createConfigPathChild();
+      return createRpcChild();
+    }) as unknown as typeof spawn;
+
+    const summary = await getOmpDiagnosticsSummary(
+      { configuredCommand: 'omp-custom', timeoutMs: 100 },
+      { spawnProcess: factory, versionSpawnProcess: factory },
+    );
+
+    expect(summary.versionCompatibility).toBeDefined();
+    expect(summary.versionCompatibility?.compatible).toBe(true);
+    expect(summary.versionCompatibility?.ompVersion).toBe('16.3.0');
+    expect(summary.providers?.total).toBe(1);
   });
 });

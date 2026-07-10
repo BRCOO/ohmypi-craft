@@ -44,6 +44,11 @@ export interface UseSessionMenuActionsOptions {
   onLabelsChange?: (labels: string[]) => void
 }
 
+export interface OmpBranchDialogState {
+  open: boolean
+  options: OmpBranchOption[]
+}
+
 export interface SessionMenuActions {
   /** Set of base label IDs currently applied (optimistic). */
   appliedLabelIds: Set<string>
@@ -65,6 +70,10 @@ export interface SessionMenuActions {
   branchOmpSession: () => Promise<void>
   handoffOmpSession: () => Promise<void>
   exportOmpSessionHtml: () => Promise<void>
+  /** State and controls for the OMP branch point selection dialog. */
+  ompBranchDialog: OmpBranchDialogState
+  closeOmpBranchDialog: () => void
+  selectOmpBranchOption: (option: OmpBranchOption) => Promise<void>
 }
 
 // SOH (U+0001) — non-printable so it can't collide with label IDs (which
@@ -73,17 +82,6 @@ const LABEL_KEY_SEPARATOR = String.fromCharCode(1)
 
 function joinLabelKey(labels: readonly string[] | undefined): string {
   return (labels ?? []).join(LABEL_KEY_SEPARATOR)
-}
-
-function chooseOmpBranchOption(options: OmpBranchOption[], title: string): OmpBranchOption | null {
-  const body = options
-    .map(option => `${option.ordinal}. ${option.textPreview}`)
-    .join('\n')
-  const answer = window.prompt(`${title}\n\n${body}\n\n#`, '1')
-  if (answer === null) return null
-  const ordinal = Number.parseInt(answer.trim(), 10)
-  if (!Number.isFinite(ordinal)) return null
-  return options.find(option => option.ordinal === ordinal) ?? null
 }
 
 export function useSessionMenuActions({
@@ -105,6 +103,11 @@ export function useSessionMenuActions({
   const propKey = React.useMemo(() => joinLabelKey(propLabels), [propLabels])
   const lastSentKeyRef = React.useRef<string | null>(null)
 
+  const [ompBranchDialog, setOmpBranchDialog] = React.useState<OmpBranchDialogState>({
+    open: false,
+    options: [],
+  })
+
   // Hard-reset on session change so optimistic state from a previous session
   // cannot leak into a new one (e.g. user toggles `bug` on session A, navigates
   // to B before the IPC ACK — without this reset, lastSentKeyRef would block
@@ -114,6 +117,7 @@ export function useSessionMenuActions({
     optimisticLabelsRef.current = next
     lastSentKeyRef.current = null
     setOptimisticLabels(next)
+    setOmpBranchDialog({ open: false, options: [] })
     // Intentionally only depending on sessionId — propLabels changes within
     // the same session are handled by the prop-sync effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -222,32 +226,12 @@ export function useSessionMenuActions({
     }
   }, [sessionId, t])
 
-  const branchOmpSession = React.useCallback(async () => {
-    if (!isOmpSession) {
-      toast.error(t('sessionMenu.ompUnavailable'))
-      return
-    }
+  const closeOmpBranchDialog = React.useCallback(() => {
+    setOmpBranchDialog((prev) => ({ ...prev, open: false }))
+  }, [])
 
-    const optionsResult = await window.electronAPI.sessionCommand(sessionId, {
-      type: 'getOmpBranchOptions',
-    }) as OmpBranchOptionsResult | undefined
-
-    if (!optionsResult?.success) {
-      toast.error(t('sessionMenu.ompBranchFailed'), {
-        description: optionsResult?.error ?? t('toast.unknownError'),
-      })
-      return
-    }
-
-    const options = optionsResult.options ?? []
-    if (options.length === 0) {
-      toast.info(t('sessionMenu.ompNoBranchPoints'))
-      return
-    }
-
-    const selected = chooseOmpBranchOption(options, t('sessionMenu.ompBranchPrompt'))
-    if (!selected) return
-
+  const selectOmpBranchOption = React.useCallback(async (selected: OmpBranchOption) => {
+    closeOmpBranchDialog()
     const result = await window.electronAPI.sessionCommand(sessionId, {
       type: 'branchOmpSession',
       entryId: selected.entryId,
@@ -273,6 +257,32 @@ export function useSessionMenuActions({
         description: result?.error ?? t('toast.unknownError'),
       })
     }
+  }, [closeOmpBranchDialog, sessionId, t])
+
+  const branchOmpSession = React.useCallback(async () => {
+    if (!isOmpSession) {
+      toast.error(t('sessionMenu.ompUnavailable'))
+      return
+    }
+
+    const optionsResult = await window.electronAPI.sessionCommand(sessionId, {
+      type: 'getOmpBranchOptions',
+    }) as OmpBranchOptionsResult | undefined
+
+    if (!optionsResult?.success) {
+      toast.error(t('sessionMenu.ompBranchFailed'), {
+        description: optionsResult?.error ?? t('toast.unknownError'),
+      })
+      return
+    }
+
+    const options = optionsResult.options ?? []
+    if (options.length === 0) {
+      toast.info(t('sessionMenu.ompNoBranchPoints'))
+      return
+    }
+
+    setOmpBranchDialog({ open: true, options })
   }, [isOmpSession, sessionId, t])
 
   const handoffOmpSession = React.useCallback(async () => {
@@ -349,5 +359,8 @@ export function useSessionMenuActions({
     branchOmpSession,
     handoffOmpSession,
     exportOmpSessionHtml,
+    ompBranchDialog,
+    closeOmpBranchDialog,
+    selectOmpBranchOption,
   }
 }

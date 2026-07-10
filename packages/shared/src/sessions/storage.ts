@@ -50,6 +50,15 @@ export type { OmpSessionLink, OmpSessionMismatch, OmpSessionMismatchReason, Sess
 // Directory Utilities
 // ============================================================
 
+function joinPreservingBaseStyle(basePath: string, ...segments: string[]): string {
+  const separator = basePath.includes('\\') && !basePath.includes('/') ? '\\' : '/';
+  const base = basePath.replace(/[\\/]+$/, '');
+  const cleanSegments = segments
+    .filter(Boolean)
+    .map(segment => segment.replace(/^[\\/]+|[\\/]+$/g, ''));
+  return [base, ...cleanSegments].filter(Boolean).join(separator);
+}
+
 /**
  * Ensure sessions directory exists for a workspace
  */
@@ -70,14 +79,14 @@ export function ensureSessionsDir(workspaceRootPath: string): string {
 export function getSessionPath(workspaceRootPath: string, sessionId: string): string {
   // Defense-in-depth: strip any path components from sessionId
   const safeSessionId = sanitizeSessionId(sessionId);
-  return join(getWorkspaceSessionsPath(workspaceRootPath), safeSessionId);
+  return joinPreservingBaseStyle(workspaceRootPath, 'sessions', safeSessionId);
 }
 
 /**
  * Get path to a session's JSONL file (inside session folder)
  */
 export function getSessionFilePath(workspaceRootPath: string, sessionId: string): string {
-  return join(getSessionPath(workspaceRootPath, sessionId), 'session.jsonl');
+  return joinPreservingBaseStyle(getSessionPath(workspaceRootPath, sessionId), 'session.jsonl');
 }
 
 /**
@@ -89,25 +98,25 @@ export function ensureSessionDir(workspaceRootPath: string, sessionId: string): 
     mkdirSync(sessionDir, { recursive: true });
   }
   // Also create plans, attachments, long_responses, and downloads directories
-  const plansDir = join(sessionDir, 'plans');
+  const plansDir = joinPreservingBaseStyle(sessionDir, 'plans');
   if (!existsSync(plansDir)) {
     mkdirSync(plansDir, { recursive: true });
   }
-  const attachmentsDir = join(sessionDir, 'attachments');
+  const attachmentsDir = joinPreservingBaseStyle(sessionDir, 'attachments');
   if (!existsSync(attachmentsDir)) {
     mkdirSync(attachmentsDir, { recursive: true });
   }
-  const longResponsesDir = join(sessionDir, 'long_responses');
+  const longResponsesDir = joinPreservingBaseStyle(sessionDir, 'long_responses');
   if (!existsSync(longResponsesDir)) {
     mkdirSync(longResponsesDir, { recursive: true });
   }
   // Data directory for transform_data tool output (JSON files for datatable/spreadsheet)
-  const dataDir = join(sessionDir, 'data');
+  const dataDir = joinPreservingBaseStyle(sessionDir, 'data');
   if (!existsSync(dataDir)) {
     mkdirSync(dataDir, { recursive: true });
   }
   // Downloads directory for binary files from API responses (PDFs, images, etc.)
-  const downloadsDir = join(sessionDir, 'downloads');
+  const downloadsDir = joinPreservingBaseStyle(sessionDir, 'downloads');
   if (!existsSync(downloadsDir)) {
     mkdirSync(downloadsDir, { recursive: true });
   }
@@ -118,28 +127,28 @@ export function ensureSessionDir(workspaceRootPath: string, sessionId: string): 
  * Get the attachments directory for a session
  */
 export function getSessionAttachmentsPath(workspaceRootPath: string, sessionId: string): string {
-  return join(getSessionPath(workspaceRootPath, sessionId), 'attachments');
+  return joinPreservingBaseStyle(getSessionPath(workspaceRootPath, sessionId), 'attachments');
 }
 
 /**
  * Get the plans directory for a session
  */
 export function getSessionPlansPath(workspaceRootPath: string, sessionId: string): string {
-  return join(getSessionPath(workspaceRootPath, sessionId), 'plans');
+  return joinPreservingBaseStyle(getSessionPath(workspaceRootPath, sessionId), 'plans');
 }
 
 /**
  * Get the data directory for a session (transform_data tool output)
  */
 export function getSessionDataPath(workspaceRootPath: string, sessionId: string): string {
-  return join(getSessionPath(workspaceRootPath, sessionId), 'data');
+  return joinPreservingBaseStyle(getSessionPath(workspaceRootPath, sessionId), 'data');
 }
 
 /**
  * Get the downloads directory for a session (binary files from API responses)
  */
 export function getSessionDownloadsPath(workspaceRootPath: string, sessionId: string): string {
-  return join(getSessionPath(workspaceRootPath, sessionId), 'downloads');
+  return joinPreservingBaseStyle(getSessionPath(workspaceRootPath, sessionId), 'downloads');
 }
 
 // ============================================================

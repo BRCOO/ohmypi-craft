@@ -13,6 +13,7 @@ import { tmpdir } from 'os';
 import { pathToFileURL } from 'url';
 
 const PREFS_MODULE = pathToFileURL(join(import.meta.dir, '..', 'preferences.ts')).href;
+const SUBPROCESS_TEST_TIMEOUT = 15_000;
 
 interface RunResult {
   exitCode: number;
@@ -42,9 +43,13 @@ function writeRawPrefs(prefsFile: string, contents: Record<string, unknown>) {
   writeFileSync(prefsFile, JSON.stringify(contents, null, 2), 'utf-8');
 }
 
+function subprocessIt(name: string, fn: () => void) {
+  return it(name, fn, SUBPROCESS_TEST_TIMEOUT);
+}
+
 describe('preferences.uiLanguage', () => {
   describe('getPersistedUiLanguage', () => {
-    it('returns undefined when the file does not exist', () => {
+    subprocessIt('returns undefined when the file does not exist', () => {
       const { configDir } = setupDir();
       try {
         const r = runScript(configDir, `
@@ -58,7 +63,7 @@ describe('preferences.uiLanguage', () => {
       }
     });
 
-    it('returns undefined when the field is missing', () => {
+    subprocessIt('returns undefined when the field is missing', () => {
       const { configDir, prefsFile } = setupDir();
       try {
         writeRawPrefs(prefsFile, { name: 'Alice' });
@@ -73,7 +78,7 @@ describe('preferences.uiLanguage', () => {
       }
     });
 
-    it('returns the code when valid', () => {
+    subprocessIt('returns the code when valid', () => {
       const { configDir, prefsFile } = setupDir();
       try {
         writeRawPrefs(prefsFile, { uiLanguage: 'es' });
@@ -88,7 +93,7 @@ describe('preferences.uiLanguage', () => {
       }
     });
 
-    it('returns undefined for unsupported codes (validates against the registry)', () => {
+    subprocessIt('returns undefined for unsupported codes (validates against the registry)', () => {
       const { configDir, prefsFile } = setupDir();
       try {
         writeRawPrefs(prefsFile, { uiLanguage: 'xx' });
@@ -105,7 +110,7 @@ describe('preferences.uiLanguage', () => {
   });
 
   describe('setPersistedUiLanguage', () => {
-    it('writes the value and getter reads it back', () => {
+    subprocessIt('writes the value and getter reads it back', () => {
       const { configDir, prefsFile } = setupDir();
       try {
         const r = runScript(configDir, `
@@ -121,18 +126,19 @@ describe('preferences.uiLanguage', () => {
       }
     });
 
-    it('is idempotent — does not rewrite the file when value is unchanged', () => {
+    subprocessIt('is idempotent — does not rewrite the file when value is unchanged', () => {
       const { configDir, prefsFile } = setupDir();
+      const prefsFileLiteral = JSON.stringify(prefsFile);
       try {
         const r = runScript(configDir, `
           import { setPersistedUiLanguage } from '${PREFS_MODULE}';
           import { statSync } from 'fs';
           setPersistedUiLanguage('hu');
-          const first = statSync('${prefsFile}').mtimeMs;
+          const first = statSync(${prefsFileLiteral}).mtimeMs;
           const start = Date.now();
           while (Date.now() - start < 30) {}
           setPersistedUiLanguage('hu');
-          const second = statSync('${prefsFile}').mtimeMs;
+          const second = statSync(${prefsFileLiteral}).mtimeMs;
           console.log(JSON.stringify({ first, second }));
         `);
         expect(r.exitCode).toBe(0);
@@ -143,7 +149,7 @@ describe('preferences.uiLanguage', () => {
       }
     });
 
-    it('preserves unrelated fields', () => {
+    subprocessIt('preserves unrelated fields', () => {
       const { configDir, prefsFile } = setupDir();
       try {
         writeRawPrefs(prefsFile, { name: 'Alice', timezone: 'Europe/Budapest' });
@@ -163,7 +169,7 @@ describe('preferences.uiLanguage', () => {
   });
 
   describe('resolveTitleLanguageName', () => {
-    it('returns undefined when no UI language is persisted (so titles auto-detect)', () => {
+    subprocessIt('returns undefined when no UI language is persisted (so titles auto-detect)', () => {
       const { configDir } = setupDir();
       try {
         const r = runScript(configDir, `
@@ -177,7 +183,7 @@ describe('preferences.uiLanguage', () => {
       }
     });
 
-    it('maps a persisted code to its native language name', () => {
+    subprocessIt('maps a persisted code to its native language name', () => {
       const { configDir, prefsFile } = setupDir();
       try {
         writeRawPrefs(prefsFile, { uiLanguage: 'es' });
@@ -192,7 +198,7 @@ describe('preferences.uiLanguage', () => {
       }
     });
 
-    it('resolves the Chinese native name (the #885 motivating case)', () => {
+    subprocessIt('resolves the Chinese native name (the #885 motivating case)', () => {
       const { configDir, prefsFile } = setupDir();
       try {
         writeRawPrefs(prefsFile, { uiLanguage: 'zh-Hans' });
@@ -207,7 +213,7 @@ describe('preferences.uiLanguage', () => {
       }
     });
 
-    it('honors an explicit English UI language (returns "English", not auto-detect)', () => {
+    subprocessIt('honors an explicit English UI language (returns "English", not auto-detect)', () => {
       const { configDir, prefsFile } = setupDir();
       try {
         writeRawPrefs(prefsFile, { uiLanguage: 'en' });
@@ -222,7 +228,7 @@ describe('preferences.uiLanguage', () => {
       }
     });
 
-    it('returns undefined for an unsupported persisted code', () => {
+    subprocessIt('returns undefined for an unsupported persisted code', () => {
       const { configDir, prefsFile } = setupDir();
       try {
         writeRawPrefs(prefsFile, { uiLanguage: 'xx' });
@@ -239,7 +245,7 @@ describe('preferences.uiLanguage', () => {
   });
 
   describe('legacy `language` field scrubbing', () => {
-    it('loadPreferences strips legacy free-text language on read', () => {
+    subprocessIt('loadPreferences strips legacy free-text language on read', () => {
       const { configDir, prefsFile } = setupDir();
       try {
         writeRawPrefs(prefsFile, { name: 'Alice', language: 'Hungarian' });
@@ -256,7 +262,7 @@ describe('preferences.uiLanguage', () => {
       }
     });
 
-    it('the next write drops the legacy language field from disk', () => {
+    subprocessIt('the next write drops the legacy language field from disk', () => {
       const { configDir, prefsFile } = setupDir();
       try {
         writeRawPrefs(prefsFile, { name: 'Alice', language: 'Hungarian' });
