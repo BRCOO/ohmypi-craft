@@ -231,7 +231,7 @@ describe('useInlineSlashCommand OMP runtime filtering', () => {
     expect(sectionIds).toContain('omp-tools')
   })
 
-  it('hides runtime OMP commands from the zero-query menu', () => {
+  it('shows discovered skills in the zero-query menu while keeping other runtime commands searchable', () => {
     const hook = renderHook({
       inputRef: { current: null },
       onSelectCommand: () => {},
@@ -243,7 +243,27 @@ describe('useInlineSlashCommand OMP runtime filtering', () => {
     })
     const sectionIds = hook.sections.map(s => s.id)
 
-    expect(sectionIds).not.toContain('omp-skills')
+    expect(sectionIds).toContain('omp-skills')
+  })
+
+  it('falls back to Feature Center skill inventory when the Craft skill loader is empty', () => {
+    const hook = renderHook({
+      inputRef: { current: null },
+      onSelectCommand: () => {},
+      onSelectFolder: () => {},
+      isOmpSession: true,
+      ompFeatureCenterState: buildMockState({
+        skills: {
+          count: 1,
+          sourcePaths: [],
+          items: [{ name: 'state-skill', path: 'C:/state-skill/SKILL.md', level: 'user', description: 'From state' }],
+          usageHint: '/skill:<name>',
+        },
+      }),
+      ompModelCount: 1,
+    })
+
+    expect(getCommand(hook.sections, 'omp:skill:state-skill')?.description).toBe('From state')
   })
 
   it('filters out commands marked as hidden or needs-upstream-rpc', () => {

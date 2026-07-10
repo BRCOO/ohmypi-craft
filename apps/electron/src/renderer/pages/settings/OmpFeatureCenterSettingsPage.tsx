@@ -16,7 +16,7 @@ import {
   OMP_FEATURE_CENTER_SECTION_EVENT,
   type OmpFeatureCenterSection,
 } from '@/lib/omp-feature-center-navigation'
-import { publishOmpFeatureCenterState } from '@/lib/omp-feature-center-state'
+import { invalidateOmpFeatureCenterState, loadCachedOmpFeatureCenterState, publishOmpFeatureCenterState } from '@/lib/omp-feature-center-state'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import type { LlmConnectionWithStatus, OmpFeatureCapabilityDto, OmpFeatureCenterStateDto, OmpFeatureModelRoleDto, OmpFeatureUnavailableCommandDto, SaveOmpFeatureCenterConfigInput } from '../../../shared/types'
 
@@ -122,6 +122,7 @@ function sourceLabel(source: string): string {
 }
 
 function SourceBadge({ source, overridden }: { source: string; overridden?: boolean }) {
+  const { t } = useTranslation()
   return (
     <span
       className={cn(
@@ -135,13 +136,18 @@ function SourceBadge({ source, overridden }: { source: string; overridden?: bool
               : 'bg-muted text-muted-foreground'
       )}
     >
-      {overridden ? 'project override' : sourceLabel(source)}
+      {overridden ? t('omp.featureCenter.source.project') : t(`omp.featureCenter.source.${source}`, { defaultValue: sourceLabel(source) })}
     </span>
   )
 }
 
-function valueOrDash(value: string | undefined): string {
-  return value?.trim() ? value : 'Not set'
+function valueOrDash(value: string | undefined, fallback = 'Not set'): string {
+  return value?.trim() ? value : fallback
+}
+
+function localizedRoleLabel(role: OmpFeatureModelRoleDto, t: ReturnType<typeof useTranslation>['t']): string {
+  const key = `omp.featureCenter.role.${role.role}`
+  return t(key, { defaultValue: role.label })
 }
 
 function pathSummary(paths: Array<{ path: string; exists: boolean; parseError?: string }>): string {
@@ -151,7 +157,7 @@ function pathSummary(paths: Array<{ path: string; exists: boolean; parseError?: 
 }
 
 export function capabilityUsageCopy(title: string, usageHint: string): string {
-  if (title === 'Skills') return '/skill:<name>'
+  if (title === 'Skills' || title === '技能') return '/skill:<name>'
   if (title === 'MCP') return '/mcp list\n/mcp resources\n/mcp prompts\n/mcp reload'
   return usageHint
 }
@@ -291,17 +297,18 @@ function PathActions({
   label: string
   workspaceId?: string | null
 }) {
+  const { t } = useTranslation()
   if (!path) return null
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <MiniActionButton icon={ClipboardCopy} onClick={() => void copyText(path, `${label} path`)}>
-        Copy path
+        {t('omp.featureCenter.pathCopy')}
       </MiniActionButton>
       <MiniActionButton icon={ExternalLink} disabled={exists === false} onClick={() => void openFeatureCenterPath(workspaceId, path, 'open')}>
-        Open
+        {t('omp.featureCenter.open')}
       </MiniActionButton>
       <MiniActionButton icon={FolderOpen} disabled={exists === false} onClick={() => void openFeatureCenterPath(workspaceId, path, 'reveal')}>
-        Reveal
+        {t('omp.featureCenter.reveal')}
       </MiniActionButton>
     </div>
   )
@@ -318,6 +325,7 @@ export function CapabilityCard({
   capability: OmpFeatureCapabilityDto
   workspaceId?: string | null
 }) {
+  const { t } = useTranslation()
   const visibleItems = capability.items.slice(0, 8)
   const copyUsage = capabilityUsageCopy(title, capability.usageHint)
   return (
@@ -328,7 +336,7 @@ export function CapabilityCard({
         </span>
         <div className="min-w-0">
           <div className="text-sm font-medium">{title}</div>
-          <div className="text-xs text-muted-foreground">{capability.count} discovered</div>
+          <div className="text-xs text-muted-foreground">{t('omp.featureCenter.discovered', { count: capability.count })}</div>
         </div>
       </div>
       <div className="space-y-1.5">
@@ -348,7 +356,7 @@ export function CapabilityCard({
                 <button
                   type="button"
                   className="text-muted-foreground hover:text-foreground"
-                  title={`Reveal ${item.name}`}
+                  title={`${t('omp.featureCenter.reveal')} ${item.name}`}
                   onClick={() => void openFeatureCenterPath(workspaceId, item.path, 'reveal')}
                 >
                   <FolderOpen className="size-3.5" />
@@ -357,22 +365,22 @@ export function CapabilityCard({
             </div>
           ))
         ) : (
-          <div className="text-xs text-muted-foreground">No entries discovered.</div>
+          <div className="text-xs text-muted-foreground">{t('omp.featureCenter.emptyEntries')}</div>
         )}
       </div>
       {capability.count > visibleItems.length && (
-        <div className="mt-2 text-xs text-muted-foreground">+{capability.count - visibleItems.length} more</div>
+        <div className="mt-2 text-xs text-muted-foreground">+{capability.count - visibleItems.length} {t('common.more')}</div>
       )}
       <div className="mt-3 rounded-md bg-muted/50 px-2 py-1.5 text-xs text-muted-foreground">
         {capability.usageHint}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <MiniActionButton icon={ClipboardCopy} onClick={() => void copyText(copyUsage, `${title} usage`)}>
-          Copy usage
+          {t('omp.featureCenter.copyUsage')}
         </MiniActionButton>
         {capability.sourcePaths.find(path => path.exists)?.path && (
           <MiniActionButton icon={FolderOpen} onClick={() => void openFeatureCenterPath(workspaceId, capability.sourcePaths.find(path => path.exists)!.path, 'reveal')}>
-            Reveal source
+            {t('omp.featureCenter.pathRevealSource')}
           </MiniActionButton>
         )}
       </div>
@@ -392,6 +400,7 @@ export function UsageGuideCard({
   description: string
   command?: string
 }) {
+  const { t } = useTranslation()
   return (
     <div className="rounded-lg border border-border/60 bg-background/70 p-3">
       <div className="text-sm font-medium">{title}</div>
@@ -402,7 +411,7 @@ export function UsageGuideCard({
           <button
             type="button"
             className="shrink-0 text-muted-foreground hover:text-foreground"
-            title={`Copy ${title}`}
+            title={`${t('common.copy')} ${title}`}
             onClick={() => void copyText(command, title)}
           >
             <ClipboardCopy className="size-3.5" />
@@ -414,6 +423,7 @@ export function UsageGuideCard({
 }
 
 export function UnavailableCommandList({ commands }: { commands: OmpFeatureUnavailableCommandDto[] }) {
+  const { t } = useTranslation()
   if (commands.length === 0) return null
   return (
     <div className="space-y-2">
@@ -428,12 +438,12 @@ export function UnavailableCommandList({ commands }: { commands: OmpFeatureUnava
                 ? 'bg-blue-500/12 text-blue-700 dark:text-blue-200'
                 : 'bg-amber-500/12 text-amber-700 dark:text-amber-200'
             )}>
-              {command.status === 'desktop-equivalent' ? 'desktop equivalent' : 'hidden'}
+              {command.status === 'desktop-equivalent' ? t('omp.featureCenter.desktopEquivalent') : t('omp.featureCenter.hidden')}
             </span>
           </div>
           <div className="mt-1 text-xs leading-relaxed text-muted-foreground">{command.reason}</div>
           {command.alternative && (
-            <div className="mt-1 text-xs leading-relaxed text-muted-foreground">Alternative: {command.alternative}</div>
+            <div className="mt-1 text-xs leading-relaxed text-muted-foreground">{t('omp.featureCenter.alternative')}: {command.alternative}</div>
           )}
         </div>
       ))}
@@ -464,40 +474,41 @@ export function AdvisorRosterEditor({
   onAddAdvisor: () => void
   onRemoveAdvisor: (id: string) => void
 }) {
+  const { t } = useTranslation()
   return (
     <div className="space-y-3">
       <div className="flex flex-col gap-2 rounded-lg border border-border/50 bg-muted/25 p-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <div className="text-sm font-medium">WATCHDOG.yml editor</div>
+          <div className="text-sm font-medium">{t('omp.featureCenter.advisorRosterEditor')}</div>
           <div className="truncate text-xs text-muted-foreground" title={editablePath}>
-            Global roster: {editablePath}
+            {t('omp.featureCenter.globalRoster')}: {editablePath}
           </div>
         </div>
         <PathActions workspaceId={workspaceId} path={editablePath} exists={exists} label="WATCHDOG.yml" />
       </div>
-      {parseError && <ErrorCard message={`WATCHDOG.yml parse error: ${parseError}`} />}
+      {parseError && <ErrorCard message={t('omp.featureCenter.advisorRosterParseError', { message: parseError })} />}
       <div className="space-y-1.5">
-        <label className="text-xs font-medium text-muted-foreground">Shared instructions</label>
+        <label className="text-xs font-medium text-muted-foreground">{t('omp.featureCenter.sharedInstructions')}</label>
         <textarea
           value={draft.instructions}
           onChange={event => onInstructionsChange(event.target.value)}
           disabled={disabled}
           rows={4}
-          placeholder="Optional shared instructions for all advisors"
+          placeholder={t('omp.featureCenter.sharedInstructionsPlaceholder')}
           className="w-full rounded-md border border-input bg-muted/50 px-3 py-2 text-sm shadow-xs outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
         />
       </div>
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2">
-          <div className="text-xs font-medium text-muted-foreground">Advisors</div>
+          <div className="text-xs font-medium text-muted-foreground">{t('omp.featureCenter.advisorRoster')}</div>
           <Button type="button" variant="outline" size="sm" className="h-7 gap-1.5 px-2 text-xs" disabled={disabled} onClick={onAddAdvisor}>
             <Plus className="size-3.5" />
-            Add advisor
+            {t('omp.featureCenter.addAdvisor')}
           </Button>
         </div>
         {draft.advisors.length === 0 ? (
           <div className="rounded-md border border-dashed border-border/70 px-3 py-3 text-xs text-muted-foreground">
-            No global advisors yet. Add one to write it into WATCHDOG.yml.
+            {t('omp.featureCenter.advisorRosterNoConfig')}
           </div>
         ) : (
           draft.advisors.map(advisor => (
@@ -507,21 +518,21 @@ export function AdvisorRosterEditor({
                   value={advisor.name}
                   disabled={disabled}
                   onChange={event => onAdvisorChange(advisor.id, { name: event.target.value })}
-                  placeholder="Name"
+                  placeholder={t('common.name')}
                   className="h-8 bg-muted/50 text-xs"
                 />
                 <Input
                   value={advisor.model}
                   disabled={disabled}
                   onChange={event => onAdvisorChange(advisor.id, { model: event.target.value })}
-                  placeholder="provider/model or blank"
+                  placeholder={t('omp.modelRoles.modelIdPlaceholder')}
                   className="h-8 bg-muted/50 text-xs"
                 />
                 <Input
                   value={advisor.tools}
                   disabled={disabled}
                   onChange={event => onAdvisorChange(advisor.id, { tools: event.target.value })}
-                  placeholder="tools, comma separated"
+                  placeholder={t('omp.featureCenter.toolsPlaceholder')}
                   className="h-8 bg-muted/50 text-xs"
                 />
                 <Button
@@ -540,7 +551,7 @@ export function AdvisorRosterEditor({
                 onChange={event => onAdvisorChange(advisor.id, { instructions: event.target.value })}
                 disabled={disabled}
                 rows={2}
-                placeholder="Optional advisor-specific instructions"
+                placeholder={t('omp.featureCenter.advisorSpecificInstructionsPlaceholder')}
                 className="w-full rounded-md border border-input bg-muted/50 px-3 py-2 text-xs shadow-xs outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
               />
             </div>
@@ -811,19 +822,20 @@ export function RoleRow({
   modelOptions?: OmpModelRoleOption[]
   onChange: (role: string, value: string) => void
 }) {
+  const { t } = useTranslation()
   return (
     <div className="grid grid-cols-[minmax(120px,1fr)_minmax(180px,2fr)] gap-3 px-4 py-3.5 sm:grid-cols-[160px_minmax(360px,1fr)_auto]">
       <div className="min-w-0">
         <div className="flex items-center gap-2">
-          <div className="truncate text-sm font-medium">{role.label}</div>
+          <div className="truncate text-sm font-medium">{localizedRoleLabel(role, t)}</div>
           <SourceBadge source={role.source} overridden={role.projectOverridden} />
         </div>
         <div className="mt-1 truncate text-xs text-muted-foreground">
-          Effective: {valueOrDash(role.effectiveValue)}
+          {t('omp.featureCenter.effectiveValue')}: {valueOrDash(role.effectiveValue, t('omp.featureCenter.notSet'))}
         </div>
         {role.projectOverridden && (
           <div className="mt-1 text-xs text-violet-700 dark:text-violet-200">
-            Saving global config will not change the effective value until the project override changes.
+            {t('omp.featureCenter.projectOverrideWarning')}
           </div>
         )}
       </div>
@@ -834,7 +846,7 @@ export function RoleRow({
         onChange={(nextValue) => onChange(role.role, nextValue)}
       />
       <div className="hidden min-w-[120px] text-right text-xs text-muted-foreground sm:block">
-        Global: {valueOrDash(role.globalValue)}
+        {t('omp.featureCenter.globalConfig')}: {valueOrDash(role.globalValue, t('omp.featureCenter.notSet'))}
       </div>
     </div>
   )
@@ -879,14 +891,17 @@ export default function OmpFeatureCenterSettingsPage() {
     setAdvisorSubagents(next.advisor.subagents.globalValue ?? next.advisor.subagents.effectiveValue)
   }, [])
 
-  const loadState = React.useCallback(async () => {
+  const loadState = React.useCallback(async (force = false) => {
     if (!window.electronAPI?.getOmpFeatureCenterState) return
+    if (force) invalidateOmpFeatureCenterState(activeWorkspaceId)
     setLoading(true)
     setError(null)
     try {
-      const next = await window.electronAPI.getOmpFeatureCenterState(activeWorkspaceId)
+      const next = await loadCachedOmpFeatureCenterState(
+        activeWorkspaceId,
+        workspaceId => window.electronAPI!.getOmpFeatureCenterState(workspaceId),
+      )
       setState(next)
-      publishOmpFeatureCenterState(activeWorkspaceId, next)
       hydrateDraft(next)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -1012,13 +1027,13 @@ export default function OmpFeatureCenterSettingsPage() {
         title={t('settings.omp.title')}
         actions={(
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={loadState} disabled={loading || saving}>
+            <Button variant="outline" size="sm" onClick={() => void loadState(true)} disabled={loading || saving}>
               <RefreshCw className={cn('mr-1.5 size-3.5', loading && 'animate-spin')} />
-              Refresh
+              {t('omp.featureCenter.refresh')}
             </Button>
             <Button size="sm" onClick={save} disabled={saveDisabled}>
               <Save className="mr-1.5 size-3.5" />
-              {saving ? 'Saving...' : 'Save'}
+              {saving ? t('omp.featureCenter.saving') : t('omp.featureCenter.save')}
             </Button>
           </div>
         )}
@@ -1030,12 +1045,12 @@ export default function OmpFeatureCenterSettingsPage() {
             {loading && !state ? (
               <SettingsCard>
                 <SettingsCardContent>
-                  <div className="text-sm text-muted-foreground">Loading OMP configuration...</div>
+                  <div className="text-sm text-muted-foreground">{t('omp.featureCenter.loading')}</div>
                 </SettingsCardContent>
               </SettingsCard>
             ) : state && (
               <>
-                <SettingsSection title="Runtime" description="The OMP binary and configuration sources used by this desktop.">
+                <SettingsSection title={t('omp.featureCenter.runtime')} description={t('omp.featureCenter.runtimeDescription')}>
                   <SettingsCard>
                     <SettingsCardContent className="space-y-3">
                       <div className="flex flex-wrap items-center gap-2">
@@ -1046,7 +1061,7 @@ export default function OmpFeatureCenterSettingsPage() {
                             : 'bg-amber-500/12 text-amber-700 dark:text-amber-200'
                         )}>
                           <Cpu className="mr-1.5 size-3.5" />
-                          {state.runtime.available ? 'OMP available' : 'OMP unavailable'}
+                          {state.runtime.available ? t('omp.featureCenter.ompAvailable') : t('omp.featureCenter.ompUnavailable')}
                         </span>
                         {state.runtime.version && (
                           <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
@@ -1055,34 +1070,34 @@ export default function OmpFeatureCenterSettingsPage() {
                         )}
                         {dirty && (
                           <span className="rounded-full bg-blue-500/12 px-2.5 py-1 text-xs font-medium text-blue-700 dark:text-blue-200">
-                            unsaved changes
+                            {t('omp.featureCenter.unsavedChanges')}
                           </span>
                         )}
                       </div>
                       {state.runtime.error && <ErrorCard message={state.runtime.error} />}
                       <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
-                        <div className="truncate" title={state.runtime.rawCommand}>Command: {state.runtime.rawCommand || state.runtime.executablePath || 'Not resolved'}</div>
-                        <div className="truncate" title={state.runtime.globalConfigPath}>Global config: {state.runtime.globalConfigPath}</div>
-                        <div className="truncate" title={state.runtime.projectRootPath}>Project root: {state.runtime.projectRootPath || 'No active workspace'}</div>
-                        <div className="truncate" title={state.runtime.projectConfigPath}>Project config: {state.runtime.projectConfigPath || 'None'}</div>
+                        <div className="truncate" title={state.runtime.rawCommand}>{t('omp.featureCenter.command')}: {state.runtime.rawCommand || state.runtime.executablePath || t('omp.featureCenter.notResolved')}</div>
+                        <div className="truncate" title={state.runtime.globalConfigPath}>{t('omp.featureCenter.globalConfig')}: {state.runtime.globalConfigPath}</div>
+                        <div className="truncate" title={state.runtime.projectRootPath}>{t('omp.featureCenter.projectRoot')}: {state.runtime.projectRootPath || t('omp.featureCenter.noActiveWorkspace')}</div>
+                        <div className="truncate" title={state.runtime.projectConfigPath}>{t('omp.featureCenter.projectConfig')}: {state.runtime.projectConfigPath || t('omp.featureCenter.projectConfigNone')}</div>
                       </div>
                       <div className="flex flex-col gap-2 rounded-lg border border-border/50 bg-muted/25 p-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0 text-xs text-muted-foreground">
-                          Open or reveal OMP config files directly when you need to edit advanced OMP-only options.
+                          {t('omp.featureCenter.openOrRevealConfig')}
                         </div>
                         <div className="flex flex-wrap gap-2">
                           <PathActions workspaceId={activeWorkspaceId} path={state.runtime.globalConfigPath} exists={state.config.global.exists} label="Global config" />
                           <PathActions workspaceId={activeWorkspaceId} path={state.runtime.projectConfigPath} exists={state.config.project?.exists} label="Project config" />
                         </div>
                       </div>
-                      {globalParseError && <ErrorCard message={`Global config parse error: ${globalParseError}`} />}
-                      {projectParseError && <ErrorCard message={`Project config parse error: ${projectParseError}`} />}
+                      {globalParseError && <ErrorCard message={t('omp.featureCenter.globalParseError', { message: globalParseError })} />}
+                      {projectParseError && <ErrorCard message={t('omp.featureCenter.projectParseError', { message: projectParseError })} />}
                     </SettingsCardContent>
                   </SettingsCard>
                 </SettingsSection>
 
                 <div ref={modelsSectionRef} tabIndex={-1} className="outline-none">
-                  <SettingsSection title="Model Roles" description="Edit global OMP role bindings. Project overrides are shown but not edited here.">
+                  <SettingsSection title={t('omp.featureCenter.modelRoles')} description={t('omp.featureCenter.modelRolesDescription')}>
                     <SettingsCard>
                       {state.modelRoles.common.map(role => (
                         <RoleRow
@@ -1100,7 +1115,7 @@ export default function OmpFeatureCenterSettingsPage() {
                         className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm text-muted-foreground hover:bg-muted/50"
                       >
                         {advancedOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-                        Advanced roles
+                        {t('omp.featureCenter.advancedRoles')}
                       </button>
                       {advancedOpen && state.modelRoles.advanced.map(role => (
                         <RoleRow
@@ -1117,18 +1132,18 @@ export default function OmpFeatureCenterSettingsPage() {
                 </div>
 
                 <div ref={advisorSectionRef} tabIndex={-1} className="outline-none">
-                  <SettingsSection title="Advisor" description="Configure OMP Advisor toggles and the global multi-advisor WATCHDOG.yml roster. Project rosters remain read-only overlays.">
+                  <SettingsSection title={t('omp.featureCenter.advisor')} description={t('omp.featureCenter.advisorDescription')}>
                     <SettingsCard>
                       <SettingsToggle
-                        label="Enable Advisor"
-                        description="Turn on OMP's second-opinion reviewer for future OMP sessions."
+                        label={t('omp.featureCenter.advisorEnabled')}
+                        description={t('omp.featureCenter.advisorEnabledDescription')}
                         checked={advisorEnabled}
                         disabled={saving || !!globalParseError}
                         onCheckedChange={setAdvisorEnabled}
                       />
                       <SettingsToggle
-                        label="Advisor subagents"
-                        description="Allow Advisor to run through OMP subagent infrastructure."
+                        label={t('omp.featureCenter.advisorSubagents')}
+                        description={t('omp.featureCenter.advisorSubagentsDescription')}
                         checked={advisorSubagents}
                         disabled={saving || !!globalParseError}
                         onCheckedChange={setAdvisorSubagents}
@@ -1148,27 +1163,27 @@ export default function OmpFeatureCenterSettingsPage() {
                         />
                         <div className="mb-2 mt-4 flex items-center gap-2 text-sm font-medium">
                           <BrainCircuit className="size-4 text-violet-500" />
-                          Effective roster
+                          {t('omp.featureCenter.effectiveRoster')}
                         </div>
                         {state.advisor.roster.advisors.length > 0 ? (
                           <div className="space-y-1.5">
                             {state.advisor.roster.advisors.map(advisor => (
                               <div key={`${advisor.path}-${advisor.name}`} className="flex items-center justify-between gap-2 rounded-md bg-muted/40 px-2 py-1.5 text-xs">
                                 <span className="font-medium">{advisor.name}</span>
-                                <span className="truncate text-muted-foreground">{advisor.model || 'uses advisor role'}</span>
+                                <span className="truncate text-muted-foreground">{advisor.model || t('omp.featureCenter.usesAdvisorRole')}</span>
                                 {advisor.level && <SourceBadge source={advisor.level} />}
                               </div>
                             ))}
                           </div>
                         ) : (
-                          <div className="text-sm text-muted-foreground">No WATCHDOG.yml roster configured.</div>
+                          <div className="text-sm text-muted-foreground">{t('omp.featureCenter.noRoster')}</div>
                         )}
                         <div className="mt-2 truncate text-xs text-muted-foreground" title={pathSummary(state.advisor.roster.paths)}>
                           {pathSummary(state.advisor.roster.paths)}
                         </div>
                         {state.advisor.roster.parseErrors.length > 0 && (
                           <div className="mt-2 rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-200">
-                            {state.advisor.roster.parseErrors.length} roster file(s) could not be parsed.
+                            {t('omp.featureCenter.rosterParseErrors', { count: state.advisor.roster.parseErrors.length })}
                           </div>
                         )}
                       </SettingsCardContent>
@@ -1176,49 +1191,49 @@ export default function OmpFeatureCenterSettingsPage() {
                   </SettingsSection>
                 </div>
 
-                <SettingsSection title="How to use OMP features" description="Quick answers for Skills, MCP, agents, Advisor, and the plan model role.">
+                <SettingsSection title={t('omp.featureCenter.howToUse')} description={t('omp.featureCenter.howToUseDescription')}>
                   <div className="grid gap-3 md:grid-cols-2">
                     <UsageGuideCard
-                      title="Call a Skill"
-                      description="Use OMP slash commands in chat. Pick a discovered skill name from the Skills card below."
+                      title={t('omp.featureCenter.guideSkillTitle')}
+                      description={t('omp.featureCenter.guideSkillDescription')}
                       command="/skill:<name>"
                     />
                     <UsageGuideCard
-                      title="Inspect MCP"
-                      description="OMP MCP remains separate from Craft Sources. Use these commands to list servers, resources, prompts, and reload."
+                      title={t('omp.featureCenter.guideMcpTitle')}
+                      description={t('omp.featureCenter.guideMcpDescription')}
                       command={'/mcp list\n/mcp resources\n/mcp prompts\n/mcp reload'}
                     />
                     <UsageGuideCard
-                      title="Configure Advisor"
-                      description="Set modelRoles.advisor in Model Roles, then enable Advisor and Advisor subagents in this page. Multi-advisor rosters can be edited in the WATCHDOG.yml editor above."
+                      title={t('omp.featureCenter.guideAdvisorTitle')}
+                      description={t('omp.featureCenter.guideAdvisorDescription')}
                     />
                     <UsageGuideCard
-                      title="Configure Plan model"
-                      description="Set modelRoles.plan in Model Roles. Native OMP /plan controls stay hidden until OMP exposes stable RPC state and review commands."
+                      title={t('omp.featureCenter.guidePlanTitle')}
+                      description={t('omp.featureCenter.guidePlanDescription')}
                     />
                     <UsageGuideCard
-                      title="Configure multiple agents"
-                      description="Place Markdown agent definitions under project .omp/agents or user ~/.omp/agent/agents. This page discovers and reveals them, but does not edit agent files."
+                      title={t('omp.featureCenter.guideAgentsTitle')}
+                      description={t('omp.featureCenter.guideAgentsDescription')}
                     />
                   </div>
                 </SettingsSection>
 
-                <SettingsSection title="OMP Capabilities" description="Read-only discovery for OMP-specific surfaces. Craft Sources remain separate.">
+                <SettingsSection title={t('omp.featureCenter.capabilities')} description={t('omp.featureCenter.capabilitiesDescription')}>
                   <div className="grid gap-3 md:grid-cols-3">
                     <div ref={skillsSectionRef} tabIndex={-1} className="outline-none">
-                      <CapabilityCard workspaceId={activeWorkspaceId} icon={Sparkles} title="Skills" capability={state.skills} />
+                      <CapabilityCard workspaceId={activeWorkspaceId} icon={Sparkles} title={t('omp.featureCenter.skills')} capability={state.skills} />
                     </div>
                     <div ref={mcpSectionRef} tabIndex={-1} className="outline-none">
-                      <CapabilityCard workspaceId={activeWorkspaceId} icon={ServerCog} title="MCP" capability={state.mcp} />
+                      <CapabilityCard workspaceId={activeWorkspaceId} icon={ServerCog} title={t('omp.featureCenter.mcp')} capability={state.mcp} />
                     </div>
                     <div ref={agentsSectionRef} tabIndex={-1} className="outline-none">
-                      <CapabilityCard workspaceId={activeWorkspaceId} icon={Bot} title="Agents" capability={state.agents} />
+                      <CapabilityCard workspaceId={activeWorkspaceId} icon={Bot} title={t('omp.featureCenter.agents')} capability={state.agents} />
                     </div>
                   </div>
                 </SettingsSection>
 
                 <div ref={nativePlanSectionRef} tabIndex={-1} className="outline-none">
-                  <SettingsSection title="Native Plan" description="Current desktop support for OMP native /plan.">
+                  <SettingsSection title={t('omp.featureCenter.nativePlan')} description={t('omp.featureCenter.nativePlanDescription')}>
                     <SettingsCard>
                       <SettingsCardContent>
                         <div className="flex items-start gap-3">
@@ -1227,20 +1242,22 @@ export default function OmpFeatureCenterSettingsPage() {
                           </span>
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
-                              <div className="text-sm font-medium">Plan model: {valueOrDash(state.nativePlan.modelRole)}</div>
+                               <div className="text-sm font-medium">{t('omp.featureCenter.planModel', { model: valueOrDash(state.nativePlan.modelRole, t('omp.featureCenter.notSet')) })}</div>
                               <span className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-200">
-                                {state.nativePlan.toggleAvailable ? 'RPC available' : 'RPC hidden'}
+                                 {state.nativePlan.toggleAvailable ? t('omp.featureCenter.planRpcAvailable') : t('omp.featureCenter.planRpcHidden')}
                               </span>
                               <span className="rounded-full bg-blue-500/12 px-2 py-0.5 text-[11px] font-medium text-blue-700 dark:text-blue-200">
-                                approval UI: {state.nativePlan.approvalUi === 'extension-ui-if-emitted' ? 'ready if emitted' : 'not exposed'}
+                                 {state.nativePlan.approvalUi === 'extension-ui-if-emitted' ? t('omp.featureCenter.planApprovalReady') : t('omp.featureCenter.planApprovalNotExposed')}
                               </span>
                             </div>
-                            <div className="mt-1 text-sm text-muted-foreground">{state.nativePlan.message}</div>
+                             <div className="mt-1 text-sm text-muted-foreground">
+                               {state.nativePlan.toggleAvailable ? state.nativePlan.message : t('omp.featureCenter.nativePlanUnavailableMessage')}
+                             </div>
                             {state.nativePlan.unavailableReason && (
                               <div className="mt-2 text-xs text-muted-foreground">{state.nativePlan.unavailableReason}</div>
                             )}
                             <div className="mt-2 text-xs text-muted-foreground">
-                              RPC commands exposed: {state.nativePlan.rpcCommands.length > 0 ? state.nativePlan.rpcCommands.join(', ') : 'none'}
+                               {t('omp.featureCenter.rpcCommandsExposed')}: {state.nativePlan.rpcCommands.length > 0 ? state.nativePlan.rpcCommands.join(', ') : t('omp.featureCenter.noEntries')}
                             </div>
                           </div>
                         </div>
@@ -1249,7 +1266,7 @@ export default function OmpFeatureCenterSettingsPage() {
                   </SettingsSection>
                 </div>
 
-                <SettingsSection title="Hidden TUI-only commands" description="OMP commands that are not shown in slash autocomplete because the current RPC protocol cannot execute them directly.">
+                <SettingsSection title={t('omp.featureCenter.hiddenCommands')} description={t('omp.featureCenter.hiddenCommandsDescription')}>
                   <SettingsCard>
                     <SettingsCardContent>
                       <div className="mb-3 flex items-start gap-3">
@@ -1257,9 +1274,9 @@ export default function OmpFeatureCenterSettingsPage() {
                           <EyeOff className="size-4" />
                         </span>
                         <div className="min-w-0">
-                          <div className="text-sm font-medium">No fake slash entries</div>
+                           <div className="text-sm font-medium">{t('omp.featureCenter.noFakeSlashEntries')}</div>
                           <div className="mt-1 text-sm text-muted-foreground">
-                            The composer only lists commands returned by OMP RPC get_available_commands. TUI-only commands stay hidden unless we provide a real desktop equivalent.
+                             {t('omp.featureCenter.noFakeSlashEntriesDescription')}
                           </div>
                         </div>
                       </div>

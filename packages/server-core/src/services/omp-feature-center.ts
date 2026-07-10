@@ -363,10 +363,13 @@ async function scanSkillDescription(skillPath: string): Promise<string | undefin
 
 async function scanSkills(options: OmpFeatureCenterOptions, agentDir: string): Promise<OmpFeatureCapabilityDto> {
   const projectRoot = resolveProjectRoot(options)
+  const globalAgentsSkillsDir = resolve(join(options.homeDir ?? homedir(), '.agents', 'skills'))
   const dirs = uniquePaths([
     ...ancestorDirs(projectRoot, options.workspaceRootPath).map(dir => join(dir, '.omp', 'skills')),
+    ...ancestorDirs(projectRoot, options.workspaceRootPath).map(dir => join(dir, '.agents', 'skills')),
     join(agentDir, 'skills'),
     join(agentDir, 'managed-skills'),
+    globalAgentsSkillsDir,
   ])
   const sourcePaths: OmpFeatureConfigPathDto[] = []
   const items: OmpFeatureCapabilityItemDto[] = []
@@ -382,7 +385,7 @@ async function scanSkills(options: OmpFeatureCenterOptions, agentDir: string): P
       items.push({
         name,
         path: skillPath,
-        level: dir.startsWith(agentDir) ? 'user' : 'project',
+        level: dir === globalAgentsSkillsDir || dir.startsWith(agentDir) ? 'user' : 'project',
         description: await scanSkillDescription(skillPath),
       })
     }

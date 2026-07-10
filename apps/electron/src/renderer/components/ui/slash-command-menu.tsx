@@ -6,7 +6,7 @@ import { Bot, BrainCircuit, Check, Cpu, ListChecks, Minimize2, ServerCog, Sparkl
 import { Icon_Folder } from '@craft-agent/ui'
 import { cn } from '@/lib/utils'
 import { PERMISSION_MODE_CONFIG, PERMISSION_MODE_ORDER, type PermissionMode } from '@craft-agent/shared/agent/modes'
-import type { OmpAvailableCommandDto, OmpAvailableCommandSource, OmpFeatureCenterStateDto, OmpFeatureUnavailableCommandDto } from '../../../shared/types'
+import type { LoadedSkill, OmpAvailableCommandDto, OmpAvailableCommandSource, OmpFeatureCenterStateDto, OmpFeatureUnavailableCommandDto } from '../../../shared/types'
 
 // ============================================================================
 // Types
@@ -144,6 +144,34 @@ export const DEFAULT_SLASH_COMMANDS: SlashCommand[] = [
 export const DEFAULT_SLASH_COMMAND_GROUPS: CommandGroup[] = [
   { id: 'modes', commands: permissionModeCommands },
 ]
+
+const permissionModeTranslationKeys: Record<PermissionMode, { label: string; description: string }> = {
+  safe: { label: 'commands.mode.explore', description: 'commands.mode.exploreDescription' },
+  ask: { label: 'commands.mode.ask', description: 'commands.mode.askDescription' },
+  'allow-all': { label: 'commands.mode.execute', description: 'commands.mode.executeDescription' },
+}
+
+function buildLocalizedPermissionModeCommands(t: TFunction): SlashCommand[] {
+  return PERMISSION_MODE_ORDER.map(mode => {
+    const config = PERMISSION_MODE_CONFIG[mode]
+    const keys = permissionModeTranslationKeys[mode]
+    return {
+      id: mode,
+      label: t(keys.label, { defaultValue: config.displayName }),
+      description: t(keys.description, { defaultValue: config.description }),
+      icon: <PermissionModeIcon mode={mode} className={MENU_ICON_SIZE} />,
+    }
+  })
+}
+
+function buildLocalizedCompactCommand(t: TFunction): SlashCommand {
+  return {
+    id: 'compact',
+    label: t('commands.compactContext', { defaultValue: 'Compact Context' }),
+    description: t('commands.compactContextDescription', { defaultValue: 'Summarize conversation context to free up token budget' }),
+    icon: <Minimize2 className={MENU_ICON_SIZE} />,
+  }
+}
 
 // ============================================================================
 // Shared Styles
@@ -597,7 +625,7 @@ export function InlineSlashCommand({
       {/* Always-visible footer hint for @ mentions */}
       <div className="mx-3 h-px bg-white/10" />
       <div className="select-none px-3 py-2.5 text-xs text-muted-foreground">
-        Use @ for skills and files
+        {t('commands.useMentions', { defaultValue: 'Use @ for skills and files' })}
       </div>
     </div>
   )
@@ -639,20 +667,20 @@ function humanizeSlashName(value: string): string {
     .replace(/\b\w/g, letter => letter.toUpperCase())
 }
 
-function ompCommandSection(command: OmpAvailableCommandDto): { id: string; label: string; meta: string; icon: React.ReactNode } {
+function ompCommandSection(command: OmpAvailableCommandDto, t: TFunction): { id: string; label: string; meta: string; icon: React.ReactNode } {
   if (command.source === 'skill' || command.name.startsWith('skill:')) {
-    return { id: 'omp-skills', label: 'Skills', meta: 'skill', icon: <Sparkles className={MENU_ICON_SIZE} /> }
+    return { id: 'omp-skills', label: t('commands.skills', { defaultValue: 'Skills' }), meta: t('commands.sourceSkill', { defaultValue: 'skill' }), icon: <Sparkles className={MENU_ICON_SIZE} /> }
   }
   if (command.source === 'mcp_prompt' || command.name === 'mcp' || command.name.startsWith('mcp:')) {
-    return { id: 'omp-mcp', label: 'MCP', meta: command.source === 'mcp_prompt' ? 'prompt' : 'mcp', icon: <ServerCog className={MENU_ICON_SIZE} /> }
+    return { id: 'omp-mcp', label: t('commands.mcp', { defaultValue: 'MCP' }), meta: command.source === 'mcp_prompt' ? t('commands.sourcePrompt', { defaultValue: 'prompt' }) : t('commands.sourceMcp', { defaultValue: 'mcp' }), icon: <ServerCog className={MENU_ICON_SIZE} /> }
   }
   if (command.name.includes('agent') || command.source === 'file') {
-    return { id: 'omp-agents', label: 'Agents', meta: command.source === 'file' ? 'file' : 'agent', icon: <Bot className={MENU_ICON_SIZE} /> }
+    return { id: 'omp-agents', label: t('commands.agents', { defaultValue: 'Agents' }), meta: command.source === 'file' ? t('commands.sourceFile', { defaultValue: 'file' }) : t('commands.sourceAgent', { defaultValue: 'agent' }), icon: <Bot className={MENU_ICON_SIZE} /> }
   }
   return {
     id: 'omp-commands',
-    label: 'Oh My Pi',
-    meta: command.source === 'builtin' ? 'omp' : command.source,
+    label: t('commands.ohMyPi', { defaultValue: 'Oh My Pi' }),
+    meta: command.source === 'builtin' ? t('commands.sourceOmp', { defaultValue: 'omp' }) : command.source,
     icon: command.source === 'builtin' ? <Wrench className={MENU_ICON_SIZE} /> : <Sparkles className={MENU_ICON_SIZE} />,
   }
 }
@@ -663,8 +691,8 @@ function formatOmpCommandLabel(commandName: string, subcommand?: string): string
   return commandName.startsWith('/') ? commandName : `/${commandName}`
 }
 
-function formatOmpCommandMeta(source: OmpAvailableCommandSource, fallback: string): string {
-  if (source === 'mcp_prompt') return 'mcp'
+function formatOmpCommandMeta(source: OmpAvailableCommandSource, fallback: string, t: TFunction): string {
+  if (source === 'mcp_prompt') return t('commands.sourceMcp', { defaultValue: 'mcp' })
   return fallback
 }
 
@@ -688,10 +716,13 @@ function insertRuntimeOmpSections(
   runtimeSections: SlashSection[],
   includeRuntime: boolean,
 ): SlashSection[] {
-  if (!includeRuntime || runtimeSections.length === 0) return baseSections
+  const visibleRuntimeSections = includeRuntime
+    ? runtimeSections
+    : runtimeSections.filter(section => section.id === 'omp-skills')
+  if (visibleRuntimeSections.length === 0) return baseSections
   const result = [...baseSections]
   const folderIndex = result.findIndex(section => section.id === 'folders')
-  result.splice(folderIndex === -1 ? result.length : folderIndex, 0, ...runtimeSections)
+  result.splice(folderIndex === -1 ? result.length : folderIndex, 0, ...visibleRuntimeSections)
   return result
 }
 
@@ -717,6 +748,8 @@ export interface UseInlineSlashCommandOptions {
   onSelectFolder: (path: string) => void
   activeCommands?: SlashCommandId[]
   ompCommands?: OmpAvailableCommandDto[]
+  /** Skills already discovered by Craft's workspace skill loader. */
+  skills?: LoadedSkill[]
   /** Runtime OMP commands that should not be executable in the menu. */
   ompUnavailableCommands?: OmpFeatureUnavailableCommandDto[]
   /** True when the current session uses the OMP backend. */
@@ -829,6 +862,7 @@ export function useInlineSlashCommand({
   onSelectFolder,
   activeCommands = [],
   ompCommands = [],
+  skills = [],
   ompUnavailableCommands = [],
   isOmpSession = false,
   ompFeatureCenterState,
@@ -845,40 +879,67 @@ export function useInlineSlashCommand({
   const currentInputRef = React.useRef({ value: '', cursorPosition: 0 })
 
   const availableOmpCommands = React.useMemo(() => {
-    return filterAvailableOmpCommands(
+    const runtimeCommands = filterAvailableOmpCommands(
       ompCommands,
       ompUnavailableCommands,
       !isOmpSession || !!ompFeatureCenterState,
     )
-  }, [isOmpSession, ompCommands, ompFeatureCenterState, ompUnavailableCommands])
+    if (!isOmpSession) return runtimeCommands
+
+    const known = new Set(runtimeCommands.map(command => command.name.toLowerCase()))
+    const discoveredSkills: OmpAvailableCommandDto[] = [
+      ...skills
+        .filter(skill => skill.slug.trim())
+        .map((skill): OmpAvailableCommandDto => ({
+          name: `skill:${skill.slug}`,
+          description: skill.metadata.description,
+          source: 'skill',
+        })),
+      ...(ompFeatureCenterState?.skills.items ?? [])
+        .filter(skill => skill.name.trim())
+        .map((skill): OmpAvailableCommandDto => ({
+          name: `skill:${skill.name}`,
+          description: skill.description,
+          source: 'skill',
+        })),
+    ]
+      .filter(command => {
+        const key = command.name.toLowerCase()
+        if (known.has(key)) return false
+        known.add(key)
+        return true
+      })
+
+    return [...runtimeCommands, ...discoveredSkills]
+  }, [isOmpSession, ompCommands, ompFeatureCenterState, ompUnavailableCommands, skills])
 
   const ompSlashCommands = React.useMemo((): SlashCommand[] => {
     return availableOmpCommands.flatMap((command) => {
-      const section = ompCommandSection(command)
+      const section = ompCommandSection(command, t)
       const base: SlashCommand = {
         id: { type: 'omp', name: command.name },
         label: formatOmpCommandLabel(command.name),
-        description: command.description || command.input?.hint || 'Oh My Pi command',
+        description: command.description || command.input?.hint || t('commands.ompCommand', { defaultValue: 'Oh My Pi command' }),
         icon: section.icon,
         shortcut: command.source,
-        meta: formatOmpCommandMeta(command.source, section.meta),
+        meta: formatOmpCommandMeta(command.source, section.meta, t),
       }
       const subcommands = command.subcommands?.map((subcommand): SlashCommand => ({
         id: { type: 'omp', name: command.name, subcommand: subcommand.name },
         label: formatOmpCommandLabel(command.name, subcommand.name),
-        description: subcommand.description || subcommand.usage || command.description || 'Oh My Pi subcommand',
+        description: subcommand.description || subcommand.usage || command.description || t('commands.ompSubcommand', { defaultValue: 'Oh My Pi subcommand' }),
         icon: section.icon,
         shortcut: command.source,
-        meta: formatOmpCommandMeta(command.source, section.meta),
+        meta: formatOmpCommandMeta(command.source, section.meta, t),
       })) ?? []
       return [base, ...subcommands]
     })
-  }, [availableOmpCommands])
+  }, [availableOmpCommands, t])
 
   const ompSections = React.useMemo((): SlashSection[] => {
     const grouped = new Map<string, SlashSection>()
     for (const command of availableOmpCommands) {
-      const section = ompCommandSection(command)
+      const section = ompCommandSection(command, t)
       if (!grouped.has(section.id)) {
         grouped.set(section.id, { id: section.id, label: section.label, items: [] })
       }
@@ -886,13 +947,13 @@ export function useInlineSlashCommand({
     for (const item of ompSlashCommands) {
       const commandName = isOmpSlashCommandId(item.id) ? item.id.name : ''
       const source = availableOmpCommands.find(command => command.name === commandName)
-      const section = source ? ompCommandSection(source) : { id: 'omp-commands', label: 'Oh My Pi' }
+      const section = source ? ompCommandSection(source, t) : { id: 'omp-commands', label: t('commands.ohMyPi', { defaultValue: 'Oh My Pi' }) }
       grouped.get(section.id)?.items.push(item)
     }
     return ['omp-commands', 'omp-skills', 'omp-mcp', 'omp-agents']
       .map(id => grouped.get(id))
       .filter((section): section is SlashSection => !!section && section.items.length > 0)
-  }, [availableOmpCommands, ompSlashCommands])
+  }, [availableOmpCommands, ompSlashCommands, t])
 
   const ompCuratedSections = React.useMemo((): SlashSection[] => {
     if (!isOmpSession || !ompFeatureCenterState) return []
@@ -902,12 +963,14 @@ export function useInlineSlashCommand({
   // Build sections from commands and folders
   const baseSections = React.useMemo((): SlashSection[] => {
     const result: SlashSection[] = []
+    const localizedPermissionModeCommands = buildLocalizedPermissionModeCommands(t)
+    const localizedCompactCommand = buildLocalizedCompactCommand(t)
 
     // Modes section
     result.push({
       id: 'modes',
-      label: 'Modes',
-      items: permissionModeCommands,
+      label: t('commands.modes', { defaultValue: 'Modes' }),
+      items: localizedPermissionModeCommands,
     })
 
     // OMP Controls and Tools & Context
@@ -918,8 +981,8 @@ export function useInlineSlashCommand({
     // Commands section
     result.push({
       id: 'commands',
-      label: 'Commands',
-      items: [compactCommand],
+      label: t('commands.commands', { defaultValue: 'Commands' }),
+      items: [localizedCompactCommand],
     })
 
     // Recent folders section - sorted alphabetically by folder name, show all
@@ -933,7 +996,7 @@ export function useInlineSlashCommand({
 
       result.push({
         id: 'folders',
-        label: 'Recent Working Directories',
+        label: t('commands.recentWorkingDirectories', { defaultValue: 'Recent Working Directories' }),
         items: sortedFolders.map(path => ({
           id: path,
           type: 'folder' as const,
@@ -945,7 +1008,7 @@ export function useInlineSlashCommand({
     }
 
     return result
-  }, [ompCuratedSections, recentFolders, homeDir])
+  }, [ompCuratedSections, recentFolders, homeDir, t])
 
   const sections = React.useMemo(
     () => insertRuntimeOmpSections(baseSections, ompSections, filter.length > 0),

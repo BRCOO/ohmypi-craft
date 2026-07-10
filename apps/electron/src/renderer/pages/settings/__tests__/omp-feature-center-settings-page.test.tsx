@@ -96,7 +96,7 @@ describe('OmpFeatureCenterSettingsPage components', () => {
     expect(html).toContain('Global Architect')
     expect(html).toContain('project override')
     expect(html).toContain('Saving global config will not change the effective value')
-    expect(html).toContain('Global: global/architect')
+    expect(html).toContain('Global config: global/architect')
   })
 
   it('builds selectable OMP model role options from synced models and configured values', () => {

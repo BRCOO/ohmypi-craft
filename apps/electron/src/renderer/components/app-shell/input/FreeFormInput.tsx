@@ -1226,6 +1226,7 @@ export function FreeFormInput({
     onSelectFolder: handleSlashFolderSelect,
     activeCommands,
     ompCommands: ompControlState?.availableCommands ?? [],
+    skills,
     ompUnavailableCommands,
     isOmpSession,
     ompFeatureCenterState,

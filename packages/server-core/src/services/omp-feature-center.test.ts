@@ -81,7 +81,9 @@ describe('OMP Feature Center service', () => {
       '# Global Skill',
       '',
     ].join('\n'))
+    await write(join(homeDir, '.agents', 'skills', 'agents-skill', 'SKILL.md'), '# Agents Skill\n')
     await write(join(projectRootPath, '.omp', 'skills', 'project-skill', 'SKILL.md'), '# Project Skill\n')
+    await write(join(projectRootPath, '.agents', 'skills', 'project-agents-skill', 'SKILL.md'), '# Project Agents Skill\n')
     await write(join(agentDir, 'mcp.json'), JSON.stringify({ mcpServers: { userMcp: { command: 'node' } } }))
     await write(join(projectRootPath, '.omp', 'mcp.json'), JSON.stringify({ mcpServers: { projectMcp: { command: 'bun' } } }))
     await write(join(agentDir, 'agents', 'reviewer.md'), '# Reviewer\n')
@@ -113,7 +115,9 @@ describe('OMP Feature Center service', () => {
     expect(state.advisor.enabled.source).toBe('global')
     expect(state.advisor.subagents.effectiveValue).toBe(true)
     expect(state.advisor.subagents.source).toBe('project')
-    expect(state.skills.items.map(item => item.name).sort()).toEqual(['global-skill', 'project-skill'])
+    expect(state.skills.items.map(item => item.name).sort()).toEqual(['agents-skill', 'global-skill', 'project-agents-skill', 'project-skill'])
+    expect(state.skills.items.find(item => item.name === 'agents-skill')?.level).toBe('user')
+    expect(state.skills.items.find(item => item.name === 'project-agents-skill')?.level).toBe('project')
     expect(state.mcp.items.map(item => item.name).sort()).toEqual(['projectMcp', 'userMcp'])
     expect(state.agents.items.map(item => item.name).sort()).toEqual(['planner', 'reviewer'])
     expect(state.advisor.roster.advisors.map(advisor => ({ name: advisor.name, model: advisor.model }))).toEqual([{ name: 'Security', model: 'openai/security' }])
