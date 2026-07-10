@@ -1,6 +1,6 @@
 # OMP Model Role Selector and Session Controls Design
 
-Status: Ready for user review
+Status: Implemented; acceptance hardening verified
 Date: 2026-07-10
 Related spec: `docs/superpowers/specs/2026-07-10-omp-feature-center-design.md`
 
@@ -318,3 +318,31 @@ This design should be implemented in two independently reviewable changes:
 2. **OMP session controls** — curated menu actions, quick-control state, Advisor save path, section navigation, runtime filtering, and focused tests.
 
 The first change must not depend on the second. The second may reuse the Feature Center state and save APIs but must not move configuration ownership into the renderer.
+
+## 14. Implementation Status
+
+- **Model role selector cleanup** — implemented in `apps/electron/src/renderer/pages/settings/OmpFeatureCenterSettingsPage.tsx`.
+  - `ModelRolePicker` now renders a single searchable picker in normal state.
+  - `Use OMP default` clears the global role binding.
+  - `Custom model…` enters a compact custom editor that preserves the current value.
+  - Unknown configured values automatically render in custom state.
+  - Thinking-level chips remain available in both states.
+  - Unit tests added to `apps/electron/src/renderer/pages/settings/__tests__/omp-feature-center-settings-page.test.tsx`.
+  - Renderer typecheck and the focused test suite pass.
+- **OMP session controls** — implemented.
+  - Added curated OMP slash-menu groups (`OMP Controls` and `Tools & Context`) in `apps/electron/src/renderer/components/ui/slash-command-menu.tsx`.
+  - Plan Mode renders as a disabled status row while `nativePlan.toggleAvailable` is false.
+  - Advisor row shows effective On/Off state and is disabled when controlled by a project override.
+  - MCP, Skills, Agents, and Models rows navigate to Settings → OMP and focus the corresponding section.
+  - Runtime OMP commands remain hidden at empty filter and appear only when a filter matches; commands marked `hidden` or `needs-upstream-rpc` are filtered out.
+  - `FreeFormInput.tsx` lazily loads Feature Center state when the `/` menu opens for an OMP session and performs the Advisor quick-toggle through the existing save API.
+  - `OmpFeatureCenterSettingsPage.tsx` listens for `craft:focus-omp-section` and scrolls/focuses the requested section.
+  - Added focused unit tests in `apps/electron/src/renderer/components/ui/__tests__/slash-command-menu.test.tsx`.
+  - Renderer typecheck and the focused test suite pass.
+- **Acceptance hardening** — implemented.
+  - Feature Center state is cached and deduplicated per workspace, then refreshed across mounted session inputs after settings loads, saves, and Advisor quick toggles.
+  - Settings section navigation uses a pending request that survives route mounting and still handles an already-mounted settings panel.
+  - Unavailable command matching normalizes leading `/` characters so entries such as `/plan` correctly filter runtime command names such as `plan`.
+  - Curated menu rows expose menu roles, `aria-disabled`, Advisor `aria-checked`, and non-activatable disabled behavior.
+  - Model-role and curated session-control copy is translated across every supported locale, with locale parity and sorting checks.
+  - Synchronized model metadata now reports the active OMP connection's model count instead of the number of configured role slots.

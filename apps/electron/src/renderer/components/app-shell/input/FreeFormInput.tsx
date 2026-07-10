@@ -2,6 +2,7 @@ import * as React from 'react'
 import { useTranslation } from "react-i18next"
 import { Command as CommandPrimitive } from 'cmdk'
 import { AnimatePresence, motion } from 'motion/react'
+import { toast } from 'sonner'
 import {
   Paperclip,
   ArrowUp,
@@ -23,10 +24,21 @@ import { ServerDirectoryBrowser } from '@/components/ServerDirectoryBrowser'
 import { Button } from '@/components/ui/button'
 import {
   InlineSlashCommand,
+  isOmpCuratedCommandId,
   isOmpSlashCommandId,
   useInlineSlashCommand,
   type SlashCommandId,
 } from '@/components/ui/slash-command-menu'
+import { navigate, routes } from '@/lib/navigate'
+import { requestOmpFeatureCenterSection, type OmpFeatureCenterSection } from '@/lib/omp-feature-center-navigation'
+import {
+  getCachedOmpFeatureCenterState,
+  loadCachedOmpFeatureCenterState,
+  OMP_FEATURE_CENTER_STATE_EVENT,
+  ompFeatureCenterWorkspaceKey,
+  publishOmpFeatureCenterState,
+  type OmpFeatureCenterStateEventDetail,
+} from '@/lib/omp-feature-center-state'
 import {
   InlineMentionMenu,
   useInlineMention,
@@ -76,7 +88,7 @@ import { CompactWorkingDirectorySelector } from '@/components/ui/CompactWorkingD
 import { ConnectionIcon } from '@/components/icons/ConnectionIcon'
 import { FreeFormInputContextBadge } from './FreeFormInputContextBadge'
 import { derivePickerMode } from './picker-mode'
-import type { FileAttachment, LoadedSource, LoadedSkill, OmpControlStateDto, OmpDeliveryMode, OmpInterruptMode, OmpQueueMode } from '../../../../shared/types'
+import type { FileAttachment, LlmConnectionWithStatus, LoadedSource, LoadedSkill, OmpControlStateDto, OmpDeliveryMode, OmpFeatureCenterStateDto, OmpInterruptMode, OmpQueueMode, SaveOmpFeatureCenterConfigInput } from '../../../../shared/types'
 import type { PermissionMode } from '@craft-agent/shared/agent/modes'
 import { type ThinkingLevel, THINKING_LEVELS, getThinkingLevelNameKey } from '@craft-agent/shared/agent/thinking-levels'
 import { useEscapeInterrupt } from '@/context/EscapeInterruptContext'
@@ -124,6 +136,8 @@ const OMP_INTERRUPT_LABEL: Record<OmpInterruptMode, string> = {
   immediate: 'Immediate',
   wait: 'Wait',
 }
+
+const EMPTY_LLM_CONNECTIONS: LlmConnectionWithStatus[] = []
 
 function OmpQueueControl({
   sessionId,
@@ -475,7 +489,7 @@ export function FreeFormInput({
   // Read connection default model, connections, and workspace info from context.
   // Uses optional variant so playground (no provider) doesn't crash.
   const appShellCtx = useOptionalAppShellContext()
-  const llmConnections = appShellCtx?.llmConnections ?? []
+  const llmConnections = appShellCtx?.llmConnections ?? EMPTY_LLM_CONNECTIONS
   const workspaceDefaultConnection = appShellCtx?.workspaceDefaultLlmConnection
 
   // Derive connectionDefaultModel per-session from the effective connection.
@@ -567,6 +581,8 @@ export function FreeFormInput({
     return llmConnections.find(c => c.slug === effectiveConnection) ?? null
   }, [llmConnections, effectiveConnection])
 
+
+    const isOmpSession = effectiveConnectionDetails?.providerType === 'omp'
 
   // Access sessionStatuses and onSessionStatusChange from context for the # menu state picker
   const sessionStatuses = appShellCtx?.sessionStatuses ?? []
@@ -1078,15 +1094,108 @@ export function FreeFormInput({
     return active
   }, [permissionMode])
   const [ompDeliveryMode, setOmpDeliveryMode] = React.useState<OmpDeliveryMode>('steer')
+  const [ompFeatureCenterState, setOmpFeatureCenterState] = React.useState<OmpFeatureCenterStateDto | null>(() => (
+    isOmpSession ? getCachedOmpFeatureCenterState(workspaceId) : null
+  ))
+  const [advisorToggling, setAdvisorToggling] = React.useState(false)
+  const currentOmpWorkspaceKey = ompFeatureCenterWorkspaceKey(workspaceId)
+  const currentOmpWorkspaceKeyRef = React.useRef(currentOmpWorkspaceKey)
+  currentOmpWorkspaceKeyRef.current = currentOmpWorkspaceKey
+
+  React.useEffect(() => {
+    setOmpFeatureCenterState(isOmpSession ? getCachedOmpFeatureCenterState(workspaceId) : null)
+  }, [currentOmpWorkspaceKey, isOmpSession, workspaceId])
+
+  React.useEffect(() => {
+    if (!isOmpSession) return
+    const handleStateUpdate = (event: Event) => {
+      const detail = (event as CustomEvent<OmpFeatureCenterStateEventDetail>).detail
+      if (detail?.workspaceKey === currentOmpWorkspaceKey) {
+        setOmpFeatureCenterState(detail.state)
+      }
+    }
+    window.addEventListener(OMP_FEATURE_CENTER_STATE_EVENT, handleStateUpdate)
+    return () => window.removeEventListener(OMP_FEATURE_CENTER_STATE_EVENT, handleStateUpdate)
+  }, [currentOmpWorkspaceKey, isOmpSession])
+
+  const loadOmpFeatureCenterState = React.useCallback(async () => {
+    if (!isOmpSession) return
+    if (!window.electronAPI?.getOmpFeatureCenterState) return
+    try {
+      await loadCachedOmpFeatureCenterState(
+        workspaceId,
+        (targetWorkspaceId) => window.electronAPI.getOmpFeatureCenterState(targetWorkspaceId),
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error('[FreeFormInput] Failed to load OMP Feature Center state:', message)
+    }
+  }, [isOmpSession, workspaceId])
+
+  const toggleOmpAdvisor = React.useCallback(async () => {
+    if (!ompFeatureCenterState || advisorToggling) return
+    if (ompFeatureCenterState.advisor.enabled.projectOverridden) return
+    const requestWorkspaceKey = ompFeatureCenterWorkspaceKey(workspaceId)
+    const previousState = ompFeatureCenterState
+    const baseline = ompFeatureCenterState.advisor.enabled.globalValue ?? ompFeatureCenterState.advisor.enabled.effectiveValue
+    const next = !baseline
+    const input: SaveOmpFeatureCenterConfigInput = {
+      workspaceId,
+      advisor: { enabled: next },
+    }
+    setOmpFeatureCenterState({
+      ...ompFeatureCenterState,
+      advisor: {
+        ...ompFeatureCenterState.advisor,
+        enabled: {
+          ...ompFeatureCenterState.advisor.enabled,
+          source: 'global',
+          globalValue: next,
+          effectiveValue: next,
+        },
+      },
+    })
+    setAdvisorToggling(true)
+    try {
+      const result = await window.electronAPI?.saveOmpFeatureCenterConfig?.(input)
+      if (result?.success && result.state) {
+        publishOmpFeatureCenterState(workspaceId, result.state)
+        toast.success(t(next ? 'omp.quickControls.advisorEnabled' : 'omp.quickControls.advisorDisabled'))
+      } else {
+        throw new Error(result?.error ?? t('omp.quickControls.advisorToggleFailed'))
+      }
+    } catch (error) {
+      if (currentOmpWorkspaceKeyRef.current === requestWorkspaceKey) {
+        setOmpFeatureCenterState(previousState)
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      toast.error(message)
+    } finally {
+      setAdvisorToggling(false)
+    }
+  }, [advisorToggling, ompFeatureCenterState, t, workspaceId])
 
   // Handle slash command selection (mode/feature commands)
   const handleSlashCommand = React.useCallback((commandId: SlashCommandId) => {
     if (isOmpSlashCommandId(commandId)) return
+    if (isOmpCuratedCommandId(commandId)) {
+      if (commandId.kind === 'advisor') {
+        void toggleOmpAdvisor()
+      } else if (commandId.kind === 'plan') {
+        // Plan Mode is not executable until RPC exposes a real toggle.
+        return
+      } else if (commandId.kind === 'mcp' || commandId.kind === 'skills' || commandId.kind === 'agents' || commandId.kind === 'models') {
+        const targetSection: OmpFeatureCenterSection = commandId.kind
+        navigate(routes.view.settings('omp'))
+        window.requestAnimationFrame(() => requestOmpFeatureCenterSection(targetSection))
+      }
+      return
+    }
     if (commandId === 'safe') onPermissionModeChange?.('safe')
     else if (commandId === 'ask') onPermissionModeChange?.('ask')
     else if (commandId === 'allow-all') onPermissionModeChange?.('allow-all')
     else if (commandId === 'compact' && !isProcessing) onSubmit('/compact', undefined)
-  }, [onPermissionModeChange, isProcessing, onSubmit])
+  }, [onPermissionModeChange, isProcessing, onSubmit, toggleOmpAdvisor])
 
   // Handle folder selection from slash command menu
   const handleSlashFolderSelect = React.useCallback((path: string) => {
@@ -1107,6 +1216,9 @@ export function FreeFormInput({
     })
   }, [workspaceId])
 
+
+  const ompUnavailableCommands = ompFeatureCenterState?.unavailableCommands ?? []
+
   // Inline slash command hook (modes, features, and folders)
   const inlineSlash = useInlineSlashCommand({
     inputRef: richInputRef,
@@ -1114,9 +1226,20 @@ export function FreeFormInput({
     onSelectFolder: handleSlashFolderSelect,
     activeCommands,
     ompCommands: ompControlState?.availableCommands ?? [],
+    ompUnavailableCommands,
+    isOmpSession,
+    ompFeatureCenterState,
+    ompModelCount: isOmpSession ? availableModels.length : undefined,
     recentFolders,
     homeDir,
   })
+
+  // Load OMP Feature Center state lazily when the slash menu opens for an OMP session.
+  React.useEffect(() => {
+    if (inlineSlash.isOpen && isOmpSession) {
+      void loadOmpFeatureCenterState()
+    }
+  }, [inlineSlash.isOpen, isOmpSession, loadOmpFeatureCenterState])
 
   // Handle mention selection (sources, skills, files)
   const handleMentionSelect = React.useCallback((item: MentionItem) => {

@@ -1,6 +1,8 @@
 import { beforeAll, describe, expect, it, mock } from 'bun:test'
 import * as React from 'react'
 import * as ReactDOMServer from 'react-dom/server'
+import { initReactI18next } from 'react-i18next'
+import { setupI18n } from '@craft-agent/shared/i18n'
 import { Sparkles } from 'lucide-react'
 import type {
   LlmConnectionWithStatus,
@@ -12,6 +14,7 @@ import type {
 
 mock.module('pdfjs-dist/build/pdf.worker.min.mjs?url', () => ({ default: '' }))
 mock.module('pdfjs-dist', () => ({ GlobalWorkerOptions: { workerSrc: '' }, getDocument: () => ({}) }))
+setupI18n([initReactI18next])
 
 let CapabilityCard: typeof import('../OmpFeatureCenterSettingsPage').CapabilityCard
 let AdvisorRosterEditor: typeof import('../OmpFeatureCenterSettingsPage').AdvisorRosterEditor
@@ -21,6 +24,7 @@ let RoleRow: typeof import('../OmpFeatureCenterSettingsPage').RoleRow
 let UsageGuideCard: typeof import('../OmpFeatureCenterSettingsPage').UsageGuideCard
 let UnavailableCommandList: typeof import('../OmpFeatureCenterSettingsPage').UnavailableCommandList
 let capabilityUsageCopy: typeof import('../OmpFeatureCenterSettingsPage').capabilityUsageCopy
+let ModelRolePicker: typeof import('../OmpFeatureCenterSettingsPage').ModelRolePicker
 
 function normalizeReactServerHtml(html: string): string {
   return html.replace(/<!-- -->/g, '')
@@ -36,6 +40,7 @@ beforeAll(async () => {
   UsageGuideCard = mod.UsageGuideCard
   UnavailableCommandList = mod.UnavailableCommandList
   capabilityUsageCopy = mod.capabilityUsageCopy
+  ModelRolePicker = mod.ModelRolePicker
 })
 
 describe('OmpFeatureCenterSettingsPage components', () => {
@@ -252,5 +257,76 @@ describe('OmpFeatureCenterSettingsPage components', () => {
     expect(capabilityUsageCopy('Skills', '/skill:<name>')).toBe('/skill:<name>')
     expect(capabilityUsageCopy('MCP', '/mcp list')).toContain('/mcp resources')
     expect(capabilityUsageCopy('Agents', 'Define Markdown agents')).toBe('Define Markdown agents')
+  })
+
+  it('renders a known model role with a single picker and no permanent text input', () => {
+    const html = normalizeReactServerHtml(ReactDOMServer.renderToString(
+      <ModelRolePicker
+        value="deepseek/deepseek-v4-flash"
+        options={[{ value: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash', source: 'omp' }]}
+        onChange={() => {}}
+      />,
+    ))
+    expect(html).toContain('DeepSeek V4 Flash')
+    expect(html).not.toContain('provider/model[:thinking]')
+  })
+
+  it('shows Use OMP default when no global model role value is set', () => {
+    const html = normalizeReactServerHtml(ReactDOMServer.renderToString(
+      <ModelRolePicker
+        value=""
+        options={[{ value: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash', source: 'omp' }]}
+        onChange={() => {}}
+      />,
+    ))
+    expect(html).toContain('Use OMP default')
+    expect(html).not.toContain('provider/model[:thinking]')
+  })
+
+  it('renders custom state for an unknown model role value', () => {
+    const html = normalizeReactServerHtml(ReactDOMServer.renderToString(
+      <ModelRolePicker
+        value="unknown/custom-model:high"
+        options={[{ value: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash', source: 'omp' }]}
+        onChange={() => {}}
+      />,
+    ))
+    expect(html).toContain('Choose model')
+    expect(html).toContain('unknown/custom-model')
+  })
+
+  it('preserves an unknown model role value exactly in custom state', () => {
+    const html = normalizeReactServerHtml(ReactDOMServer.renderToString(
+      <ModelRolePicker
+        value="custom-vendor/custom-model:medium"
+        options={[{ value: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash', source: 'omp' }]}
+        onChange={() => {}}
+      />,
+    ))
+    expect(html).toContain('custom-vendor/custom-model')
+    expect(html).toContain('medium')
+  })
+
+  it('shows thinking chips in both normal and custom states', () => {
+    const normalHtml = normalizeReactServerHtml(ReactDOMServer.renderToString(
+      <ModelRolePicker
+        value="deepseek/deepseek-v4-flash"
+        options={[{ value: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash', source: 'omp' }]}
+        onChange={() => {}}
+      />,
+    ))
+    expect(normalHtml).toContain('Thinking')
+    expect(normalHtml).toContain('off')
+    expect(normalHtml).toContain('high')
+
+    const customHtml = normalizeReactServerHtml(ReactDOMServer.renderToString(
+      <ModelRolePicker
+        value="unknown/custom-model"
+        options={[{ value: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash', source: 'omp' }]}
+        onChange={() => {}}
+      />,
+    ))
+    expect(customHtml).toContain('Thinking')
+    expect(customHtml).toContain('xhigh')
   })
 })

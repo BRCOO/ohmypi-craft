@@ -11,6 +11,12 @@ import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@
 import { SettingsCard, SettingsCardContent, SettingsSection, SettingsToggle } from '@/components/settings'
 import { cn } from '@/lib/utils'
 import { useAppShellContext } from '@/context/AppShellContext'
+import {
+  consumePendingOmpFeatureCenterSection,
+  OMP_FEATURE_CENTER_SECTION_EVENT,
+  type OmpFeatureCenterSection,
+} from '@/lib/omp-feature-center-navigation'
+import { publishOmpFeatureCenterState } from '@/lib/omp-feature-center-state'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import type { LlmConnectionWithStatus, OmpFeatureCapabilityDto, OmpFeatureCenterStateDto, OmpFeatureModelRoleDto, OmpFeatureUnavailableCommandDto, SaveOmpFeatureCenterConfigInput } from '../../../shared/types'
 
@@ -22,7 +28,7 @@ export const meta: DetailsPageMeta = {
 type RoleDraft = Record<string, string>
 export type AdvisorRosterDraftItem = { id: string; name: string; model: string; tools: string; instructions: string }
 export type AdvisorRosterDraft = { instructions: string; advisors: AdvisorRosterDraftItem[] }
-export type OmpModelRoleOption = { value: string; label: string; description?: string; source: 'omp' | 'configured' | 'default' }
+export type OmpModelRoleOption = { value: string; label: string; description?: string; source: 'omp' | 'configured' | 'default' | 'custom' }
 
 const emptyDraft: RoleDraft = {}
 const emptyAdvisorRosterDraft: AdvisorRosterDraft = { instructions: '', advisors: [] }
@@ -478,7 +484,7 @@ export function AdvisorRosterEditor({
           disabled={disabled}
           rows={4}
           placeholder="Optional shared instructions for all advisors"
-          className="w-full rounded-md border border-input bg-muted/50 px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+          className="w-full rounded-md border border-input bg-muted/50 px-3 py-2 text-sm shadow-xs outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
         />
       </div>
       <div className="space-y-2">
@@ -535,7 +541,7 @@ export function AdvisorRosterEditor({
                 disabled={disabled}
                 rows={2}
                 placeholder="Optional advisor-specific instructions"
-                className="w-full rounded-md border border-input bg-muted/50 px-3 py-2 text-xs shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                className="w-full rounded-md border border-input bg-muted/50 px-3 py-2 text-xs shadow-xs outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
               />
             </div>
           ))
@@ -543,6 +549,13 @@ export function AdvisorRosterEditor({
       </div>
     </div>
   )
+}
+
+const DEFAULT_OPTION_VALUE = ''
+const CUSTOM_OPTION_VALUE = '__omp_custom_model__'
+
+function isSpecialModelRoleOption(value: string): boolean {
+  return value === DEFAULT_OPTION_VALUE || value === CUSTOM_OPTION_VALUE
 }
 
 export function ModelRolePicker({
@@ -556,81 +569,219 @@ export function ModelRolePicker({
   options: OmpModelRoleOption[]
   onChange: (value: string) => void
 }) {
+  const { t } = useTranslation()
   const [open, setOpen] = React.useState(false)
   const { base, thinking } = splitModelRoleValue(value)
-  const selectedOption = options.find(option => option.value === value || option.value === base)
+  const baseIsKnown = React.useMemo(() => {
+    return options.some(option => option.value === base)
+  }, [options, base])
+  const [isCustom, setIsCustom] = React.useState(() => value !== '' && !baseIsKnown)
+  const [draftValue, setDraftValue] = React.useState(value)
+  const lastPropValueRef = React.useRef(value)
+
+  // Auto-detect custom state when the value prop changes from outside this component.
+  React.useEffect(() => {
+    if (value !== lastPropValueRef.current) {
+      lastPropValueRef.current = value
+      setIsCustom(value !== '' && !baseIsKnown)
+      setDraftValue(value)
+    }
+  }, [value, baseIsKnown])
+
+  const allOptions = React.useMemo((): OmpModelRoleOption[] => {
+    const seen = new Set<string>()
+    const result: OmpModelRoleOption[] = []
+
+    // 1. Use OMP default
+    result.push({
+      value: DEFAULT_OPTION_VALUE,
+      label: t('omp.modelRoles.useDefault'),
+      source: 'default',
+      description: t('omp.modelRoles.useDefaultDescription'),
+    })
+    seen.add(DEFAULT_OPTION_VALUE)
+
+    // 2. synchronized OMP models and 3. configured values not already present
+    for (const option of options) {
+      if (!seen.has(option.value)) {
+        seen.add(option.value)
+        result.push(option)
+      }
+    }
+
+    // 4. Custom model…
+    result.push({
+      value: CUSTOM_OPTION_VALUE,
+      label: t('omp.modelRoles.customModel'),
+      source: 'custom',
+      description: t('omp.modelRoles.customModelDescription'),
+    })
+
+    return result
+  }, [options, t])
+
+  const selectedOption = allOptions.find(option => option.value === value || option.value === base)
+
+  const handleSelectOption = React.useCallback((optionValue: string) => {
+    setOpen(false)
+    if (optionValue === DEFAULT_OPTION_VALUE) {
+      onChange('')
+      setIsCustom(false)
+      lastPropValueRef.current = ''
+    } else if (optionValue === CUSTOM_OPTION_VALUE) {
+      setIsCustom(true)
+      setDraftValue(value)
+      lastPropValueRef.current = value
+    } else {
+      const optionThinking = splitModelRoleValue(optionValue).thinking
+      const nextValue = optionThinking === 'off' ? applyThinkingSuffix(optionValue, thinking) : optionValue
+      onChange(nextValue)
+      setIsCustom(false)
+      lastPropValueRef.current = nextValue
+    }
+  }, [onChange, thinking, value])
+
+  const handleCustomBaseChange = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const nextBase = event.target.value.trim()
+    const nextValue = applyThinkingSuffix(nextBase, splitModelRoleValue(draftValue).thinking)
+    setDraftValue(nextValue)
+    onChange(nextValue)
+    lastPropValueRef.current = nextValue
+  }, [draftValue, onChange])
+
+  const handleCustomThinkingChange = React.useCallback((nextThinking: ThinkingSuffix) => {
+    const nextValue = applyThinkingSuffix(splitModelRoleValue(draftValue).base, nextThinking)
+    setDraftValue(nextValue)
+    onChange(nextValue)
+    lastPropValueRef.current = nextValue
+  }, [draftValue, onChange])
+
+  const handleExitCustom = React.useCallback(() => {
+    const customBase = splitModelRoleValue(draftValue).base
+    if (!customBase) {
+      onChange('')
+      lastPropValueRef.current = ''
+    }
+    setIsCustom(false)
+  }, [draftValue, onChange])
+
+  if (isCustom) {
+    const { base: draftBase, thinking: draftThinking } = splitModelRoleValue(draftValue)
+    return (
+      <div className="space-y-2">
+        <div className="flex min-w-0 gap-2">
+          <Input
+            value={draftBase}
+            onChange={handleCustomBaseChange}
+            disabled={disabled}
+            aria-label={t('omp.modelRoles.customModelInputLabel')}
+            placeholder={t('omp.modelRoles.modelIdPlaceholder')}
+            className="h-9 flex-1 bg-muted/50"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            disabled={disabled}
+            onClick={handleExitCustom}
+            className="h-9 gap-1.5 border-border/70 bg-muted/40 px-3 font-normal"
+          >
+            <ChevronDown className="size-3.5" />
+            {t('omp.modelRoles.chooseModel')}
+          </Button>
+        </div>
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="mr-1 text-[11px] text-muted-foreground">{t('omp.modelRoles.thinking')}</span>
+          {THINKING_SUFFIXES.map(suffix => (
+            <button
+              key={suffix}
+              type="button"
+              disabled={disabled || !draftBase}
+              aria-pressed={draftThinking === suffix}
+              onClick={() => handleCustomThinkingChange(suffix)}
+              className={cn(
+                'rounded-full border px-2 py-0.5 text-[11px] transition-colors disabled:pointer-events-none disabled:opacity-40',
+                draftThinking === suffix
+                  ? 'border-blue-400/40 bg-blue-500/15 text-blue-700 dark:text-blue-100'
+                  : 'border-border/70 bg-muted/30 text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+              )}
+            >
+              {suffix}
+            </button>
+          ))}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-2">
-      <div className="flex min-w-0 gap-2">
-        <Popover open={open} onOpenChange={setOpen}>
-          <PopoverTrigger asChild>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={disabled || options.length === 0}
-              className="h-9 min-w-[160px] flex-1 justify-between border-border/70 bg-muted/40 px-3 font-normal"
-            >
-              <span className="min-w-0 truncate text-left">
-                {selectedOption?.label ?? (base ? humanizeModelId(base) : 'Select OMP model')}
-              </span>
-              <ChevronDown className="ml-2 size-3.5 shrink-0 opacity-60" />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent align="start" className="w-[420px] overflow-hidden p-0">
-            <Command shouldFilter>
-              <CommandInput placeholder="Search synced OMP models..." />
-              <CommandList className="max-h-[320px]">
-                <CommandEmpty>No synced OMP models found.</CommandEmpty>
-                {options.map(option => {
-                  const selected = option.value === value || option.value === base
-                  const optionThinking = splitModelRoleValue(option.value).thinking
-                  return (
-                    <CommandItem
-                      key={option.value}
-                      value={`${option.label} ${option.value} ${option.description ?? ''}`}
-                      onSelect={() => {
-                        onChange(optionThinking === 'off' ? applyThinkingSuffix(option.value, thinking) : option.value)
-                        setOpen(false)
-                      }}
-                      className="items-start gap-2 px-3 py-2"
-                    >
-                      <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-200">
-                        <Sparkles className="size-3.5" />
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium">{option.label}</span>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={disabled || allOptions.length === 0}
+            className="h-9 min-w-[160px] w-full justify-between border-border/70 bg-muted/40 px-3 font-normal"
+          >
+            <span className="min-w-0 truncate text-left">
+              {selectedOption?.label ?? (base ? humanizeModelId(base) : t('omp.modelRoles.selectModel'))}
+            </span>
+            <ChevronDown className="ml-2 size-3.5 shrink-0 opacity-60" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-[420px] overflow-hidden p-0">
+          <Command shouldFilter>
+            <CommandInput placeholder={t('omp.modelRoles.searchModels')} />
+            <CommandList className="max-h-[320px]">
+              <CommandEmpty>{t('omp.modelRoles.noModels')}</CommandEmpty>
+              {allOptions.map(option => {
+                const selected = option.value === value || option.value === base
+                const optionThinking = splitModelRoleValue(option.value).thinking
+                const isDefaultOption = option.value === DEFAULT_OPTION_VALUE
+                const isCustomOption = option.value === CUSTOM_OPTION_VALUE
+                return (
+                  <CommandItem
+                    key={option.value || option.label}
+                    value={`${option.label} ${option.value} ${option.description ?? ''}`}
+                    onSelect={() => handleSelectOption(option.value)}
+                    className="items-start gap-2 px-3 py-2"
+                  >
+                    <span className={cn(
+                      'mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md',
+                      isDefaultOption || isCustomOption
+                        ? 'bg-violet-500/10 text-violet-600 dark:text-violet-200'
+                        : 'bg-blue-500/10 text-blue-600 dark:text-blue-200'
+                    )}>
+                      <Sparkles className="size-3.5" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">{option.label}</span>
+                      {!isSpecialModelRoleOption(option.value) && (
                         <span className="block truncate text-xs text-muted-foreground">{option.value}</span>
-                        {option.description && (
-                          <span className="block truncate text-[11px] text-muted-foreground/80">{option.description}</span>
-                        )}
-                      </span>
-                      <span className="mt-1 shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                        {option.source === 'omp' ? 'synced' : 'configured'}
-                      </span>
-                      {selected && <Check className="mt-1 size-3.5 shrink-0 text-blue-500" />}
-                    </CommandItem>
-                  )
-                })}
-              </CommandList>
-            </Command>
-          </PopoverContent>
-        </Popover>
-        <Input
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          disabled={disabled}
-          placeholder="provider/model[:thinking]"
-          className="h-9 flex-[1.1] bg-muted/50"
-        />
-      </div>
+                      )}
+                      {option.description && (
+                        <span className="block truncate text-[11px] text-muted-foreground/80">{option.description}</span>
+                      )}
+                    </span>
+                    <span className="mt-1 shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                      {t(`omp.modelRoles.source.${option.source}`)}
+                    </span>
+                    {selected && <Check className="mt-1 size-3.5 shrink-0 text-blue-500" />}
+                  </CommandItem>
+                )
+              })}
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
       <div className="flex flex-wrap items-center gap-1">
-        <span className="mr-1 text-[11px] text-muted-foreground">Thinking</span>
+        <span className="mr-1 text-[11px] text-muted-foreground">{t('omp.modelRoles.thinking')}</span>
         {THINKING_SUFFIXES.map(suffix => (
           <button
             key={suffix}
             type="button"
             disabled={disabled || !base}
+            aria-pressed={thinking === suffix}
             onClick={() => onChange(applyThinkingSuffix(value, suffix))}
             className={cn(
               'rounded-full border px-2 py-0.5 text-[11px] transition-colors disabled:pointer-events-none disabled:opacity-40',
@@ -699,7 +850,7 @@ function ErrorCard({ message }: { message: string }) {
 
 export default function OmpFeatureCenterSettingsPage() {
   const { t } = useTranslation()
-  const { activeWorkspaceId, llmConnections } = useAppShellContext()
+  const { activeWorkspaceId, isFocusedPanel = true, llmConnections } = useAppShellContext()
   const [state, setState] = React.useState<OmpFeatureCenterStateDto | null>(null)
   const [roleDraft, setRoleDraft] = React.useState<RoleDraft>(emptyDraft)
   const [advisorRosterDraft, setAdvisorRosterDraft] = React.useState<AdvisorRosterDraft>(emptyAdvisorRosterDraft)
@@ -709,6 +860,13 @@ export default function OmpFeatureCenterSettingsPage() {
   const [saving, setSaving] = React.useState(false)
   const [advancedOpen, setAdvancedOpen] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+
+  const modelsSectionRef = React.useRef<HTMLDivElement>(null)
+  const advisorSectionRef = React.useRef<HTMLDivElement>(null)
+  const nativePlanSectionRef = React.useRef<HTMLDivElement>(null)
+  const skillsSectionRef = React.useRef<HTMLDivElement>(null)
+  const mcpSectionRef = React.useRef<HTMLDivElement>(null)
+  const agentsSectionRef = React.useRef<HTMLDivElement>(null)
 
   const hydrateDraft = React.useCallback((next: OmpFeatureCenterStateDto) => {
     const roles: RoleDraft = {}
@@ -728,6 +886,7 @@ export default function OmpFeatureCenterSettingsPage() {
     try {
       const next = await window.electronAPI.getOmpFeatureCenterState(activeWorkspaceId)
       setState(next)
+      publishOmpFeatureCenterState(activeWorkspaceId, next)
       hydrateDraft(next)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -741,6 +900,34 @@ export default function OmpFeatureCenterSettingsPage() {
   React.useEffect(() => {
     void loadState()
   }, [loadState])
+
+  const focusRequestedSection = React.useCallback((section: OmpFeatureCenterSection) => {
+    const refMap: Record<OmpFeatureCenterSection, React.RefObject<HTMLDivElement | null>> = {
+      models: modelsSectionRef,
+      advisor: advisorSectionRef,
+      'native-plan': nativePlanSectionRef,
+      skills: skillsSectionRef,
+      mcp: mcpSectionRef,
+      agents: agentsSectionRef,
+    }
+    const target = refMap[section].current
+    if (!target) return false
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+    target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' })
+    target.focus({ preventScroll: true })
+    return true
+  }, [])
+
+  React.useEffect(() => {
+    if (!state || !isFocusedPanel) return
+    const consumeAndFocus = () => {
+      const section = consumePendingOmpFeatureCenterSection()
+      if (section) focusRequestedSection(section)
+    }
+    consumeAndFocus()
+    window.addEventListener(OMP_FEATURE_CENTER_SECTION_EVENT, consumeAndFocus)
+    return () => window.removeEventListener(OMP_FEATURE_CENTER_SECTION_EVENT, consumeAndFocus)
+  }, [focusRequestedSection, isFocusedPanel, state])
 
   const roles = React.useMemo(() => state ? [...state.modelRoles.common, ...state.modelRoles.advanced] : [], [state])
   const modelRoleOptions = React.useMemo(
@@ -802,6 +989,7 @@ export default function OmpFeatureCenterSettingsPage() {
         throw new Error(result.error ?? 'Failed to save OMP configuration.')
       }
       setState(result.state)
+      publishOmpFeatureCenterState(activeWorkspaceId, result.state)
       hydrateDraft(result.state)
       toast.success('OMP settings saved')
     } catch (err) {
@@ -893,96 +1081,100 @@ export default function OmpFeatureCenterSettingsPage() {
                   </SettingsCard>
                 </SettingsSection>
 
-                <SettingsSection title="Model Roles" description="Edit global OMP role bindings. Project overrides are shown but not edited here.">
-                  <SettingsCard>
-                    {state.modelRoles.common.map(role => (
-                      <RoleRow
-                        key={role.role}
-                        role={role}
-                        value={roleDraft[role.role] ?? ''}
-                        disabled={saving || !!globalParseError}
-                        modelOptions={modelRoleOptions}
-                        onChange={updateRoleDraft}
-                      />
-                    ))}
-                    <button
-                      type="button"
-                      onClick={() => setAdvancedOpen(open => !open)}
-                      className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm text-muted-foreground hover:bg-muted/50"
-                    >
-                      {advancedOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-                      Advanced roles
-                    </button>
-                    {advancedOpen && state.modelRoles.advanced.map(role => (
-                      <RoleRow
-                        key={role.role}
-                        role={role}
-                        value={roleDraft[role.role] ?? ''}
-                        disabled={saving || !!globalParseError}
-                        modelOptions={modelRoleOptions}
-                        onChange={updateRoleDraft}
-                      />
-                    ))}
-                  </SettingsCard>
-                </SettingsSection>
+                <div ref={modelsSectionRef} tabIndex={-1} className="outline-none">
+                  <SettingsSection title="Model Roles" description="Edit global OMP role bindings. Project overrides are shown but not edited here.">
+                    <SettingsCard>
+                      {state.modelRoles.common.map(role => (
+                        <RoleRow
+                          key={role.role}
+                          role={role}
+                          value={roleDraft[role.role] ?? ''}
+                          disabled={saving || !!globalParseError}
+                          modelOptions={modelRoleOptions}
+                          onChange={updateRoleDraft}
+                        />
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setAdvancedOpen(open => !open)}
+                        className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm text-muted-foreground hover:bg-muted/50"
+                      >
+                        {advancedOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+                        Advanced roles
+                      </button>
+                      {advancedOpen && state.modelRoles.advanced.map(role => (
+                        <RoleRow
+                          key={role.role}
+                          role={role}
+                          value={roleDraft[role.role] ?? ''}
+                          disabled={saving || !!globalParseError}
+                          modelOptions={modelRoleOptions}
+                          onChange={updateRoleDraft}
+                        />
+                      ))}
+                    </SettingsCard>
+                  </SettingsSection>
+                </div>
 
-                <SettingsSection title="Advisor" description="Configure OMP Advisor toggles and the global multi-advisor WATCHDOG.yml roster. Project rosters remain read-only overlays.">
-                  <SettingsCard>
-                    <SettingsToggle
-                      label="Enable Advisor"
-                      description="Turn on OMP's second-opinion reviewer for future OMP sessions."
-                      checked={advisorEnabled}
-                      disabled={saving || !!globalParseError}
-                      onCheckedChange={setAdvisorEnabled}
-                    />
-                    <SettingsToggle
-                      label="Advisor subagents"
-                      description="Allow Advisor to run through OMP subagent infrastructure."
-                      checked={advisorSubagents}
-                      disabled={saving || !!globalParseError}
-                      onCheckedChange={setAdvisorSubagents}
-                    />
-                    <SettingsCardContent>
-                      <AdvisorRosterEditor
-                        draft={advisorRosterDraft}
-                        disabled={saving || !!globalParseError || !!advisorRosterParseError}
-                        workspaceId={activeWorkspaceId}
-                        editablePath={state.advisor.roster.editable.path}
-                        exists={state.advisor.roster.editable.exists}
-                        parseError={state.advisor.roster.editable.parseError}
-                        onInstructionsChange={value => setAdvisorRosterDraft(previous => ({ ...previous, instructions: value }))}
-                        onAdvisorChange={updateAdvisorDraft}
-                        onAddAdvisor={addAdvisorDraft}
-                        onRemoveAdvisor={removeAdvisorDraft}
+                <div ref={advisorSectionRef} tabIndex={-1} className="outline-none">
+                  <SettingsSection title="Advisor" description="Configure OMP Advisor toggles and the global multi-advisor WATCHDOG.yml roster. Project rosters remain read-only overlays.">
+                    <SettingsCard>
+                      <SettingsToggle
+                        label="Enable Advisor"
+                        description="Turn on OMP's second-opinion reviewer for future OMP sessions."
+                        checked={advisorEnabled}
+                        disabled={saving || !!globalParseError}
+                        onCheckedChange={setAdvisorEnabled}
                       />
-                      <div className="mb-2 mt-4 flex items-center gap-2 text-sm font-medium">
-                        <BrainCircuit className="size-4 text-violet-500" />
-                        Effective roster
-                      </div>
-                      {state.advisor.roster.advisors.length > 0 ? (
-                        <div className="space-y-1.5">
-                          {state.advisor.roster.advisors.map(advisor => (
-                            <div key={`${advisor.path}-${advisor.name}`} className="flex items-center justify-between gap-2 rounded-md bg-muted/40 px-2 py-1.5 text-xs">
-                              <span className="font-medium">{advisor.name}</span>
-                              <span className="truncate text-muted-foreground">{advisor.model || 'uses advisor role'}</span>
-                              {advisor.level && <SourceBadge source={advisor.level} />}
-                            </div>
-                          ))}
+                      <SettingsToggle
+                        label="Advisor subagents"
+                        description="Allow Advisor to run through OMP subagent infrastructure."
+                        checked={advisorSubagents}
+                        disabled={saving || !!globalParseError}
+                        onCheckedChange={setAdvisorSubagents}
+                      />
+                      <SettingsCardContent>
+                        <AdvisorRosterEditor
+                          draft={advisorRosterDraft}
+                          disabled={saving || !!globalParseError || !!advisorRosterParseError}
+                          workspaceId={activeWorkspaceId}
+                          editablePath={state.advisor.roster.editable.path}
+                          exists={state.advisor.roster.editable.exists}
+                          parseError={state.advisor.roster.editable.parseError}
+                          onInstructionsChange={value => setAdvisorRosterDraft(previous => ({ ...previous, instructions: value }))}
+                          onAdvisorChange={updateAdvisorDraft}
+                          onAddAdvisor={addAdvisorDraft}
+                          onRemoveAdvisor={removeAdvisorDraft}
+                        />
+                        <div className="mb-2 mt-4 flex items-center gap-2 text-sm font-medium">
+                          <BrainCircuit className="size-4 text-violet-500" />
+                          Effective roster
                         </div>
-                      ) : (
-                        <div className="text-sm text-muted-foreground">No WATCHDOG.yml roster configured.</div>
-                      )}
-                      <div className="mt-2 truncate text-xs text-muted-foreground" title={pathSummary(state.advisor.roster.paths)}>
-                        {pathSummary(state.advisor.roster.paths)}
-                      </div>
-                      {state.advisor.roster.parseErrors.length > 0 && (
-                        <div className="mt-2 rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-200">
-                          {state.advisor.roster.parseErrors.length} roster file(s) could not be parsed.
+                        {state.advisor.roster.advisors.length > 0 ? (
+                          <div className="space-y-1.5">
+                            {state.advisor.roster.advisors.map(advisor => (
+                              <div key={`${advisor.path}-${advisor.name}`} className="flex items-center justify-between gap-2 rounded-md bg-muted/40 px-2 py-1.5 text-xs">
+                                <span className="font-medium">{advisor.name}</span>
+                                <span className="truncate text-muted-foreground">{advisor.model || 'uses advisor role'}</span>
+                                {advisor.level && <SourceBadge source={advisor.level} />}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-sm text-muted-foreground">No WATCHDOG.yml roster configured.</div>
+                        )}
+                        <div className="mt-2 truncate text-xs text-muted-foreground" title={pathSummary(state.advisor.roster.paths)}>
+                          {pathSummary(state.advisor.roster.paths)}
                         </div>
-                      )}
-                    </SettingsCardContent>
-                  </SettingsCard>
-                </SettingsSection>
+                        {state.advisor.roster.parseErrors.length > 0 && (
+                          <div className="mt-2 rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-200">
+                            {state.advisor.roster.parseErrors.length} roster file(s) could not be parsed.
+                          </div>
+                        )}
+                      </SettingsCardContent>
+                    </SettingsCard>
+                  </SettingsSection>
+                </div>
 
                 <SettingsSection title="How to use OMP features" description="Quick answers for Skills, MCP, agents, Advisor, and the plan model role.">
                   <div className="grid gap-3 md:grid-cols-2">
@@ -1013,41 +1205,49 @@ export default function OmpFeatureCenterSettingsPage() {
 
                 <SettingsSection title="OMP Capabilities" description="Read-only discovery for OMP-specific surfaces. Craft Sources remain separate.">
                   <div className="grid gap-3 md:grid-cols-3">
-                    <CapabilityCard workspaceId={activeWorkspaceId} icon={Sparkles} title="Skills" capability={state.skills} />
-                    <CapabilityCard workspaceId={activeWorkspaceId} icon={ServerCog} title="MCP" capability={state.mcp} />
-                    <CapabilityCard workspaceId={activeWorkspaceId} icon={Bot} title="Agents" capability={state.agents} />
+                    <div ref={skillsSectionRef} tabIndex={-1} className="outline-none">
+                      <CapabilityCard workspaceId={activeWorkspaceId} icon={Sparkles} title="Skills" capability={state.skills} />
+                    </div>
+                    <div ref={mcpSectionRef} tabIndex={-1} className="outline-none">
+                      <CapabilityCard workspaceId={activeWorkspaceId} icon={ServerCog} title="MCP" capability={state.mcp} />
+                    </div>
+                    <div ref={agentsSectionRef} tabIndex={-1} className="outline-none">
+                      <CapabilityCard workspaceId={activeWorkspaceId} icon={Bot} title="Agents" capability={state.agents} />
+                    </div>
                   </div>
                 </SettingsSection>
 
-                <SettingsSection title="Native Plan" description="Current desktop support for OMP native /plan.">
-                  <SettingsCard>
-                    <SettingsCardContent>
-                      <div className="flex items-start gap-3">
-                        <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-200">
-                          <ListChecks className="size-4" />
-                        </span>
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <div className="text-sm font-medium">Plan model: {valueOrDash(state.nativePlan.modelRole)}</div>
-                            <span className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-200">
-                              {state.nativePlan.toggleAvailable ? 'RPC available' : 'RPC hidden'}
-                            </span>
-                            <span className="rounded-full bg-blue-500/12 px-2 py-0.5 text-[11px] font-medium text-blue-700 dark:text-blue-200">
-                              approval UI: {state.nativePlan.approvalUi === 'extension-ui-if-emitted' ? 'ready if emitted' : 'not exposed'}
-                            </span>
-                          </div>
-                          <div className="mt-1 text-sm text-muted-foreground">{state.nativePlan.message}</div>
-                          {state.nativePlan.unavailableReason && (
-                            <div className="mt-2 text-xs text-muted-foreground">{state.nativePlan.unavailableReason}</div>
-                          )}
-                          <div className="mt-2 text-xs text-muted-foreground">
-                            RPC commands exposed: {state.nativePlan.rpcCommands.length > 0 ? state.nativePlan.rpcCommands.join(', ') : 'none'}
+                <div ref={nativePlanSectionRef} tabIndex={-1} className="outline-none">
+                  <SettingsSection title="Native Plan" description="Current desktop support for OMP native /plan.">
+                    <SettingsCard>
+                      <SettingsCardContent>
+                        <div className="flex items-start gap-3">
+                          <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-200">
+                            <ListChecks className="size-4" />
+                          </span>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div className="text-sm font-medium">Plan model: {valueOrDash(state.nativePlan.modelRole)}</div>
+                              <span className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-200">
+                                {state.nativePlan.toggleAvailable ? 'RPC available' : 'RPC hidden'}
+                              </span>
+                              <span className="rounded-full bg-blue-500/12 px-2 py-0.5 text-[11px] font-medium text-blue-700 dark:text-blue-200">
+                                approval UI: {state.nativePlan.approvalUi === 'extension-ui-if-emitted' ? 'ready if emitted' : 'not exposed'}
+                              </span>
+                            </div>
+                            <div className="mt-1 text-sm text-muted-foreground">{state.nativePlan.message}</div>
+                            {state.nativePlan.unavailableReason && (
+                              <div className="mt-2 text-xs text-muted-foreground">{state.nativePlan.unavailableReason}</div>
+                            )}
+                            <div className="mt-2 text-xs text-muted-foreground">
+                              RPC commands exposed: {state.nativePlan.rpcCommands.length > 0 ? state.nativePlan.rpcCommands.join(', ') : 'none'}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </SettingsCardContent>
-                  </SettingsCard>
-                </SettingsSection>
+                      </SettingsCardContent>
+                    </SettingsCard>
+                  </SettingsSection>
+                </div>
 
                 <SettingsSection title="Hidden TUI-only commands" description="OMP commands that are not shown in slash autocomplete because the current RPC protocol cannot execute them directly.">
                   <SettingsCard>

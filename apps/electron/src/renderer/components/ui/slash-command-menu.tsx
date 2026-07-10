@@ -1,11 +1,12 @@
 import * as React from 'react'
 import { useTranslation } from "react-i18next"
+import type { TFunction } from 'i18next'
 import { Command as CommandPrimitive } from 'cmdk'
-import { Bot, Check, Minimize2, ServerCog, Sparkles, Wrench } from 'lucide-react'
+import { Bot, BrainCircuit, Check, Cpu, ListChecks, Minimize2, ServerCog, Sparkles, Wrench } from 'lucide-react'
 import { Icon_Folder } from '@craft-agent/ui'
 import { cn } from '@/lib/utils'
 import { PERMISSION_MODE_CONFIG, PERMISSION_MODE_ORDER, type PermissionMode } from '@craft-agent/shared/agent/modes'
-import type { OmpAvailableCommandDto, OmpAvailableCommandSource } from '../../../shared/types'
+import type { OmpAvailableCommandDto, OmpAvailableCommandSource, OmpFeatureCenterStateDto, OmpFeatureUnavailableCommandDto } from '../../../shared/types'
 
 // ============================================================================
 // Types
@@ -17,16 +18,29 @@ export interface OmpSlashCommandId {
   subcommand?: string
 }
 
-export type SlashCommandId = PermissionMode | 'compact' | OmpSlashCommandId
+export interface OmpCuratedCommandId {
+  type: 'omp-curated'
+  kind: 'plan' | 'advisor' | 'mcp' | 'skills' | 'agents' | 'models'
+}
+
+export type SlashCommandId = PermissionMode | 'compact' | OmpSlashCommandId | OmpCuratedCommandId
 
 export function isOmpSlashCommandId(id: SlashCommandId): id is OmpSlashCommandId {
   return typeof id === 'object' && id?.type === 'omp'
 }
 
+export function isOmpCuratedCommandId(id: SlashCommandId): id is OmpCuratedCommandId {
+  return typeof id === 'object' && id?.type === 'omp-curated'
+}
+
 export function slashCommandIdKey(id: SlashCommandId): string {
-  return isOmpSlashCommandId(id)
-    ? `omp:${id.name}${id.subcommand ? `:${id.subcommand}` : ''}`
-    : id
+  if (isOmpSlashCommandId(id)) {
+    return `omp:${id.name}${id.subcommand ? `:${id.subcommand}` : ''}`
+  }
+  if (isOmpCuratedCommandId(id)) {
+    return `omp-curated:${id.kind}`
+  }
+  return id
 }
 
 /** Union type for all item types in the slash menu */
@@ -42,6 +56,12 @@ export interface SlashCommand {
   color?: string
   /** Optional compact metadata shown on the right side of inline menus. */
   meta?: string
+  /** When true, the item is visible and searchable but cannot be activated. */
+  disabled?: boolean
+  /** Short reason shown when the item is disabled. */
+  disabledReason?: string
+  /** Checked state for checkbox-like curated controls. */
+  checked?: boolean
 }
 
 /** Folder item for the slash menu */
@@ -129,7 +149,7 @@ export const DEFAULT_SLASH_COMMAND_GROUPS: CommandGroup[] = [
 // Shared Styles
 // ============================================================================
 
-const MENU_CONTAINER_STYLE = 'min-w-[260px] overflow-hidden rounded-2xl border border-white/10 bg-[#15151c]/95 text-foreground shadow-[0_22px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl'
+const MENU_CONTAINER_STYLE = 'min-w-[260px] overflow-hidden rounded-2xl border border-white/10 bg-[#15151c]/95 text-foreground shadow-modal-small backdrop-blur-xl'
 const MENU_LIST_STYLE = 'max-h-[360px] overflow-y-auto p-1.5'
 const MENU_ITEM_STYLE = 'flex cursor-pointer select-none items-start gap-2.5 rounded-xl px-2.5 py-2 text-[13px]'
 const MENU_ITEM_SELECTED = 'bg-white/[0.075]'
@@ -198,11 +218,22 @@ function CommandItemContent({ command, isActive }: { command: SlashCommand; isAc
     : command.label
   return (
     <>
-      <div className="mt-0.5 shrink-0 text-muted-foreground">{command.icon}</div>
+      <div className={cn('mt-0.5 shrink-0', command.disabled ? 'text-muted-foreground/50' : 'text-muted-foreground')}>
+        {command.icon}
+      </div>
       <div className="min-w-0 flex-1">
-        <div className="truncate font-medium leading-5">{label}</div>
+        <div className={cn('truncate font-medium leading-5', command.disabled && 'text-muted-foreground/70')}>
+          {label}
+        </div>
         {command.description && (
-          <div className="truncate text-[11px] leading-4 text-muted-foreground/80">{command.description}</div>
+          <div className="truncate text-[11px] leading-4 text-muted-foreground/80">
+            {command.description}
+          </div>
+        )}
+        {command.disabled && command.disabledReason && (
+          <div className="truncate text-[11px] leading-4 text-muted-foreground/60">
+            {command.disabledReason}
+          </div>
         )}
       </div>
       {(command.meta || command.shortcut) && (
@@ -293,7 +324,11 @@ export function SlashCommandMenu({
       <CommandPrimitive.Item
         key={cmdKey}
         value={cmdKey}
-        onSelect={() => onSelect(cmd.id)}
+        disabled={cmd.disabled}
+        aria-disabled={cmd.disabled || undefined}
+        onSelect={() => {
+          if (!cmd.disabled) onSelect(cmd.id)
+        }}
         data-tutorial={`permission-mode-${cmdKey}`}
         className={cn(
           MENU_ITEM_STYLE,
@@ -364,6 +399,10 @@ export interface InlineSlashCommandProps {
   className?: string
 }
 
+function isSelectableItem(item: SlashCommand | SlashFolderItem): boolean {
+  return isFolder(item) || !item.disabled
+}
+
 export function InlineSlashCommand({
   open,
   onOpenChange,
@@ -375,11 +414,16 @@ export function InlineSlashCommand({
   position,
   className,
 }: InlineSlashCommandProps) {
+  const { t } = useTranslation()
   const menuRef = React.useRef<HTMLDivElement>(null)
   const listRef = React.useRef<HTMLDivElement>(null)
   const [selectedIndex, setSelectedIndex] = React.useState(0)
   const filteredSections = filterSections(sections, filter)
   const flatItems = flattenSections(filteredSections)
+  const selectableItems = React.useMemo(
+    () => flatItems.filter(isSelectableItem),
+    [flatItems]
+  )
 
   // Reset selection when filter changes
   React.useEffect(() => {
@@ -406,25 +450,25 @@ export function InlineSlashCommand({
   }, [onSelectCommand, onSelectFolder, onOpenChange])
 
   // Keyboard navigation
-  // Don't attach listener when no items - allows Enter to propagate to input handler
+  // Don't attach listener when no selectable items - allows Enter to propagate to input handler
   React.useEffect(() => {
-    if (!open || flatItems.length === 0) return
+    if (!open || selectableItems.length === 0) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
       switch (e.key) {
         case 'ArrowDown':
           e.preventDefault()
-          setSelectedIndex(prev => (prev < flatItems.length - 1 ? prev + 1 : 0))
+          setSelectedIndex(prev => (prev < selectableItems.length - 1 ? prev + 1 : 0))
           break
         case 'ArrowUp':
           e.preventDefault()
-          setSelectedIndex(prev => (prev > 0 ? prev - 1 : flatItems.length - 1))
+          setSelectedIndex(prev => (prev > 0 ? prev - 1 : selectableItems.length - 1))
           break
         case 'Enter':
         case 'Tab':
           e.preventDefault()
-          if (flatItems[selectedIndex]) {
-            handleSelect(flatItems[selectedIndex])
+          if (selectableItems[selectedIndex]) {
+            handleSelect(selectableItems[selectedIndex])
           }
           break
         case 'Escape':
@@ -436,7 +480,7 @@ export function InlineSlashCommand({
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [open, flatItems, selectedIndex, handleSelect, onOpenChange])
+  }, [open, selectableItems, selectedIndex, handleSelect, onOpenChange])
 
   // Close on click outside
   React.useEffect(() => {
@@ -466,13 +510,15 @@ export function InlineSlashCommand({
     ? Math.min(Math.max(12, Math.round(position.x) - 10), Math.max(12, window.innerWidth - menuWidth - 12))
     : Math.round(position.x) - 10
 
-  // Track current item index across all sections
-  let currentItemIndex = 0
+  // Track selectable item index across all sections for rendering selection state
+  let selectableIndex = 0
 
   return (
     <div
       ref={menuRef}
       data-inline-menu
+      role="menu"
+      aria-label={t('commands.searchCommands')}
       className={cn('fixed z-dropdown', MENU_CONTAINER_STYLE, className)}
       style={{ left: leftPosition, bottom: bottomPosition, width: menuWidth }}
     >
@@ -480,23 +526,28 @@ export function InlineSlashCommand({
         {filteredSections.map((section, sectionIndex) => (
           <React.Fragment key={section.id}>
             {/* Section header */}
-            <div className={MENU_SECTION_HEADER}>
+            <div role="presentation" className={MENU_SECTION_HEADER}>
               {section.label}
             </div>
 
             {/* Section items */}
             {section.items.map((item) => {
-              const itemIndex = currentItemIndex++
-              const isSelected = itemIndex === selectedIndex
+              const itemIsSelectable = isSelectableItem(item)
+              const currentSelectableIndex = selectableIndex
+              const isSelected = itemIsSelectable && currentSelectableIndex === selectedIndex
+
+              if (itemIsSelectable) selectableIndex++
 
               if (isFolder(item)) {
                 // Folder item - single line with path
                 return (
                   <div
                     key={`${section.id}-${item.id}`}
+                    role="menuitem"
+                    tabIndex={-1}
                     data-selected={isSelected}
-                    onClick={() => handleSelect(item)}
-                    onMouseEnter={() => setSelectedIndex(itemIndex)}
+                    onClick={itemIsSelectable ? () => handleSelect(item) : undefined}
+                    onMouseEnter={itemIsSelectable ? () => setSelectedIndex(currentSelectableIndex) : undefined}
                     className={cn(
                       MENU_ITEM_STYLE,
                       isSelected && MENU_ITEM_SELECTED
@@ -515,15 +566,23 @@ export function InlineSlashCommand({
                 // Command item
                 const itemKey = slashCommandIdKey(item.id)
                 const isActive = activeCommands.some(id => slashCommandIdKey(id) === itemKey)
+                const isAdvisorToggle = isOmpCuratedCommandId(item.id) && item.id.kind === 'advisor'
+                const isModeCommand = typeof item.id === 'string' && MODE_COMMAND_IDS.has(item.id)
                 return (
                   <div
                     key={itemKey}
+                    role={isAdvisorToggle ? 'menuitemcheckbox' : isModeCommand ? 'menuitemradio' : 'menuitem'}
+                    tabIndex={-1}
+                    aria-checked={isAdvisorToggle ? item.checked : isModeCommand ? isActive : undefined}
+                    aria-disabled={item.disabled || undefined}
                     data-selected={isSelected}
-                    onClick={() => handleSelect(item)}
-                    onMouseEnter={() => setSelectedIndex(itemIndex)}
+                    data-disabled={item.disabled || undefined}
+                    onClick={itemIsSelectable ? () => handleSelect(item) : undefined}
+                    onMouseEnter={itemIsSelectable ? () => setSelectedIndex(currentSelectableIndex) : undefined}
                     className={cn(
                       MENU_ITEM_STYLE,
-                      isSelected && MENU_ITEM_SELECTED
+                      isSelected && MENU_ITEM_SELECTED,
+                      item.disabled && 'cursor-default opacity-60'
                     )}
                   >
                     <CommandItemContent command={item} isActive={isActive} />
@@ -548,7 +607,6 @@ export function InlineSlashCommand({
 // Hook for managing inline slash command state
 // ============================================================================
 
-/** Interface for elements that can be used with useInlineSlashCommand */
 export interface SlashCommandInputElement {
   getBoundingClientRect: () => DOMRect
   getCaretRect?: () => DOMRect | null
@@ -610,6 +668,48 @@ function formatOmpCommandMeta(source: OmpAvailableCommandSource, fallback: strin
   return fallback
 }
 
+export function filterAvailableOmpCommands(
+  commands: OmpAvailableCommandDto[],
+  unavailableCommands: OmpFeatureUnavailableCommandDto[],
+  unavailableCommandsLoaded = true,
+): OmpAvailableCommandDto[] {
+  if (!unavailableCommandsLoaded) return []
+  const hidden = new Set<string>()
+  for (const command of unavailableCommands) {
+    if (command.status === 'hidden' || command.status === 'needs-upstream-rpc') {
+      hidden.add(normalizeOmpCommandName(command.command))
+    }
+  }
+  return commands.filter(command => !hidden.has(normalizeOmpCommandName(command.name)))
+}
+
+function insertRuntimeOmpSections(
+  baseSections: SlashSection[],
+  runtimeSections: SlashSection[],
+  includeRuntime: boolean,
+): SlashSection[] {
+  if (!includeRuntime || runtimeSections.length === 0) return baseSections
+  const result = [...baseSections]
+  const folderIndex = result.findIndex(section => section.id === 'folders')
+  result.splice(folderIndex === -1 ? result.length : folderIndex, 0, ...runtimeSections)
+  return result
+}
+
+export function filterSlashSectionsForInput(
+  baseSections: SlashSection[],
+  runtimeSections: SlashSection[],
+  filterText: string,
+): SlashSection[] {
+  return filterSections(
+    insertRuntimeOmpSections(baseSections, runtimeSections, filterText.length > 0),
+    filterText,
+  )
+}
+
+function normalizeOmpCommandName(command: string): string {
+  return command.trim().replace(/^\/+/, '').split(/\s+/, 1)[0]?.toLowerCase() ?? ''
+}
+
 export interface UseInlineSlashCommandOptions {
   /** Ref to input element (textarea or RichTextInput handle) */
   inputRef: React.RefObject<SlashCommandInputElement | null>
@@ -617,6 +717,14 @@ export interface UseInlineSlashCommandOptions {
   onSelectFolder: (path: string) => void
   activeCommands?: SlashCommandId[]
   ompCommands?: OmpAvailableCommandDto[]
+  /** Runtime OMP commands that should not be executable in the menu. */
+  ompUnavailableCommands?: OmpFeatureUnavailableCommandDto[]
+  /** True when the current session uses the OMP backend. */
+  isOmpSession?: boolean
+  /** Lazy-loaded Feature Center state for OMP curated rows. */
+  ompFeatureCenterState?: OmpFeatureCenterStateDto | null
+  /** Number of synchronized models available on the active OMP connection. */
+  ompModelCount?: number
   recentFolders?: string[]
   homeDir?: string
 }
@@ -633,15 +741,102 @@ export interface UseInlineSlashCommandReturn {
   handleSelectFolder: (path: string) => string
 }
 
+export function buildOmpCuratedSections(
+  state: OmpFeatureCenterStateDto,
+  t: TFunction,
+  ompModelCount?: number,
+): SlashSection[] {
+  const planDisabled = !state.nativePlan.toggleAvailable
+  const advisorEnabled = state.advisor.enabled.effectiveValue
+  const advisorProjectOverridden = state.advisor.enabled.projectOverridden
+
+  const controls: SlashCommand[] = [
+    {
+      id: { type: 'omp-curated', kind: 'plan' },
+      label: t('omp.quickControls.planMode'),
+      description: planDisabled
+        ? t('omp.quickControls.planUnavailableDescription')
+        : t('omp.quickControls.planToggleDescription'),
+      icon: <ListChecks className={MENU_ICON_SIZE} />,
+      meta: planDisabled ? t('omp.quickControls.rpcUnavailable') : t('omp.quickControls.off'),
+      disabled: planDisabled,
+      disabledReason: planDisabled ? t('omp.quickControls.rpcUnavailable') : undefined,
+    },
+    {
+      id: { type: 'omp-curated', kind: 'advisor' },
+      label: t('omp.quickControls.advisor'),
+      description: advisorProjectOverridden
+        ? t('omp.quickControls.projectOverrideDescription')
+        : t('omp.quickControls.advisorToggleDescription'),
+      icon: <BrainCircuit className={MENU_ICON_SIZE} />,
+      meta: advisorProjectOverridden
+        ? t('omp.quickControls.projectOverride')
+        : t(advisorEnabled ? 'omp.quickControls.on' : 'omp.quickControls.off'),
+      disabled: advisorProjectOverridden,
+      disabledReason: advisorProjectOverridden ? t('omp.quickControls.projectOverride') : undefined,
+      checked: advisorEnabled,
+    },
+  ]
+
+  const tools: SlashCommand[] = [
+    {
+      id: { type: 'omp-curated', kind: 'mcp' },
+      label: t('omp.quickControls.mcp'),
+      description: t('omp.quickControls.mcpDescription'),
+      icon: <ServerCog className={MENU_ICON_SIZE} />,
+      meta: state.mcp.error
+        ? t('omp.quickControls.unavailable')
+        : t('omp.quickControls.serverCount', { count: state.mcp.count }),
+    },
+    {
+      id: { type: 'omp-curated', kind: 'skills' },
+      label: t('omp.quickControls.skills'),
+      description: t('omp.quickControls.skillsDescription'),
+      icon: <Sparkles className={MENU_ICON_SIZE} />,
+      meta: state.skills.error
+        ? t('omp.quickControls.unavailable')
+        : t('omp.quickControls.skillCount', { count: state.skills.count }),
+    },
+    {
+      id: { type: 'omp-curated', kind: 'agents' },
+      label: t('omp.quickControls.agents'),
+      description: t('omp.quickControls.agentsDescription'),
+      icon: <Bot className={MENU_ICON_SIZE} />,
+      meta: state.agents.error
+        ? t('omp.quickControls.unavailable')
+        : t('omp.quickControls.agentCount', { count: state.agents.count }),
+    },
+    {
+      id: { type: 'omp-curated', kind: 'models' },
+      label: t('omp.quickControls.models'),
+      description: t('omp.quickControls.modelsDescription'),
+      icon: <Cpu className={MENU_ICON_SIZE} />,
+      meta: ompModelCount === undefined
+        ? t('omp.quickControls.unavailable')
+        : t('omp.quickControls.modelCount', { count: ompModelCount }),
+    },
+  ]
+
+  return [
+    { id: 'omp-controls', label: t('omp.quickControls.controlsSection'), items: controls },
+    { id: 'omp-tools', label: t('omp.quickControls.toolsSection'), items: tools },
+  ]
+}
+
 export function useInlineSlashCommand({
   inputRef,
   onSelectCommand,
   onSelectFolder,
   activeCommands = [],
   ompCommands = [],
+  ompUnavailableCommands = [],
+  isOmpSession = false,
+  ompFeatureCenterState,
+  ompModelCount,
   recentFolders = [],
   homeDir,
 }: UseInlineSlashCommandOptions): UseInlineSlashCommandReturn {
+  const { t } = useTranslation()
   const [isOpen, setIsOpen] = React.useState(false)
   const [filter, setFilter] = React.useState('')
   const [position, setPosition] = React.useState({ x: 0, y: 0 })
@@ -649,8 +844,16 @@ export function useInlineSlashCommand({
   // Store current input state for handleSelect
   const currentInputRef = React.useRef({ value: '', cursorPosition: 0 })
 
+  const availableOmpCommands = React.useMemo(() => {
+    return filterAvailableOmpCommands(
+      ompCommands,
+      ompUnavailableCommands,
+      !isOmpSession || !!ompFeatureCenterState,
+    )
+  }, [isOmpSession, ompCommands, ompFeatureCenterState, ompUnavailableCommands])
+
   const ompSlashCommands = React.useMemo((): SlashCommand[] => {
-    return ompCommands.flatMap((command) => {
+    return availableOmpCommands.flatMap((command) => {
       const section = ompCommandSection(command)
       const base: SlashCommand = {
         id: { type: 'omp', name: command.name },
@@ -670,11 +873,11 @@ export function useInlineSlashCommand({
       })) ?? []
       return [base, ...subcommands]
     })
-  }, [ompCommands])
+  }, [availableOmpCommands])
 
   const ompSections = React.useMemo((): SlashSection[] => {
     const grouped = new Map<string, SlashSection>()
-    for (const command of ompCommands) {
+    for (const command of availableOmpCommands) {
       const section = ompCommandSection(command)
       if (!grouped.has(section.id)) {
         grouped.set(section.id, { id: section.id, label: section.label, items: [] })
@@ -682,17 +885,22 @@ export function useInlineSlashCommand({
     }
     for (const item of ompSlashCommands) {
       const commandName = isOmpSlashCommandId(item.id) ? item.id.name : ''
-      const source = ompCommands.find(command => command.name === commandName)
+      const source = availableOmpCommands.find(command => command.name === commandName)
       const section = source ? ompCommandSection(source) : { id: 'omp-commands', label: 'Oh My Pi' }
       grouped.get(section.id)?.items.push(item)
     }
     return ['omp-commands', 'omp-skills', 'omp-mcp', 'omp-agents']
       .map(id => grouped.get(id))
       .filter((section): section is SlashSection => !!section && section.items.length > 0)
-  }, [ompCommands, ompSlashCommands])
+  }, [availableOmpCommands, ompSlashCommands])
+
+  const ompCuratedSections = React.useMemo((): SlashSection[] => {
+    if (!isOmpSession || !ompFeatureCenterState) return []
+    return buildOmpCuratedSections(ompFeatureCenterState, t, ompModelCount)
+  }, [isOmpSession, ompFeatureCenterState, ompModelCount, t])
 
   // Build sections from commands and folders
-  const sections = React.useMemo((): SlashSection[] => {
+  const baseSections = React.useMemo((): SlashSection[] => {
     const result: SlashSection[] = []
 
     // Modes section
@@ -702,14 +910,17 @@ export function useInlineSlashCommand({
       items: permissionModeCommands,
     })
 
+    // OMP Controls and Tools & Context
+    if (ompCuratedSections.length > 0) {
+      result.push(...ompCuratedSections)
+    }
+
     // Commands section
     result.push({
       id: 'commands',
       label: 'Commands',
       items: [compactCommand],
     })
-
-    result.push(...ompSections)
 
     // Recent folders section - sorted alphabetically by folder name, show all
     if (recentFolders.length > 0) {
@@ -734,7 +945,12 @@ export function useInlineSlashCommand({
     }
 
     return result
-  }, [recentFolders, homeDir, ompSections])
+  }, [ompCuratedSections, recentFolders, homeDir])
+
+  const sections = React.useMemo(
+    () => insertRuntimeOmpSections(baseSections, ompSections, filter.length > 0),
+    [baseSections, filter, ompSections],
+  )
 
   const handleInputChange = React.useCallback((value: string, cursorPosition: number) => {
     // Store current state for handleSelect
@@ -743,14 +959,11 @@ export function useInlineSlashCommand({
     const textBeforeCursor = value.slice(0, cursorPosition)
     const slashMatch = textBeforeCursor.match(/(?:^|\s)\/([\w-]*)$/)
 
-    // Only show menu if we have sections with items
-    const hasItems = sections.some(s => s.items.length > 0)
-
-    if (slashMatch && hasItems) {
+    if (slashMatch) {
       const filterText = slashMatch[1] || ''
       // Check if there are any filtered results before opening menu
       // This ensures Enter key works normally when no matches exist
-      const filteredSections = filterSections(sections, filterText)
+      const filteredSections = filterSlashSectionsForInput(baseSections, ompSections, filterText)
       const hasFilteredItems = filteredSections.some(s => s.items.length > 0)
 
       if (!hasFilteredItems) {
@@ -793,7 +1006,7 @@ export function useInlineSlashCommand({
       setFilter('')
       setSlashStart(-1)
     }
-  }, [inputRef, sections])
+  }, [baseSections, inputRef, ompSections])
 
   const handleSelectCommand = React.useCallback((commandId: SlashCommandId): string => {
     // Capture values BEFORE any state changes to avoid race conditions
