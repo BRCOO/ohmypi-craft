@@ -101,6 +101,9 @@ export function reduceOmpRuntimeState(
           ? { ...action.state.contextUsage }
           : state.contextUsage,
         autoCompactionEnabled: action.state.autoCompactionEnabled,
+        autoRetryEnabled: typeof action.state.autoRetryEnabled === 'boolean'
+          ? action.state.autoRetryEnabled
+          : state.autoRetryEnabled,
         available: true,
         pendingAction: state.pendingAction === 'refresh' ? undefined : state.pendingAction,
         error: state.pendingAction === 'refresh' ? undefined : state.error,

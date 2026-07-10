@@ -3276,12 +3276,32 @@ export class OmpRpcBackend extends BaseAgent {
     child: ChildProcessWithoutNullStreams,
   ): Promise<void> {
     try {
-      await this.send({ type: 'set_subagent_subscription', level: 'progress' });
+      await this.subscribeOmpSubagentEventsForReady(generation, child);
       if (generation !== this.processGeneration || child !== this.child) return;
       await this.refreshOmpSubagentsInternal(generation, child);
     } catch (error) {
       if (generation !== this.processGeneration || child !== this.child) return;
       this.debug(`OMP subagent discovery failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async subscribeOmpSubagentEventsForReady(
+    generation: number,
+    child: ChildProcessWithoutNullStreams,
+  ): Promise<void> {
+    try {
+      await this.send({ type: 'set_subagent_subscription', level: 'events' });
+      return;
+    } catch (error) {
+      if (generation !== this.processGeneration || child !== this.child) return;
+      this.debug(`OMP subagent event subscription failed; falling back to progress: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    try {
+      await this.send({ type: 'set_subagent_subscription', level: 'progress' });
+    } catch (error) {
+      if (generation !== this.processGeneration || child !== this.child) return;
+      this.debug(`OMP subagent progress subscription failed; continuing with snapshot refresh only: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -3405,6 +3425,11 @@ export class OmpRpcBackend extends BaseAgent {
   }
 
   private applySubagentFrame(frame: OmpSubagentFrame): void {
+    if (frame.type === 'subagent_event') {
+      this.updateSubagentState({ type: 'event', id: frame.payload.id, event: frame.payload.event });
+      return;
+    }
+
     if (frame.type === 'subagent_lifecycle') {
       if (frame.payload.status !== 'started') {
         this.updateSubagentState({ type: 'remove', id: frame.payload.id });
@@ -3496,6 +3521,10 @@ export class OmpRpcBackend extends BaseAgent {
       this.subagentState = createOmpSubagentState();
     }
     this.sessionState = state;
+    if (typeof state.model === 'string' && state.model.trim().length > 0) {
+      super.setModel(state.model);
+      this.selectedModelKey = state.model;
+    }
     this.runtimeState = reduceOmpRuntimeState(this.runtimeState, { type: 'session_state', state });
     this.touchControlState();
     this.applyTodoSessionState(state.sessionId, state.todoPhases);

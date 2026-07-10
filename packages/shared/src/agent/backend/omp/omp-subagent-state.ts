@@ -37,7 +37,8 @@ export type OmpSubagentStateAction =
   | { type: 'failed'; action: OmpSubagentPendingAction; error: string }
   | { type: 'transcript_pending'; id: string }
   | { type: 'transcript_loaded'; id: string; entries: unknown[]; messages: unknown[]; cursor?: OmpSubagentTranscriptCursor }
-  | { type: 'transcript_failed'; id: string; error: string };
+  | { type: 'transcript_failed'; id: string; error: string }
+  | { type: 'event'; id: string; event: unknown };
 
 function cloneSubagentSnapshot(subagent: OmpSubagentSnapshot): OmpSubagentSnapshot {
   return {
@@ -246,6 +247,25 @@ export function reduceOmpSubagentState(
         ...cloneOmpSubagentState(state),
         subagents,
         pendingAction: state.pendingAction === 'load-transcript' ? undefined : state.pendingAction,
+        updatedAt,
+      };
+    }
+
+    case 'event': {
+      const subagents = state.subagents.map((subagent) =>
+        subagent.id === action.id
+          ? {
+              ...subagent,
+              transcriptEntries: [...subagent.transcriptEntries, action.event],
+              transcriptLoading: false,
+              transcriptError: undefined,
+            }
+          : { ...subagent }
+      );
+      return {
+        ...cloneOmpSubagentState(state),
+        subagents,
+        revision: state.revision + 1,
         updatedAt,
       };
     }

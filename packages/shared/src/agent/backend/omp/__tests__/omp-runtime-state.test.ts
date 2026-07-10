@@ -39,6 +39,29 @@ describe('OMP runtime state reducer', () => {
     expect(failed.error).toBe('offline');
   });
 
+  it('restores automatic maintenance settings from session state when present', () => {
+    const restored = reduceOmpRuntimeState(
+      createOmpRuntimeState(),
+      {
+        type: 'session_state',
+        state: {
+          ...sessionState,
+          autoCompactionEnabled: false,
+          autoRetryEnabled: true,
+        },
+      },
+    );
+
+    expect(restored.autoCompactionEnabled).toBe(false);
+    expect(restored.autoRetryEnabled).toBe(true);
+
+    const olderStateWithoutAutoRetry = reduceOmpRuntimeState(restored, {
+      type: 'session_state',
+      state: sessionState,
+    });
+    expect(olderStateWithoutAutoRetry.autoRetryEnabled).toBe(true);
+  });
+
   it('tracks manual compaction without confusing it with automatic compaction', () => {
     const started = reduceOmpRuntimeState(
       createOmpRuntimeState(),

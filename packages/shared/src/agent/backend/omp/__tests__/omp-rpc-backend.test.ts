@@ -32,6 +32,7 @@ class FakeChild extends EventEmitter {
   subagentEntries = new Map<string, unknown[]>();
   lastAssistantText: string | null = null;
   loginProviders: Array<Record<string, unknown>> = [];
+  failSubagentEventSubscription = false;
   killed = false;
 
   constructor() {
@@ -120,8 +121,13 @@ class FakeChild extends EventEmitter {
             type: 'response',
             id: frame.id,
             command: 'set_subagent_subscription',
-            success: true,
-            data: { level: frame.level },
+            success: !(this.failSubagentEventSubscription && frame.level === 'events'),
+            error: this.failSubagentEventSubscription && frame.level === 'events'
+              ? 'unsupported subscription level'
+              : undefined,
+            data: this.failSubagentEventSubscription && frame.level === 'events'
+              ? undefined
+              : { level: frame.level },
           }));
         }
         if (frame.type === 'get_subagents') {
@@ -669,12 +675,16 @@ describe('OmpRpcBackend subprocess lifecycle', () => {
       id: stateRequest.id,
       command: 'get_state',
       success: true,
-      data: sessionState('real-session-id'),
+      data: sessionState('real-session-id', {
+        model: 'deepseek/deepseek-v4-flash',
+      }),
     });
     await ready;
 
     expect(sessionIds).toEqual(['real-session-id']);
     expect((backend as any).sessionState.sessionId).toBe('real-session-id');
+    expect(backend.getModel()).toBe('deepseek/deepseek-v4-flash');
+    expect((backend as any).selectedModelKey).toBe('deepseek/deepseek-v4-flash');
     await waitFor(() => backend.getCachedAvailableCommands()[0]?.name === 'stats');
     expect(backend.getCachedAvailableCommands().map((command) => command.name)).toEqual(['stats']);
     backend.destroy();
@@ -2651,6 +2661,77 @@ describe('OmpRpcBackend Todo bridge', () => {
     expect(subagent.id).toBe('sub-5');
     expect(subagent.progress?.currentTool).toBe('write');
     expect(subagent.progress?.requests).toBe(3);
+    backend.destroy();
+  });
+
+  it('subscribes to raw subagent events and appends them to the detail transcript', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children);
+
+    await waitFor(() => child.frames.some((frame) => frame.type === 'set_subagent_subscription'));
+    expect(child.frames.find((frame) => frame.type === 'set_subagent_subscription')?.level).toBe('events');
+
+    child.emitFrame({
+      type: 'subagent_lifecycle',
+      payload: {
+        id: 'sub-events',
+        index: 0,
+        agent: 'reviewer',
+        agentSource: 'project',
+        status: 'started',
+      },
+    });
+    await waitFor(() => backend.getOmpSubagentState().subagents.some((subagent) => subagent.id === 'sub-events'));
+
+    child.emitFrame({
+      type: 'subagent_event',
+      payload: {
+        id: 'sub-events',
+        event: {
+          type: 'message_update',
+          messageId: 'msg-1',
+          assistant_message_event: { type: 'text_delta', delta: 'hi' },
+        },
+      },
+    });
+
+    await waitFor(() => backend.getOmpSubagentState().subagents[0]?.transcriptEntries.length === 1);
+    expect(backend.getOmpSubagentState().subagents[0]?.transcriptEntries[0]).toMatchObject({
+      type: 'message_update',
+      messageId: 'msg-1',
+    });
+    backend.destroy();
+  });
+
+  it('falls back to progress subagent subscription when raw events are unavailable', async () => {
+    const { backend, children } = createHarness();
+    const ready = (backend as any).ensureSubprocess() as Promise<void>;
+    const child = children[0]!;
+    child.failSubagentEventSubscription = true;
+    child.subagents = [
+      {
+        id: 'sub-fallback',
+        index: 0,
+        agent: 'reviewer',
+        agentSource: 'project',
+        description: 'Compatibility fallback reviewer',
+        status: 'running',
+        task: 'Review compatibility fallback',
+        sessionFile: 'D:/sessions/sub-fallback.jsonl',
+        lastUpdate: 1,
+      },
+    ];
+
+    await respondReady(child, 'session-subagent-fallback');
+    await ready;
+
+    await waitFor(() => child.frames.some(
+      (frame) => frame.type === 'set_subagent_subscription' && frame.level === 'progress',
+    ));
+    await waitFor(() => backend.getOmpSubagentState().subagents[0]?.id === 'sub-fallback');
+    expect(child.frames.filter((frame) => frame.type === 'set_subagent_subscription').map((frame) => frame.level))
+      .toEqual(['events', 'progress']);
+    expect(backend.getOmpSubagentState().available).toBe(true);
     backend.destroy();
   });
 });

@@ -138,6 +138,118 @@ function commandOutputLevel(raw: Record<string, unknown>): 'info' | 'warning' | 
   return level === 'warning' || level === 'error' || level === 'success' ? level : 'info';
 }
 
+function fencedBlock(language: string, content: string): string {
+  return `\`\`\`${language}\n${content}\n\`\`\``;
+}
+
+function userExecutionContent(
+  raw: Record<string, unknown>,
+  kind: 'user_bash' | 'user_python',
+): string {
+  const isPython = kind === 'user_python';
+  const source = isPython ? asString(raw.code) : asString(raw.command);
+  const output = asString(raw.output) ?? asString(raw.result);
+  const error = asString(raw.error);
+  const sections: string[] = [];
+
+  if (source) {
+    sections.push(`${isPython ? 'Python code' : 'Shell command'}:\n${fencedBlock(isPython ? 'python' : 'bash', source)}`);
+  }
+  if (output) {
+    sections.push(`Output:\n${fencedBlock('text', output)}`);
+  }
+  if (error) {
+    sections.push(`Error:\n${fencedBlock('text', error)}`);
+  }
+
+  return sections.join('\n\n') || `${isPython ? 'Python' : 'Shell'} execution event received`;
+}
+
+function asStringList(value: unknown): string[] {
+  if (typeof value === 'string') return [value];
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+}
+
+function formatTtsrRules(rawRules: unknown): string | undefined {
+  if (!Array.isArray(rawRules) || rawRules.length === 0) return undefined;
+
+  const lines = rawRules
+    .map(asObject)
+    .filter((rule): rule is Record<string, unknown> => Boolean(rule))
+    .map((rule) => {
+      const name = asString(rule.name) ?? 'Unnamed rule';
+      const description = asString(rule.description);
+      const scope = asStringList(rule.scope);
+      const condition = asStringList(rule.condition);
+      const source = asObject(rule._source);
+      const sourceLabel = asString(source?.name) ?? asString(source?.providerId) ?? asString(source?.provider_id);
+      const details = [
+        description ? `description: ${description}` : undefined,
+        scope.length > 0 ? `scope: ${scope.join(', ')}` : undefined,
+        condition.length > 0 ? `condition: ${condition.join(', ')}` : undefined,
+        sourceLabel ? `source: ${sourceLabel}` : undefined,
+      ].filter(Boolean);
+      return details.length > 0
+        ? `- ${name}\n  - ${details.join('\n  - ')}`
+        : `- ${name}`;
+    });
+
+  if (lines.length === 0) return undefined;
+  return [
+    `TTSR triggered ${lines.length} rule${lines.length === 1 ? '' : 's'}.`,
+    'Matched rules were injected into the active turn:',
+    ...lines,
+  ].join('\n');
+}
+
+function formatGoalUpdated(raw: Record<string, unknown>): {
+  message: string;
+  level: 'info' | 'warning' | 'error' | 'success';
+} {
+  const goal = asObject(raw.goal);
+  if (!goal) return { message: 'OMP Goal cleared', level: 'info' };
+
+  const objective = asString(goal.objective) ?? 'Untitled goal';
+  const status = asString(goal.status) ?? 'unknown';
+  const tokensUsed = asNumber(goal.tokensUsed);
+  const tokenBudget = asNumber(goal.tokenBudget);
+  const state = asObject(raw.state);
+  const mode = asString(state?.mode);
+  const reason = asString(state?.reason);
+  const details = [
+    `status: ${status}`,
+    tokenBudget !== undefined
+      ? `tokens: ${tokensUsed ?? 0}/${tokenBudget}`
+      : tokensUsed !== undefined
+        ? `tokens used: ${tokensUsed}`
+        : undefined,
+    mode ? `mode: ${mode}` : undefined,
+    reason ? `reason: ${reason}` : undefined,
+  ].filter(Boolean);
+  const level = status === 'complete'
+    ? 'success'
+    : status === 'paused' || status === 'budget-limited'
+      ? 'warning'
+      : 'info';
+
+  return {
+    message: [`OMP Goal updated: ${objective}`, ...details.map(detail => `- ${detail}`)].join('\n'),
+    level,
+  };
+}
+
+function formatIrcMessage(raw: Record<string, unknown>): string | undefined {
+  const message = asObject(raw.message);
+  if (!message) return undefined;
+  const customType = asString(message.customType) ?? asString(message.custom_type) ?? 'custom';
+  const content = extractTextFromContent(message.content) ?? asString(message.text);
+  const attribution = asObject(message.attribution);
+  const author = asString(attribution?.name) ?? asString(attribution?.source);
+  const heading = author ? `OMP IRC message (${customType}) from ${author}` : `OMP IRC message (${customType})`;
+  return content ? `${heading}\n\n${content}` : heading;
+}
+
 function parseArguments(value: unknown): Record<string, unknown> {
   if (!value) return {};
   if (typeof value === 'string') {
@@ -397,7 +509,11 @@ export class OmpRpcEventAdapter {
       }
 
       case 'turn_start':
-        this.currentTurnId = `omp-turn-${this.turnIndex++}`;
+        this.currentTurnId =
+          asString(raw.turnId)
+          ?? asString(raw.turn_id)
+          ?? asString(raw.id)
+          ?? `omp-turn-${this.turnIndex++}`;
         return { events: [] };
 
       case 'turn_end':
@@ -725,6 +841,25 @@ export class OmpRpcEventAdapter {
         };
       }
 
+      case 'user_bash':
+      case 'user_python': {
+        const level = raw.error !== undefined ? 'error' : 'info';
+        const isPython = type === 'user_python';
+        return {
+          events: [{
+            type: 'info',
+            message: userExecutionContent(raw, type),
+            level,
+            ompCommand: {
+              command: isPython ? 'python' : 'bash',
+              title: isPython ? 'Oh My Pi User Python' : 'Oh My Pi User Bash',
+              level,
+              format: 'markdown',
+            },
+          }],
+        };
+      }
+
       case 'extension_ui_request': {
         const request = buildExtensionUiRequest(raw);
         if (request.method === 'cancel') {
@@ -756,11 +891,59 @@ export class OmpRpcEventAdapter {
         return { events: [{ type: 'info', message: 'Compacted context to fit within limits' }] };
       }
 
+      case 'ttsr_triggered': {
+        const message = formatTtsrRules(raw.rules);
+        return {
+          events: message
+            ? [{
+                type: 'info',
+                message,
+                level: 'warning',
+              }]
+            : [],
+        };
+      }
+
+      case 'goal_updated': {
+        const goal = formatGoalUpdated(raw);
+        return {
+          events: [{
+            type: 'info',
+            message: goal.message,
+            level: goal.level,
+          }],
+        };
+      }
+
+      case 'irc_message': {
+        const message = formatIrcMessage(raw);
+        return {
+          events: message
+            ? [{
+                type: 'info',
+                message,
+                level: 'info',
+              }]
+            : [],
+        };
+      }
+
       case 'notice': {
         const level = asString(raw.level);
-        const message = asString(raw.message) ?? '';
-        if (!message) return { events: [] };
-        return { events: [{ type: level === 'error' ? 'error' : 'info', message }] as AgentEvent[] };
+        const source = asString(raw.source);
+        const rawMessage = asString(raw.message) ?? '';
+        if (!rawMessage) return { events: [] };
+        const message = source ? `[${source}] ${rawMessage}` : rawMessage;
+        if (level === 'error' || level === 'fatal') {
+          return { events: [{ type: 'error', message }] };
+        }
+        return {
+          events: [{
+            type: 'info',
+            message,
+            level: level === 'warning' || level === 'success' ? level : 'info',
+          }],
+        };
       }
 
       default:

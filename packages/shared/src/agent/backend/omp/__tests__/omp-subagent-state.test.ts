@@ -145,4 +145,18 @@ describe('omp-subagent-state', () => {
     expect(state.subagents[0]!.transcriptEntries).toEqual([{ type: 'second' }]);
     expect(state.subagents[0]!.transcriptMessages).toEqual([{ role: 'user' }]);
   });
+
+  it('appends live subagent events to transcript entries', () => {
+    let state = reduceOmpSubagentState(createOmpSubagentState(), { type: 'session_state', sessionId: 's1' });
+    state = reduceOmpSubagentState(state, { type: 'snapshot', subagents: [makeSnapshot('sa-1')] });
+    state = reduceOmpSubagentState(state, {
+      type: 'event',
+      id: 'sa-1',
+      event: { type: 'message_update', delta: 'hello' },
+    });
+
+    expect(state.subagents[0]!.transcriptEntries).toEqual([{ type: 'message_update', delta: 'hello' }]);
+    expect(state.subagents[0]!.transcriptLoading).toBe(false);
+    expect(state.subagents[0]!.transcriptError).toBeUndefined();
+  });
 });

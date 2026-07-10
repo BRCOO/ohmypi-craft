@@ -559,7 +559,15 @@ export interface OmpSubagentProgressFrame {
   payload: OmpSubagentProgressPayload;
 }
 
-export type OmpSubagentFrame = OmpSubagentLifecycleFrame | OmpSubagentProgressFrame;
+export interface OmpSubagentEventFrame {
+  type: 'subagent_event';
+  payload: {
+    id: string;
+    event: Record<string, unknown>;
+  };
+}
+
+export type OmpSubagentFrame = OmpSubagentLifecycleFrame | OmpSubagentProgressFrame | OmpSubagentEventFrame;
 
 export interface OmpRpcSetTodosResponseData {
   todoPhases: OmpTodoPhase[];
@@ -785,6 +793,7 @@ export interface OmpRpcSessionState {
   sessionId: string;
   sessionFile?: string;
   sessionName?: string;
+  model?: string;
   thinkingLevel?: unknown;
   isStreaming: boolean;
   isCompacting: boolean;
@@ -792,6 +801,7 @@ export interface OmpRpcSessionState {
   followUpMode: OmpQueueMode;
   interruptMode: OmpInterruptMode;
   autoCompactionEnabled: boolean;
+  autoRetryEnabled?: boolean;
   messageCount: number;
   queuedMessageCount: number;
   todoPhases: OmpTodoPhase[];
@@ -1284,6 +1294,19 @@ export function parseOmpSubagentFrame(value: unknown): OmpSubagentFrame | null {
         progress,
         sessionFile: payload.sessionFile as string | undefined,
         detached: payload.detached as boolean | undefined,
+      },
+    };
+  }
+
+  if (raw.type === 'subagent_event') {
+    const payload = asObject(raw.payload);
+    const event = asObject(payload?.event);
+    if (!payload || !isString(payload.id) || !event) return null;
+    return {
+      type: 'subagent_event',
+      payload: {
+        id: payload.id,
+        event: { ...event },
       },
     };
   }
@@ -1829,13 +1852,30 @@ export function parseOmpRpcResponse(value: unknown): OmpRpcResponseFrame | null 
     return null;
   }
 
+  const data = raw.data !== undefined
+    ? raw.data
+    : Object.fromEntries(
+      Object.entries(raw).filter(([key]) =>
+        key !== 'type'
+        && key !== 'id'
+        && key !== 'command'
+        && key !== 'success'
+        && key !== 'error',
+      ),
+    );
+  const normalizedData = raw.data !== undefined
+    ? data
+    : Object.keys(data as Record<string, unknown>).length > 0
+      ? data
+      : undefined;
+
   return {
     type: 'response',
     id: raw.id as string | undefined,
     command: raw.command,
     success: raw.success,
     error: raw.error as string | undefined,
-    data: raw.data,
+    data: normalizedData,
     raw: { ...raw },
   };
 }
@@ -1879,12 +1919,14 @@ export function parseOmpSessionState(value: unknown): OmpRpcSessionState | null 
     || !isQueueMode(raw.followUpMode)
     || !isInterruptMode(raw.interruptMode)
     || typeof raw.autoCompactionEnabled !== 'boolean'
+    || (raw.autoRetryEnabled !== undefined && typeof raw.autoRetryEnabled !== 'boolean')
     || !isFiniteNumber(raw.messageCount)
     || !isFiniteNumber(raw.queuedMessageCount)
     || !todoPhases
     || (raw.contextUsage !== undefined && !contextUsage)
     || (raw.sessionFile !== undefined && !isString(raw.sessionFile))
     || (raw.sessionName !== undefined && !isString(raw.sessionName))
+    || (raw.model !== undefined && !isString(raw.model))
   ) {
     return null;
   }
@@ -1894,12 +1936,14 @@ export function parseOmpSessionState(value: unknown): OmpRpcSessionState | null 
     sessionId: raw.sessionId,
     sessionFile: raw.sessionFile as string | undefined,
     sessionName: raw.sessionName as string | undefined,
+    model: raw.model as string | undefined,
     isStreaming: raw.isStreaming,
     isCompacting: raw.isCompacting,
     steeringMode: raw.steeringMode,
     followUpMode: raw.followUpMode,
     interruptMode: raw.interruptMode,
     autoCompactionEnabled: raw.autoCompactionEnabled,
+    autoRetryEnabled: raw.autoRetryEnabled as boolean | undefined,
     messageCount: raw.messageCount,
     queuedMessageCount: raw.queuedMessageCount,
     todoPhases,

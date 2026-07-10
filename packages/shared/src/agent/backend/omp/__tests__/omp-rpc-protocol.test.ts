@@ -138,6 +138,90 @@ describe('OMP RPC protocol parsers', () => {
     });
   });
 
+  it('parses common command response envelopes without inventing data', () => {
+    expect(parseOmpRpcResponse({
+      type: 'response',
+      id: 'state-1',
+      command: 'get_state',
+      success: true,
+      data: validState,
+    })).toMatchObject({
+      command: 'get_state',
+      success: true,
+      data: validState,
+    });
+
+    expect(parseOmpRpcResponse({
+      type: 'response',
+      id: 'models-1',
+      command: 'get_available_models',
+      success: true,
+      data: {
+        models: [
+          { provider: 'deepseek', id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+        ],
+      },
+    })).toMatchObject({
+      command: 'get_available_models',
+      data: {
+        models: [
+          { provider: 'deepseek', id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+        ],
+      },
+    });
+
+    expect(parseOmpRpcResponse({
+      type: 'response',
+      id: 'model-1',
+      command: 'set_model',
+      success: true,
+      data: { provider: 'deepseek', modelId: 'deepseek-v4-flash' },
+    })).toMatchObject({
+      command: 'set_model',
+      data: { provider: 'deepseek', modelId: 'deepseek-v4-flash' },
+    });
+
+    expect(parseOmpRpcResponse({
+      type: 'response',
+      id: 'abort-1',
+      command: 'abort',
+      success: true,
+    })).toMatchObject({
+      command: 'abort',
+      success: true,
+      data: undefined,
+    });
+  });
+
+  it('keeps a legacy response fallback without polluting standard data', () => {
+    expect(parseOmpRpcResponse({
+      type: 'response',
+      id: 'legacy-state',
+      command: 'get_state',
+      success: true,
+      sessionId: 'session-legacy',
+      isStreaming: false,
+    })).toMatchObject({
+      command: 'get_state',
+      data: {
+        sessionId: 'session-legacy',
+        isStreaming: false,
+      },
+    });
+
+    expect(parseOmpRpcResponse({
+      type: 'response',
+      id: 'standard-state',
+      command: 'get_state',
+      success: true,
+      data: { sessionId: 'session-standard' },
+      sessionId: 'session-legacy',
+    })).toMatchObject({
+      command: 'get_state',
+      data: { sessionId: 'session-standard' },
+    });
+  });
+
   it('rejects malformed response and prompt-result frames', () => {
     expect(parseOmpRpcResponse({ type: 'response', command: 'prompt', success: 'yes' })).toBeNull();
     expect(parseOmpPromptResult({ type: 'prompt_result', agentInvoked: 'no' })).toBeNull();
@@ -274,7 +358,9 @@ describe('OMP RPC protocol parsers', () => {
           ],
         },
       ],
+      model: 'deepseek/deepseek-v4-flash',
       contextUsage: { tokens: 4000, contextWindow: 10000, percent: 40 },
+      autoRetryEnabled: true,
       futureField: 'kept',
     })).toEqual({
       ...validState,
@@ -291,7 +377,9 @@ describe('OMP RPC protocol parsers', () => {
           ],
         },
       ],
+      model: 'deepseek/deepseek-v4-flash',
       contextUsage: { tokens: 4000, contextWindow: 10000, percent: 40 },
+      autoRetryEnabled: true,
       futureField: 'kept',
       sessionFile: undefined,
       sessionName: undefined,
@@ -474,6 +562,27 @@ describe('OMP RPC protocol parsers', () => {
           id: 'sub-1',
           status: 'running',
           currentTool: 'read',
+        },
+      },
+    });
+    expect(parseOmpSubagentFrame({
+      type: 'subagent_event',
+      payload: {
+        id: 'sub-1',
+        event: {
+          type: 'message_update',
+          messageId: 'msg-1',
+          assistant_message_event: { type: 'text_delta', delta: 'hello' },
+        },
+      },
+    })).toEqual({
+      type: 'subagent_event',
+      payload: {
+        id: 'sub-1',
+        event: {
+          type: 'message_update',
+          messageId: 'msg-1',
+          assistant_message_event: { type: 'text_delta', delta: 'hello' },
         },
       },
     });

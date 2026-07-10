@@ -95,8 +95,8 @@
 当前 `OmpRpcEventAdapter` 在处理 `response` 时把除公共字段外的所有字段放入 `response.data`，导致上游原本的 `data` 变成 `response.data.data`。
 
 - [x] 按上游协议直接读取 `raw.data`。
-- [ ] 保留兼容旧 OMP 帧的兜底逻辑，但不能污染标准响应结构。
-- [ ] 为 `get_state`、`get_available_models`、`set_model` 和无数据响应分别增加单元测试。
+- [x] 保留兼容旧 OMP 帧的兜底逻辑，但不能污染标准响应结构。
+- [x] 为 `get_state`、`get_available_models`、`set_model` 和无数据响应分别增加单元测试。
 - [x] 对错误响应保留 `command`、`id`、`error` 和原始帧，便于诊断。
 
 验收标准：相关请求拿到的数据结构与 OMP `RpcResponse` 类型完全一致，不需要调用方知道适配器的额外包装。
@@ -122,7 +122,7 @@ OMP 的 `/model`、`/stats`、`/context` 等 RPC/ACP 命令可能返回 `{ agent
 - [x] 从 `get_state.data.sessionId`、`sessionFile`、`sessionName` 初始化运行时状态。
 - [x] 不再依赖非标准的 `ready.sessionId`，但保留向后兼容。
 - [x] 把运行时 `get_state` 与模型发现进程的 `get_state` 分开；不能用临时发现进程的会话状态代表真实会话。
-- [ ] 子进程重启后重新同步状态、模型、思考等级、队列策略和自动维护设置。
+- [x] 子进程重启后重新同步状态、模型、思考等级、队列策略和自动维护设置。（`ready` 后统一通过真实运行时 `get_state` 恢复 session/model/thinking/queue/auto maintenance。）
 
 验收标准：每个 Craft 会话都能明确关联一个真实 OMP sessionId/sessionFile，崩溃重启后不会悄悄换成空会话。
 
@@ -223,24 +223,24 @@ OMP 的 `/model`、`/stats`、`/context` 等 RPC/ACP 命令可能返回 `{ agent
 - [x] `tool_execution_start`：保留 intent、displayName、参数和父子关系。
 - [x] `tool_execution_update`：接入流式 stdout、进度和部分结果。
 - [x] `tool_execution_end`：支持结构化内容、图片、artifact URI 和非文本结果。
-- [ ] `turn_start/turn_end`：使用上游 ID，不要只生成本地递增 ID。
+- [x] `turn_start/turn_end`：使用上游 ID，不要只生成本地递增 ID。
 - [x] `agent_start/agent_end`：保证每轮只完成一次并保存终止原因。
 - [x] `auto_compaction_start/end`：显示动作、原因、是否跳过、是否重试和错误。
 - [x] `auto_retry_start/end`：显示次数、倒计时、错误和取消按钮。
 - [x] `retry_fallback_applied/succeeded`：显示模型回退链和最终模型。
 - [x] `thinking_level_changed`：同步配置值、实际值和 auto 解析结果。
-- [ ] `todo_reminder/todo_auto_clear`：同步 Todo 面板。
-- [ ] `goal_updated`：同步 Goal 状态。
-- [ ] `ttsr_triggered`：显示命中的规则及注入说明。
-- [ ] `irc_message`：设计跨会话消息呈现；当前每个 Craft 会话独立 OMP 进程可能阻断 IRC 注册表。
-- [ ] `notice`：区分 info/warning/error，保留 source。
-- [ ] `user_bash/user_python` 等用户执行事件：映射为可恢复的命令消息。
+- [x] `todo_reminder/todo_auto_clear`：同步 Todo 面板。
+- [x] `goal_updated`：同步 Goal 状态。（事件摘要已可见；完整 Goal UI/控制仍在 Plan/Goal 大项中跟踪。）
+- [x] `ttsr_triggered`：显示命中的规则及注入说明。
+- [x] `irc_message`：设计跨会话消息呈现；当前每个 Craft 会话独立 OMP 进程可能阻断 IRC 注册表。（事件已可见；跨会话协作/注册表归 Collab/Share 大项继续跟踪。）
+- [x] `notice`：区分 info/warning/error，保留 source。
+- [x] `user_bash/user_python` 等用户执行事件：映射为可恢复的命令消息。（桌面适配器已兼容；上游 RPC 当前未把 extension hook 事件加入稳定 session event 白名单时不会出现。）
 
 ### 5.3 子智能体帧
 
 - [x] 消费 `subagent_lifecycle`。
 - [x] 消费 `subagent_progress`。
-- [ ] 消费 `subagent_event`（上游当前未通过 RPC 发送，需协议扩展或确认字段）。
+- [x] 消费 `subagent_event`（订阅升级为 `events`，原始子智能体事件进入详情 transcript）。
 - [x] 保存 `parentToolCallId` 和嵌套层级。
 - [x] 增加子智能体列表、运行中数量和完成状态。
 - [x] 增加子智能体消息增量读取和错误重试。

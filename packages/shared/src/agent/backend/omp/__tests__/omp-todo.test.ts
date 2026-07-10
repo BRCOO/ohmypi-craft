@@ -6,6 +6,10 @@ import {
   parseOmpTodoMarkdown,
   serializeOmpTodoMarkdown,
 } from '../omp-todo.ts';
+import {
+  createOmpTodoState,
+  reduceOmpTodoState,
+} from '../omp-todo-state.ts';
 import type { OmpTodoPhase } from '../omp-rpc-protocol.ts';
 
 const phases: OmpTodoPhase[] = [
@@ -90,6 +94,43 @@ describe('OMP Todo reducer', () => {
     next = applyOmpTodoMutation(next, { type: 'removeTask', phaseIndex: 0, taskIndex: 0 });
     next = applyOmpTodoMutation(next, { type: 'removePhase', phaseIndex: 0 });
     expect(next).toEqual([]);
+  });
+
+  it('tracks reminders and auto-clear events without losing subagent snapshots', () => {
+    let state = reduceOmpTodoState(createOmpTodoState(), {
+      type: 'session_state',
+      sessionId: 'session-1',
+      phases,
+    });
+    state = reduceOmpTodoState(state, {
+      type: 'subagents_snapshot',
+      subagents: [{
+        id: 'subagent-1',
+        index: 0,
+        agent: 'reviewer',
+        agentSource: 'bundled',
+        status: 'running',
+        lastUpdate: 123,
+      }],
+    });
+    state = reduceOmpTodoState(state, {
+      type: 'reminder',
+      todos: [{ content: 'next', status: 'pending' }],
+      attempt: 2,
+      maxAttempts: 3,
+    });
+
+    expect(state.reminder).toEqual({
+      todos: [{ content: 'next', status: 'pending' }],
+      attempt: 2,
+      maxAttempts: 3,
+    });
+
+    const cleared = reduceOmpTodoState(state, { type: 'auto_clear' });
+    expect(cleared.phases).toEqual([]);
+    expect(cleared.reminder).toBeUndefined();
+    expect(cleared.subagents).toEqual(state.subagents);
+    expect(cleared.revision).toBe(state.revision + 1);
   });
 });
 
