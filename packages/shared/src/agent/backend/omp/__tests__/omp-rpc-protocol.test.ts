@@ -386,6 +386,28 @@ describe('OMP RPC protocol parsers', () => {
     });
   });
 
+  it('normalizes object-shaped session models returned by current OMP', () => {
+    expect(parseOmpSessionState({
+      ...validState,
+      model: {
+        id: 'glm-5.1',
+        name: 'GLM-5.1',
+        provider: 'opencode-go',
+        api: 'openai-completions',
+      },
+    })?.model).toBe('opencode-go/glm-5.1');
+
+    expect(parseOmpSessionState({
+      ...validState,
+      model: { id: 'deepseek-v4-flash' },
+    })?.model).toBe('deepseek-v4-flash');
+
+    expect(parseOmpSessionState({
+      ...validState,
+      model: { name: 'missing id' },
+    })).toBeNull();
+  });
+
   it('parses context usage, statistics, and compaction results', () => {
     expect(parseOmpContextUsage({ tokens: 4000, contextWindow: 10000, percent: 40 })).toEqual({
       tokens: 4000,

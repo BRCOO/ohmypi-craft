@@ -95,7 +95,7 @@ function createMockServer(opts?: MockServerOptions): MockServer {
               result = { ok: true }
               break
             case 'settings:setupLlmConnection':
-              result = { ok: true }
+              result = { success: true }
               break
             case 'LLM_Connection:setDefault':
               result = { ok: true }
@@ -167,7 +167,7 @@ mock.module('./server-spawner.ts', () => ({
 }))
 
 // Import main AFTER mocking
-const { parseArgs } = await import('./index.ts')
+const { parseArgs, resolveApiKey, setupLlmConnection } = await import('./index.ts')
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -211,6 +211,10 @@ describe('run command', () => {
       'run', 'test',
     ])
     expect(args.noCleanup).toBe(true)
+  })
+
+  it('resolves OMP as a keyless provider', () => {
+    expect(resolveApiKey('omp', '')).toBe('')
   })
 
   it('creates session with correct workspace and options', async () => {
@@ -398,6 +402,37 @@ describe('run command', () => {
       'settings:setupLlmConnection',
       'LLM_Connection:setDefault',
     ])
+
+    client.destroy()
+  })
+
+  it('LLM bootstrap supports keyless OMP setup', async () => {
+    mockWsServer?.close()
+    mockWsServer = createMockServer({ connections: [] })
+
+    const { CliRpcClient } = await import('./client.ts')
+    const client = new CliRpcClient(mockWsServer!.url, {
+      token: mockWsServer!.token,
+      requestTimeout: 5_000,
+    })
+    await client.connect()
+
+    const args = parseArgs(['bun', 'index.ts', '--provider', 'omp', 'run', 'hello'])
+    const result = await setupLlmConnection(client, args)
+
+    expect(result.connectionSlug).toBe('omp-local')
+    expect(mockWsServer!.invokeArgs['LLM_Connection:save']![0]).toMatchObject([
+      {
+        slug: 'omp-local',
+        name: 'Oh My Pi',
+        providerType: 'omp',
+        authType: 'none',
+      },
+    ])
+    expect(mockWsServer!.invokeArgs['settings:setupLlmConnection']![0]).toEqual([
+      { slug: 'omp-local' },
+    ])
+    expect(mockWsServer!.invokeArgs['LLM_Connection:setDefault']![0]).toEqual(['omp-local'])
 
     client.destroy()
   })

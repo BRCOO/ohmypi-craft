@@ -528,6 +528,7 @@ const PROVIDER_ENV_KEYS: Record<string, string> = {
 
 const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   anthropic: 'Anthropic',
+  omp: 'Oh My Pi',
   openai: 'OpenAI',
   google: 'Google',
   openrouter: 'OpenRouter',
@@ -546,6 +547,7 @@ function getProviderDisplayName(provider: string): string {
 
 export function resolveApiKey(provider: string, explicit: string): string {
   if (explicit) return explicit
+  if (provider === 'omp') return ''
   if (provider === 'amazon-bedrock') return '' // IAM credentials, not API key
   const envKey = PROVIDER_ENV_KEYS[provider]
   if (envKey && process.env[envKey]) return process.env[envKey]!
@@ -558,19 +560,23 @@ export function shouldSetupLlmConnection(existingConnectionCount: number, args: 
   return existingConnectionCount === 0 || !!args.baseUrl || args.provider !== 'anthropic'
 }
 
-async function setupLlmConnection(
+export async function setupLlmConnection(
   client: CliRpcClient,
   args: CliArgs,
 ): Promise<{ connectionSlug: string }> {
   const { provider, baseUrl } = args
-  const key = resolveApiKey(provider, args.apiKey)
-  const connectionSlug = `${provider}-cli`
+  const connectionSlug = provider === 'omp' && !baseUrl ? 'omp-local' : `${provider}-cli`
 
   let providerType: string
   let authType: string
-  const setupPayload: Record<string, unknown> = { slug: connectionSlug, credential: key }
+  let setupPayload: Record<string, unknown> = { slug: connectionSlug }
 
-  if (baseUrl) {
+  if (provider === 'omp' && !baseUrl) {
+    providerType = 'omp'
+    authType = 'none'
+  } else if (baseUrl) {
+    const key = resolveApiKey(provider, args.apiKey)
+    setupPayload = { slug: connectionSlug, credential: key }
     // Custom endpoint — send the same payload shape as the desktop UI.
     // The server handler (llm-connections.ts:102-110) detects customEndpoint + baseUrl
     // and sets providerType='pi_compat', piAuthProvider, etc.
@@ -582,6 +588,8 @@ async function setupLlmConnection(
     }
     setupPayload.defaultModel = provider === 'anthropic' ? 'claude-sonnet-4-6' : 'gpt-4o'
   } else if (provider === 'anthropic') {
+    const key = resolveApiKey(provider, args.apiKey)
+    setupPayload = { slug: connectionSlug, credential: key }
     providerType = 'anthropic'
     authType = 'api_key'
   } else if (provider === 'amazon-bedrock') {
@@ -603,6 +611,8 @@ async function setupLlmConnection(
     setupPayload.awsRegion = region
     delete setupPayload.credential // IAM credentials go through iamCredentials field
   } else {
+    const key = resolveApiKey(provider, args.apiKey)
+    setupPayload = { slug: connectionSlug, credential: key }
     providerType = 'pi'
     authType = 'api_key'
     setupPayload.piAuthProvider = provider

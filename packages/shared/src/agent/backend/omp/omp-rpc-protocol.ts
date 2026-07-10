@@ -827,6 +827,17 @@ export function ompThinkingLevelToCraft(level: unknown): ThinkingLevel | undefin
   return undefined;
 }
 
+function normalizeOmpModelId(value: unknown): string | undefined {
+  if (isString(value)) return value;
+
+  const raw = asObject(value);
+  if (!raw || !isString(raw.id) || raw.id.trim().length === 0) return undefined;
+  if (isString(raw.provider) && raw.provider.trim().length > 0) {
+    return `${raw.provider}/${raw.id}`;
+  }
+  return raw.id;
+}
+
 function asObject(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -1909,6 +1920,9 @@ export function parseOmpSessionState(value: unknown): OmpRpcSessionState | null 
     ? undefined
     : parseOmpContextUsage(raw.contextUsage);
   const todoPhases = parseOmpTodoPhases(raw?.todoPhases);
+  const model = raw?.model === undefined
+    ? undefined
+    : normalizeOmpModelId(raw.model);
   if (
     !raw
     || !isString(raw.sessionId)
@@ -1926,7 +1940,7 @@ export function parseOmpSessionState(value: unknown): OmpRpcSessionState | null 
     || (raw.contextUsage !== undefined && !contextUsage)
     || (raw.sessionFile !== undefined && !isString(raw.sessionFile))
     || (raw.sessionName !== undefined && !isString(raw.sessionName))
-    || (raw.model !== undefined && !isString(raw.model))
+    || (raw.model !== undefined && !model)
   ) {
     return null;
   }
@@ -1936,7 +1950,7 @@ export function parseOmpSessionState(value: unknown): OmpRpcSessionState | null 
     sessionId: raw.sessionId,
     sessionFile: raw.sessionFile as string | undefined,
     sessionName: raw.sessionName as string | undefined,
-    model: raw.model as string | undefined,
+    model,
     isStreaming: raw.isStreaming,
     isCompacting: raw.isCompacting,
     steeringMode: raw.steeringMode,

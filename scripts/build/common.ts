@@ -169,7 +169,7 @@ export async function downloadBun(config: BuildConfig): Promise<void> {
     console.log(`  Bun installed to ${destPath} ✓`);
   } finally {
     // Cleanup temp directory
-    rmSync(tempDir, { recursive: true, force: true });
+    await rmDirWithRetries(tempDir);
   }
 }
 

@@ -1,6 +1,15 @@
 import { existsSync } from 'fs'
 import { join } from 'path'
-import { downloadUv, type Arch, type Platform } from './build/common'
+import {
+  downloadBun,
+  copyRipgrep,
+  copySDK,
+  downloadUv,
+  verifySDKCopy,
+  type Arch,
+  type BuildConfig,
+  type Platform,
+} from './build/common'
 
 const ROOT_DIR = join(import.meta.dir, '..')
 const ELECTRON_DIR = join(ROOT_DIR, 'apps/electron')
@@ -52,10 +61,26 @@ async function run(cmd: string[], options: { cwd: string; env?: Record<string, s
   }
 }
 
-function builderArgs(platform: PlatformTarget): string[] {
+function builderArgs(platform: PlatformTarget, options: { dev: boolean; arch: Arch }): string[] {
   const args = ['--config', 'electron-builder.yml']
   if (platform !== 'current') {
     args.push(`--${platform}`)
+  }
+  args.push(options.arch === 'arm64' ? '--arm64' : '--x64')
+  if (options.dev && targetPlatform(platform) === 'win32') {
+    // Dev Windows packaging must run for regular users. electron-builder's
+    // winCodeSign helper archive contains macOS symlinks, which fail to extract
+    // on Windows without Developer Mode/admin privileges. Keep full signing and
+    // resource editing for the non-dev distribution commands.
+    args.push('--config.win.signAndEditExecutable=false')
+  }
+  if (options.dev) {
+    // Dev packaging is a local acceptance artifact built from already-bundled
+    // app output. Avoid electron-builder's online dependency install/rebuild
+    // step so smoke tests do not depend on registry access or local TLS setup.
+    args.push('--config.npmRebuild=false')
+    args.push('--config.nodeGypRebuild=false')
+    args.push('--config.buildDependenciesFromSource=false')
   }
   return args
 }
@@ -101,6 +126,46 @@ async function ensureBundledUv(platform: PlatformTarget): Promise<void> {
   }
 }
 
+async function ensureBundledBun(platform: PlatformTarget): Promise<void> {
+  const resolvedPlatform = targetPlatform(platform)
+
+  // The current electron-builder resource layout has a single vendor/bun path.
+  // Windows is the acceptance target for this packaged smoke flow and ships one
+  // x64 artifact, so stage that runtime explicitly here. macOS universal Bun
+  // packaging needs a per-arch resource layout before this can be generalized.
+  if (resolvedPlatform !== 'win32') {
+    return
+  }
+
+  const bunBinary = join(ELECTRON_DIR, 'vendor', 'bun', 'bun.exe')
+  if (existsSync(bunBinary)) {
+    console.log(`Bundled Bun already present at ${bunBinary}`)
+    return
+  }
+
+  await downloadBun(buildConfig(resolvedPlatform, 'x64'))
+}
+
+function buildConfig(platform: Platform, arch: Arch): BuildConfig {
+  return {
+    platform,
+    arch,
+    upload: false,
+    uploadLatest: false,
+    uploadScript: false,
+    rootDir: ROOT_DIR,
+    electronDir: ELECTRON_DIR,
+  }
+}
+
+function stageRuntimeDependencies(platform: PlatformTarget, arch: Arch): void {
+  const resolvedPlatform = targetPlatform(platform)
+  const config = buildConfig(resolvedPlatform, arch)
+  copySDK(config)
+  verifySDKCopy(config)
+  copyRipgrep(config)
+}
+
 async function main(): Promise<void> {
   const { platform, dev, skipBuild } = parseArgs()
   if (!existsSync(ELECTRON_BUILDER_CLI)) {
@@ -114,15 +179,19 @@ async function main(): Promise<void> {
   }
 
   await ensureBundledUv(platform)
+  await ensureBundledBun(platform)
 
   if (!skipBuild) {
     await run([BUN_EXE, 'run', 'electron:build'], { cwd: ROOT_DIR, env })
   }
 
-  await run([NODE_EXE, ELECTRON_BUILDER_CLI, ...builderArgs(platform)], {
-    cwd: ELECTRON_DIR,
-    env,
-  })
+  for (const arch of targetArchs(platform)) {
+    stageRuntimeDependencies(platform, arch)
+    await run([NODE_EXE, ELECTRON_BUILDER_CLI, ...builderArgs(platform, { dev, arch })], {
+      cwd: ELECTRON_DIR,
+      env,
+    })
+  }
 }
 
 main().catch(error => {

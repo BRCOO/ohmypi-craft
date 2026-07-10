@@ -81,8 +81,8 @@ if (persistedUiLanguage) {
 const machineId = createHash('sha256').update(hostname() + homedir()).digest('hex').slice(0, 16)
 Sentry.setUser({ id: machineId })
 
-import { join, delimiter } from 'path'
-import { existsSync, readFileSync } from 'fs'
+import { dirname, join, delimiter } from 'path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import { SessionManager, setSessionPlatform, setSessionRuntimeHooks } from '@craft-agent/server-core/sessions'
 import { registerAllRpcHandlers } from './handlers/index'
@@ -224,6 +224,21 @@ let messagingHandle: MessagingBootstrapHandle | null = null
 // Store pending deep link if app not ready yet (cold start)
 let pendingDeepLink: string | null = null
 
+function writeHeadlessConnectionInfo(url: string, token: string): void {
+  const content = `CRAFT_SERVER_URL=${url}\nCRAFT_SERVER_TOKEN=${token}\n`
+  console.log(content.trimEnd())
+
+  const filePath = process.env.CRAFT_HEADLESS_LOG_FILE
+  if (!filePath) return
+
+  try {
+    mkdirSync(dirname(filePath), { recursive: true })
+    writeFileSync(filePath, content, 'utf8')
+  } catch (error) {
+    mainLog.warn('[headless] Failed to write connection info file:', error instanceof Error ? error.message : error)
+  }
+}
+
 // Set app name early (before app.whenReady) to ensure correct macOS menu bar title
 // Supports multi-instance dev: CRAFT_APP_NAME env var (e.g., "Oh My Pi [1]")
 app.setName(process.env.CRAFT_APP_NAME || 'Oh My Pi')
@@ -311,8 +326,12 @@ app.on('open-url', (event, url) => {
   }
 })
 
-// Handle deeplink on Windows/Linux (single instance check)
-const gotTheLock = app.requestSingleInstanceLock()
+// Handle deeplink on Windows/Linux (single instance check).
+// Headless runs are server/test processes and are already protected by the
+// server lock. Do not let a visible GUI instance prevent headless smoke tests
+// or local headless automation from starting.
+const shouldUseSingleInstanceLock = !process.env.CRAFT_HEADLESS
+const gotTheLock = shouldUseSingleInstanceLock ? app.requestSingleInstanceLock() : true
 if (!gotTheLock) {
   app.quit()
 } else {
@@ -1039,8 +1058,7 @@ app.whenReady().then(async () => {
 
       // Headless: print connection details
       if (isHeadless) {
-        console.log(`CRAFT_SERVER_URL=${instance.protocol}://${instance.host}:${instance.port}`)
-        console.log(`CRAFT_SERVER_TOKEN=${instance.token}`)
+        writeHeadlessConnectionInfo(`${instance.protocol}://${instance.host}:${instance.port}`, instance.token)
       }
     }
 
