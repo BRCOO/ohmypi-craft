@@ -16,14 +16,15 @@ import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import { HeaderMenu } from '@/components/ui/HeaderMenu'
-import { routes } from '@/lib/navigate'
-import { X, MoreHorizontal, Pencil, Trash2, Star, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, RefreshCcw, Settings2, MessageSquareMore, Zap, Clock, Check, ExternalLink, Loader2, ClipboardCopy, Globe, GitBranch, Terminal, Layers, Search } from 'lucide-react'
+import { navigate, routes } from '@/lib/navigate'
+import { requestOmpFeatureCenterSection, type OmpFeatureCenterSection } from '@/lib/omp-feature-center-navigation'
+import { X, MoreHorizontal, Pencil, Trash2, Star, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, RefreshCcw, Settings2, MessageSquareMore, Zap, Clock, Check, ExternalLink, Loader2, ClipboardCopy, Globe, GitBranch, Terminal, Layers, Search, Info } from 'lucide-react'
 import type { CredentialHealthStatus, CredentialHealthIssue } from '../../../shared/types'
 import { Spinner, FullscreenOverlayBase, Tooltip, TooltipTrigger, TooltipContent } from '@craft-agent/ui'
 import { useSetAtom } from 'jotai'
 import { fullscreenOverlayOpenAtom } from '@/atoms/overlay'
 import { motion, AnimatePresence } from 'motion/react'
-import type { LlmConnectionWithStatus, OmpDiagnosticsSummary, OmpLoginProviderDto, OmpRuntimeStatus, ThinkingLevel, WorkspaceSettings, Workspace } from '../../../shared/types'
+import type { LlmConnectionWithStatus, OmpDiagnosticsSummary, OmpLoginProviderDto, OmpResourceSnapshot, OmpRuntimeStatus, ThinkingLevel, WorkspaceSettings, Workspace } from '../../../shared/types'
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVELS } from '@craft-agent/shared/agent/thinking-levels'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import {
@@ -694,6 +695,8 @@ export default function AiSettingsPage() {
   const [ompLoggingInProviderId, setOmpLoggingInProviderId] = useState<string | undefined>()
   const [ompSaving, setOmpSaving] = useState(false)
   const [ompRefreshingModels, setOmpRefreshingModels] = useState(false)
+  const [ompResourceSnapshot, setOmpResourceSnapshot] = useState<OmpResourceSnapshot | null>(null)
+  const [ompResourceSnapshotError, setOmpResourceSnapshotError] = useState(false)
 
   // Validation state per connection
   const [validationStates, setValidationStates] = useState<Record<string, {
@@ -748,6 +751,35 @@ export default function AiSettingsPage() {
     load()
   }, [activeWorkspaceId])
 
+  // Keep resource discovery independent from runtime health so a slow MCP/Skills/Agents
+  // scan never blocks the rest of the AI settings page.
+  useEffect(() => {
+    let cancelled = false
+    setOmpResourceSnapshot(null)
+    setOmpResourceSnapshotError(false)
+    const load = async () => {
+      if (!window.electronAPI?.getOmpResourceSnapshot) {
+        if (!cancelled) setOmpResourceSnapshotError(true)
+        return
+      }
+      try {
+        const snapshot = await window.electronAPI.getOmpResourceSnapshot({
+          workspaceId: activeWorkspaceId ?? undefined,
+        })
+        if (!cancelled) setOmpResourceSnapshot(snapshot)
+      } catch {
+        if (!cancelled) {
+          setOmpResourceSnapshot(null)
+          setOmpResourceSnapshotError(true)
+        }
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [activeWorkspaceId])
+
   // Helpers to open/close the fullscreen API setup overlay
   const openApiSetup = useCallback((connectionSlug?: string) => {
     setEditingConnectionSlug(connectionSlug || null)
@@ -760,6 +792,11 @@ export default function AiSettingsPage() {
     setFullscreenOverlayOpen(false)
     setEditingConnectionSlug(null)
   }, [setFullscreenOverlayOpen])
+
+  const openOmpFeatureCenter = useCallback((section: OmpFeatureCenterSection) => {
+    requestOmpFeatureCenterSection(section)
+    navigate(routes.view.settings('omp'))
+  }, [])
 
   // Derive existing slugs for unique slug generation
   const existingSlugs = useMemo(
@@ -1460,33 +1497,68 @@ export default function AiSettingsPage() {
                 </SettingsCard>
               </SettingsSection>
 
-              {/* OMP subsystem status */}
+              {/* OMP diagnostics and feature discovery */}
               <SettingsSection title={t('settings.ai.ompSubsystems.title')} description={t('settings.ai.ompSubsystems.description')}>
                 <SettingsCard>
                   <div className="divide-y divide-border/50">
-                    {[
-                      { icon: Globe, label: t('settings.ai.ompSubsystems.browser'), description: t('settings.ai.ompSubsystems.browserDescription') },
-                      { icon: Layers, label: 'LSP', description: t('settings.ai.ompSubsystems.lspDescription') },
-                      { icon: GitBranch, label: 'GitHub', description: t('settings.ai.ompSubsystems.githubDescription') },
-                      { icon: Terminal, label: 'SSH', description: t('settings.ai.ompSubsystems.sshDescription') },
-                      { icon: Search, label: t('settings.ai.ompSubsystems.mcp'), description: t('settings.ai.ompSubsystems.mcpDescription') },
-                    ].map(({ icon: Icon, label, description }) => (
-                      <div key={label} className="flex items-start gap-3 px-4 py-3">
-                        <span className="mt-0.5 flex size-7 items-center justify-center rounded-lg bg-foreground/5 text-foreground/70">
-                          <Icon className="size-3.5" />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2 text-sm font-medium">
-                            {label}
-                            <span className="inline-flex items-center rounded-full bg-amber-400/10 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400">
-                              <AlertTriangle className="mr-1 size-3" />
-                              {t('settings.ai.ompSubsystems.notReported')}
+                    <div className="grid gap-2 p-3 sm:grid-cols-3">
+                      {[
+                        { section: 'mcp' as const, icon: Search, label: t('omp.featureCenter.mcp'), count: ompResourceSnapshot?.mcp.entries.length, error: ompResourceSnapshot?.mcp.error },
+                        { section: 'skills' as const, icon: Settings2, label: t('omp.featureCenter.skills'), count: ompResourceSnapshot?.skills.entries.length, error: ompResourceSnapshot?.skills.error },
+                        { section: 'agents' as const, icon: MessageSquareMore, label: t('omp.featureCenter.agents'), count: ompResourceSnapshot?.agents.entries.length, error: ompResourceSnapshot?.agents.error },
+                      ].map(({ section, icon: Icon, label, count, error }) => {
+                        const unavailable = ompResourceSnapshotError || Boolean(error)
+                        const statusTitle = error ?? (ompResourceSnapshotError ? t('common.unavailable') : undefined)
+                        return (
+                          <button
+                            key={section}
+                            type="button"
+                            onClick={() => openOmpFeatureCenter(section)}
+                            className="group flex min-w-0 items-center gap-3 rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5 text-left transition-colors hover:border-primary/40 hover:bg-muted/50"
+                            title={statusTitle}
+                          >
+                            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                              <Icon className="size-4" />
                             </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-medium">{label}</span>
+                              <span className="block text-xs text-muted-foreground">
+                                {unavailable
+                                  ? t('common.unavailable')
+                                  : count === undefined
+                                    ? t('omp.featureCenter.loading')
+                                    : t('omp.featureCenter.discovered', { count })}
+                              </span>
+                            </span>
+                            <ExternalLink className="size-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
+                          </button>
+                        )
+                      })}
+                    </div>
+                    <div className="divide-y divide-border/50">
+                      {[
+                        { icon: Globe, label: t('settings.ai.ompSubsystems.browser'), description: t('settings.ai.ompSubsystems.browserDescription') },
+                        { icon: Layers, label: 'LSP', description: t('settings.ai.ompSubsystems.lspDescription') },
+                        { icon: GitBranch, label: 'GitHub', description: t('settings.ai.ompSubsystems.githubDescription') },
+                        { icon: Terminal, label: 'SSH', description: t('settings.ai.ompSubsystems.sshDescription') },
+                      ].map(({ icon: Icon, label, description }) => (
+                        <div key={label} className="flex items-start gap-3 px-4 py-3">
+                          <span className="mt-0.5 flex size-7 items-center justify-center rounded-lg bg-foreground/5 text-foreground/70">
+                            <Icon className="size-3.5" />
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 text-sm font-medium">
+                              {label}
+                              <span className="inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                <Info className="mr-1 size-3" />
+                                {t('settings.ai.ompSubsystems.notReported')}
+                              </span>
+                            </div>
+                            <div className="text-xs text-muted-foreground">{description}</div>
                           </div>
-                          <div className="text-xs text-muted-foreground">{description}</div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 </SettingsCard>
               </SettingsSection>
