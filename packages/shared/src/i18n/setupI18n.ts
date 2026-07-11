@@ -32,7 +32,8 @@ export function setupI18n(
 
   instance.init({
     resources,
-    fallbackLng: "en",
+    lng: "zh-Hans",
+    fallbackLng: "zh-Hans",
     supportedLngs: [...SUPPORTED_LANGUAGE_CODES],
     interpolation: { escapeValue: false },
     initImmediate: false, // synchronous init — resources are bundled inline

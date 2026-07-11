@@ -1,7 +1,7 @@
 import type { ExtensionUiRequest, ExtensionUiResponse } from '../../shared/types'
 import type { ExtensionUiHostState } from '@/context/AppShellContext'
 
-const BLOCKING_METHODS = new Set(['select', 'confirm', 'input', 'editor'])
+const BLOCKING_METHODS = new Set(['select', 'confirm', 'input', 'editor', 'plan_review'])
 const IMMEDIATE_METHODS = new Set(['notify', 'setStatus', 'setWidget', 'setTitle', 'set_editor_text'])
 
 export function isBlockingExtensionUiMethod(method: string): boolean {

@@ -1,10 +1,15 @@
 import type { ProviderDriver } from '../driver-types.ts';
 import { discoverOmpModels } from '../../omp/omp-model-discovery.ts';
 import { probeOmpAuth, type OmpAuthProbeResult } from '../../omp/omp-auth-probe.ts';
+import { resolveBundledOmpCommand, resolveOmpRuntimeCommand } from '../../omp/omp-command.ts';
 import { getOmpCommandPath } from '../../../../config/storage.ts';
 
-function getConfiguredOmpCommand(): string {
-  return getOmpCommandPath() || process.env.OMP_COMMAND || 'omp';
+function resolveOmpCommandForHost(hostRuntime: Parameters<ProviderDriver['buildRuntime']>[0]['hostRuntime']): string {
+  return resolveOmpRuntimeCommand({
+    configuredCommand: getOmpCommandPath(),
+    envCommand: process.env.OMP_COMMAND,
+    bundledCommand: resolveBundledOmpCommand(hostRuntime),
+  }).rawCommand;
 }
 
 function probeResultToValidation(
@@ -43,16 +48,16 @@ function probeResultToValidation(
 export const ompDriver: ProviderDriver = {
   provider: 'omp',
   fetchModels: async ({ hostRuntime, timeoutMs }) => discoverOmpModels({
-    rawCommand: getConfiguredOmpCommand(),
+    rawCommand: resolveOmpCommandForHost(hostRuntime),
     cwd: hostRuntime.appRootPath || process.cwd(),
     timeoutMs,
   }),
-  buildRuntime: () => ({
-    ompCommand: getConfiguredOmpCommand(),
+  buildRuntime: ({ hostRuntime }) => ({
+    ompCommand: resolveOmpCommandForHost(hostRuntime),
   }),
   validateStoredConnection: async ({ hostRuntime }) => {
     const result = await probeOmpAuth({
-      rawCommand: getConfiguredOmpCommand(),
+      rawCommand: resolveOmpCommandForHost(hostRuntime),
       cwd: hostRuntime.appRootPath || process.cwd(),
       timeoutMs: 15_000,
     });
@@ -60,7 +65,7 @@ export const ompDriver: ProviderDriver = {
   },
   testConnection: async ({ hostRuntime, timeoutMs }) => {
     const result = await probeOmpAuth({
-      rawCommand: getConfiguredOmpCommand(),
+      rawCommand: resolveOmpCommandForHost(hostRuntime),
       cwd: hostRuntime.appRootPath || process.cwd(),
       timeoutMs: timeoutMs ?? 15_000,
     });

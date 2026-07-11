@@ -229,6 +229,13 @@ export const RPC_CHANNELS = {
     GET_FEATURE_CENTER_STATE: 'omp:getFeatureCenterState',
     OPEN_FEATURE_CENTER_PATH: 'omp:openFeatureCenterPath',
     SAVE_FEATURE_CENTER_CONFIG: 'omp:saveFeatureCenterConfig',
+    GET_RESOURCE_SNAPSHOT: 'omp:getResourceSnapshot',
+    CREATE_RESOURCE: 'omp:createResource',
+    UPDATE_RESOURCE: 'omp:updateResource',
+    SET_RESOURCE_ENABLED: 'omp:setResourceEnabled',
+    REMOVE_RESOURCE: 'omp:removeResource',
+    TEST_MCP_RESOURCE: 'omp:testMcpResource',
+    REFRESH_RESOURCES: 'omp:refreshResources',
   },
   dialog: {
     OPEN_FOLDER: 'dialog:openFolder',

@@ -19,6 +19,9 @@ logs
 _.log
 report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
+# quality gate reports
+quality-reports/
+
 # dotenv environment variable files
 .env
 .env.development.local
@@ -30,6 +33,8 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .eslintcache
 .cache
 .codegraph/
+apps/electron/resources/omp/*/omp
+apps/electron/resources/omp/*/omp.exe
 *.tsbuildinfo
 .wrangler
 .mintlify

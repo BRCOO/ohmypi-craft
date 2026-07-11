@@ -1,12 +1,12 @@
 # Project Memory: OMP adaptation
 
-Last updated: 2026-07-05
+Last updated: 2026-07-11
 
 ## Current direction
 
 This repository is a fresh second-development Git repository based on `craft-agents-oss`. It adapts Craft into an OMP desktop base by integrating Oh My Pi as a first-class backend/provider.
 
-The approved first step is not a renderer rewrite. Build a minimal OMP RPC backend that satisfies Craft's existing `AgentBackend` contract, then let Craft's current session manager, event processor, permission UI, workspace UI, persistence, and Electron packaging do the product-shell work.
+The first backend seam is proven. The four 2026-07-11 specs (release quality gates, resource lifecycle, packaged-app smoke tests, and Chinese-default localization governance) have been implemented and verified.
 
 ## Related local repositories
 
@@ -39,8 +39,15 @@ Use CodeGraph before broad grep/find/manual source reading when locating or unde
 ## Current branch
 
 - Branch: `codex/omp-rpc-backend`
-- Phase: OMP RPC backend, dynamic model discovery, runtime hardening, and extension UI bridge implemented
-- Specs: `docs/superpowers/specs/2026-07-05-omp-rpc-backend-design.md` and `docs/superpowers/specs/2026-07-05-omp-extension-ui-bridge-design.md`
+- Phase: OMP release hardening — quality gates, resource lifecycle, packaged-app smoke tests, and Chinese-default localization governance implemented and verified
+- Specs:
+  - `docs/superpowers/specs/2026-07-05-omp-rpc-backend-design.md`
+  - `docs/superpowers/specs/2026-07-05-omp-extension-ui-bridge-design.md`
+  - `docs/superpowers/specs/2026-07-11-omp-release-quality-gates-design.md`
+  - `docs/superpowers/specs/2026-07-11-omp-e2e-release-qa-design.md`
+  - `docs/superpowers/specs/2026-07-11-omp-resource-lifecycle-design.md`
+  - `docs/superpowers/specs/2026-07-11-omp-localization-design.md`
+  - `docs/superpowers/specs/2026-07-11-omp-release-reliability-followup-design.md`
 
 ## Implementation status
 
@@ -51,10 +58,15 @@ Use CodeGraph before broad grep/find/manual source reading when locating or unde
 - Explicit OMP model strings such as `deepseek/deepseek-v4-flash` are translated into an RPC `set_model` call before the next prompt; a real DeepSeek smoke test completed successfully.
 - Added an onboarding/provider-select entry for Oh My Pi / OMP. It creates a keyless `omp-local` connection through the normal setup handler, refreshes OMP models immediately, and lets Craft's existing model selector display the full OMP model list.
 - Added a typed OMP extension UI bridge across backend, session manager, transport, and renderer. Blocking `select`/`confirm`/`input`/`editor` requests now render inline controls with cancel/timeout responses; host actions cover notifications, status chips, widgets, composer text, and external links.
-- Remaining verification item: complete a manual end-to-end OMP extension flow in the packaged/dev Electron app.
+- Implemented Chinese-default localization governance: `zh-Hans` default, parity/sorted/coverage/string scanners, staged `--strict` lint, and locale tests.
+- Implemented release quality gates: `quality:quick`, `quality:verify`, and `release:win` commands; package-integrity and embedded-runtime capability checks; JSON reports next to the installer.
+- Implemented MCP/Skills/Agents lifecycle backend contract, DTOs, routing channels, and Feature Center settings UI with directory management (install/uninstall/refresh).
+- Implemented end-to-end packaged-app smoke runner with runtime-resolution, session-handshake, plan-mode, feature-discovery, language, and installation scenarios; produces JSON Release QA reports.
+- Implemented release reliability follow-up: resource mutations carry active `workspaceId`; quality reports use probed OMP binary version (not Pi dependency pin); CI i18n-changed lint requires explicit merge baseline (`I18N_BASE_REF` / CI target branch) and never falls back to `HEAD~1`.
 
 ## Verification expectations
 
-- Add unit tests for OMP RPC frame-to-`AgentEvent` mapping before relying on UI tests.
-- Verify minimal Electron/dev startup on Windows early because Craft scripts include some Unix-flavored commands.
+- Keep `quality:quick` green before every commit.
+- Re-run `bun run quality:verify` before any release build.
+- Run `bun run scripts/smoke/runner.ts` against the installer produced by `release:win` for Release QA sign-off.
 - Avoid touching unrelated Craft surfaces while the backend seam is still being proven.

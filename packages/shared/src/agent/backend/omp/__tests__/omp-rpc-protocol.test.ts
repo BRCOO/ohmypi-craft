@@ -26,6 +26,9 @@ import {
   parseOmpLoginProvidersResponseData,
   parseOmpLoginResult,
   parseOmpMessagesResponseData,
+  parseOmpPlanModeState,
+  parseOmpPlanModeStateUpdate,
+  parseOmpPlanReviewRequest,
   parseOmpPromptResponseData,
   parseOmpPromptResult,
   parseOmpQueueControlState,
@@ -71,13 +74,16 @@ const validState = {
 };
 
 describe('OMP RPC protocol parsers', () => {
-  it('defines metadata for all 39 standard OMP RPC commands', () => {
+  it('defines metadata for all 42 standard OMP RPC commands', () => {
     const commandNames = Object.keys(OMP_RPC_COMMAND_DEFINITIONS);
-    expect(commandNames).toHaveLength(39);
+    expect(commandNames).toHaveLength(42);
     expect(commandNames).toEqual(expect.arrayContaining([
       'prompt',
       'set_host_tools',
       'set_host_uri_schemes',
+      'get_plan_mode_state',
+      'set_plan_mode',
+      'plan_review_result',
       'get_available_models',
       'cycle_thinking_level',
       'bash',
@@ -269,6 +275,56 @@ describe('OMP RPC protocol parsers', () => {
       title: undefined,
     });
     expect(parseOmpSessionInfoUpdate({ type: 'session_info_update' })).toBeNull();
+  });
+
+  it('parses negotiated native Plan Mode state and review frames strictly', () => {
+    expect(parseOmpSessionState({
+      ...validState,
+      capabilities: { planMode: true },
+    })?.capabilities).toEqual({ planMode: true });
+    expect(parseOmpSessionState({
+      ...validState,
+      capabilities: { planMode: false },
+    })).toBeNull();
+
+    expect(parseOmpPlanModeState({
+      enabled: true,
+      phase: 'planning',
+      planFilePath: 'local://PLAN.md',
+    })).toEqual({
+      enabled: true,
+      phase: 'planning',
+      planFilePath: 'local://PLAN.md',
+      planModel: undefined,
+    });
+    expect(parseOmpPlanModeState({ enabled: true, phase: 'unknown' })).toBeNull();
+    expect(parseOmpPlanModeStateUpdate({
+      type: 'plan_mode_state_update',
+      state: { enabled: false, phase: 'inactive' },
+    })).toEqual({
+      type: 'plan_mode_state_update',
+      state: { enabled: false, phase: 'inactive', planFilePath: undefined, planModel: undefined },
+    });
+
+    expect(parseOmpPlanReviewRequest({
+      type: 'plan_review_request',
+      requestId: 'plan-review-1',
+      title: 'Ship Plan',
+      planFilePath: 'local://ship-plan.md',
+      planMarkdown: '# Ship Plan',
+      options: ['approve', 'refine', 'cancel'],
+    })).toMatchObject({
+      requestId: 'plan-review-1',
+      options: ['approve', 'refine', 'cancel'],
+    });
+    expect(parseOmpPlanReviewRequest({
+      type: 'plan_review_request',
+      requestId: 'plan-review-1',
+      title: 'Ship Plan',
+      planFilePath: 'local://ship-plan.md',
+      planMarkdown: '# Ship Plan',
+      options: ['approve', 'execute'],
+    })).toBeNull();
   });
 
   it('parses OMP host tool and host URI bridge frames', () => {

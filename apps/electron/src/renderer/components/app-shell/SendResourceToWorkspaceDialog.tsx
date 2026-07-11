@@ -11,6 +11,7 @@
 
 import * as React from 'react'
 import { useState, useCallback, useEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Cloud, CloudOff, Monitor, Send } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -62,6 +63,7 @@ export function SendResourceToWorkspaceDialog({
   activeWorkspaceId,
   onTransferComplete,
 }: SendResourceToWorkspaceDialogProps) {
+  const { t } = useTranslation()
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null)
   const [isSending, setIsSending] = useState(false)
   const workspaceIconMap = useWorkspaceIcons(workspaces)
@@ -123,7 +125,7 @@ export function SendResourceToWorkspaceDialog({
     const label = count === 1 ? singular : plural
     const mode: ResourceImportMode = 'skip'
 
-    const toastId = toast.loading(`Sending ${resourceLabel} to ${targetName}...`)
+    const toastId = toast.loading(t('resources.send.sending', { resourceLabel, workspaceName: targetName }))
 
     try {
       // 1. Export the selected resource(s) from current workspace
@@ -162,13 +164,13 @@ export function SendResourceToWorkspaceDialog({
       const skipped = bucket?.skipped?.length ?? 0
 
       if (imported > 0 && skipped === 0) {
-        toast.success(`Sent ${resourceLabel} to ${targetName}`, { id: toastId })
+        toast.success(t('resources.send.success', { resourceLabel, workspaceName: targetName }), { id: toastId })
       } else if (imported > 0 && skipped > 0) {
-        toast.success(`Sent ${imported} ${label}, ${skipped} already existed`, { id: toastId })
+        toast.success(t('resources.send.partialSuccess', { imported, label, skipped }), { id: toastId })
       } else if (skipped > 0) {
-        toast.info(`${resourceLabel} already exists in ${targetName}`, { id: toastId })
+        toast.info(t('resources.send.alreadyExists', { resourceLabel, workspaceName: targetName }), { id: toastId })
       } else {
-        toast.warning(`Nothing was sent to ${targetName}`, { id: toastId })
+        toast.warning(t('resources.send.nothingSent', { workspaceName: targetName }), { id: toastId })
       }
 
       if (exportWarnings.length > 0) {
@@ -182,9 +184,9 @@ export function SendResourceToWorkspaceDialog({
       const isUnsupported = error?.code === 'CHANNEL_NOT_FOUND' ||
         (error?.message ?? '').includes('No handler for')
       const message = isUnsupported
-        ? `${targetName} is running an older version that doesn't support resource import. Update the remote server and try again.`
-        : error instanceof Error ? error.message : 'Unknown error'
-      toast.error(`Failed to send ${label}`, { id: toastId, description: message })
+        ? t('resources.send.unsupportedRemote', { workspaceName: targetName })
+        : error instanceof Error ? error.message : t('common.unknown')
+      toast.error(t('resources.send.failed', { label }), { id: toastId, description: message })
     } finally {
       setIsSending(false)
     }
@@ -203,10 +205,10 @@ export function SendResourceToWorkspaceDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Send className="h-4 w-4" />
-            Send to Workspace
+            {t('resources.send.title')}
           </DialogTitle>
           <DialogDescription>
-            Send {resourceLabel} to another workspace.
+            {t('resources.send.description', { resourceLabel })}
           </DialogDescription>
         </DialogHeader>
 
@@ -214,7 +216,7 @@ export function SendResourceToWorkspaceDialog({
         <div className="flex flex-col gap-1 max-h-64 overflow-y-auto py-1">
           {targetWorkspaces.length === 0 ? (
             <p className="text-sm text-muted-foreground px-2 py-4 text-center">
-              No other workspaces available.
+              {t('resources.send.noOtherWorkspaces')}
             </p>
           ) : (
             targetWorkspaces.map(workspace => {
@@ -269,13 +271,13 @@ export function SendResourceToWorkspaceDialog({
             onClick={() => onOpenChange(false)}
             disabled={isSending}
           >
-            Cancel
+            {t('resources.send.cancel')}
           </Button>
           <Button
             onClick={handleSend}
             disabled={!selectedWorkspaceId || isSending}
           >
-            {isSending ? 'Sending...' : 'Send'}
+            {isSending ? t('common.sending') : t('resources.send.send')}
           </Button>
         </DialogFooter>
       </DialogContent>

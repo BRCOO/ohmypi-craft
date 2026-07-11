@@ -92,6 +92,7 @@ export {
   OmpRpcBackend,
   DEFAULT_OMP_MODEL,
   checkOmpRuntime,
+  resolveBundledOmpCommand,
   resolveOmpRuntimeCommand,
   probeOmpAuth,
   getOmpDiagnosticsSummary,

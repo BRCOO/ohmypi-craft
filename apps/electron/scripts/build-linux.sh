@@ -180,7 +180,11 @@ for dep in interceptor-common.ts feature-flags.ts interceptor-request-utils.ts; 
   fi
 done
 
-# 6. Build Electron app
+# 6. Build the target OMP runtime and Electron app
+echo "Building bundled OMP runtime..."
+cd "$ELECTRON_DIR"
+bun scripts/prepare-omp-runtime.ts --platform linux --arch "$ARCH"
+
 echo "Building Electron app..."
 cd "$ROOT_DIR"
 bun run electron:build

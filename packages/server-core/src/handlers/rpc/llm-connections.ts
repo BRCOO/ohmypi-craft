@@ -1,10 +1,11 @@
-import { RPC_CHANNELS, type LlmConnectionSetup, type OmpDiagnosticsSummary, type OmpFeatureCenterStateDto, type OmpLoginProviderDto, type OmpLoginProvidersResult, type OmpLoginSessionResult, type OmpRuntimeStatus, type OpenOmpFeatureCenterPathInput, type SaveOmpFeatureCenterConfigInput, type SaveOmpFeatureCenterConfigResult, type SetOmpCommandPathResult } from '@craft-agent/shared/protocol'
+import { RPC_CHANNELS, type LlmConnectionSetup, type OmpDiagnosticsSummary, type OmpFeatureCenterStateDto, type OmpLoginProviderDto, type OmpLoginProvidersResult, type OmpLoginSessionResult, type OmpResourceCreateInput, type OmpResourceMcpTestResult, type OmpResourceOperationResult, type OmpResourceRemoveInput, type OmpResourceSetEnabledInput, type OmpResourceSnapshot, type OmpResourceSnapshotInput, type OmpResourceTestMcpInput, type OmpResourceUpdateInput, type OmpRuntimeStatus, type OpenOmpFeatureCenterPathInput, type SaveOmpFeatureCenterConfigInput, type SaveOmpFeatureCenterConfigResult, type SetOmpCommandPathResult } from '@craft-agent/shared/protocol'
 import { getLlmConnections, getLlmConnection, addLlmConnection, updateLlmConnection, deleteLlmConnection, getDefaultLlmConnection, setDefaultLlmConnection, touchLlmConnection, isCompatProvider, isAnthropicProvider, getDefaultModelsForConnection, getDefaultModelForConnection, type LlmConnection, type LlmConnectionWithStatus, toBedrockNativeId, deriveBedrockRegionPrefix } from '@craft-agent/shared/config'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { clearOmpCommandPath, getOmpCommandPath, setOmpCommandPath, setSetupDeferred } from '@craft-agent/shared/config/storage'
 import {
   checkOmpRuntime,
   fetchBackendModels,
+  resolveBundledOmpCommand,
   resolveSetupTestConnectionHint,
   testBackendConnection,
   validateStoredBackendConnection,
@@ -15,7 +16,7 @@ import { parseTestConnectionError, createBuiltInConnection, validateModelList, p
 import { getWorkspaceOrThrow, buildBackendHostRuntimeContext } from '@craft-agent/server-core/handlers'
 import { CLIENT_OPEN_EXTERNAL, pushTyped, requestClientOpenPath, requestClientShowInFolder, type RpcServer } from '@craft-agent/server-core/transport'
 import { loadWorkspaceConfig } from '@craft-agent/shared/workspaces'
-import { getOmpFeatureCenterState, resolveOmpFeatureCenterAllowedPath, saveOmpFeatureCenterConfig } from '@craft-agent/server-core/services'
+import { createResource, getOmpFeatureCenterState, getOmpResourceSnapshot, refreshResources, removeResource, resolveOmpFeatureCenterAllowedPath, saveOmpFeatureCenterConfig, setResourceEnabled, testMcpResource, updateResource } from '@craft-agent/server-core/services'
 import type { HandlerDeps } from '../handler-deps'
 import { randomUUID } from 'node:crypto'
 import { access } from 'node:fs/promises'
@@ -57,18 +58,28 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.omp.GET_FEATURE_CENTER_STATE,
   RPC_CHANNELS.omp.OPEN_FEATURE_CENTER_PATH,
   RPC_CHANNELS.omp.SAVE_FEATURE_CENTER_CONFIG,
+  RPC_CHANNELS.omp.GET_RESOURCE_SNAPSHOT,
+  RPC_CHANNELS.omp.CREATE_RESOURCE,
+  RPC_CHANNELS.omp.UPDATE_RESOURCE,
+  RPC_CHANNELS.omp.SET_RESOURCE_ENABLED,
+  RPC_CHANNELS.omp.REMOVE_RESOURCE,
+  RPC_CHANNELS.omp.TEST_MCP_RESOURCE,
+  RPC_CHANNELS.omp.REFRESH_RESOURCES,
 ] as const
 
 export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerDeps): void {
   const { sessionManager } = deps
+  const getBundledOmpCommand = () => resolveBundledOmpCommand(buildBackendHostRuntimeContext(deps.platform))
   const checkCurrentOmpRuntime = (configuredCommand: unknown = getOmpCommandPath()) => checkOmpRuntime({
     configuredCommand,
     envCommand: process.env.OMP_COMMAND,
+    bundledCommand: getBundledOmpCommand(),
     cwd: deps.platform.appRootPath || process.cwd(),
     timeoutMs: 15_000,
   })
   const getCurrentOmpDiagnostics = () => getOmpDiagnosticsSummary({
     configuredCommand: getOmpCommandPath(),
+    bundledCommand: getBundledOmpCommand(),
     cwd: deps.platform.appRootPath || process.cwd(),
     timeoutMs: 30_000,
   })
@@ -550,6 +561,34 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
 
   server.handle(RPC_CHANNELS.omp.SAVE_FEATURE_CENTER_CONFIG, async (_ctx, input: SaveOmpFeatureCenterConfigInput): Promise<SaveOmpFeatureCenterConfigResult> => {
     return saveOmpFeatureCenterConfig(input, await resolveOmpFeatureCenterOptions(input.workspaceId))
+  })
+
+  server.handle(RPC_CHANNELS.omp.GET_RESOURCE_SNAPSHOT, async (_ctx, input: OmpResourceSnapshotInput): Promise<OmpResourceSnapshot> => {
+    return getOmpResourceSnapshot(input, await resolveOmpFeatureCenterOptions(input.workspaceId))
+  })
+
+  server.handle(RPC_CHANNELS.omp.CREATE_RESOURCE, async (_ctx, input: OmpResourceCreateInput): Promise<OmpResourceOperationResult> => {
+    return createResource(input, await resolveOmpFeatureCenterOptions(input.workspaceId))
+  })
+
+  server.handle(RPC_CHANNELS.omp.UPDATE_RESOURCE, async (_ctx, input: OmpResourceUpdateInput): Promise<OmpResourceOperationResult> => {
+    return updateResource(input, await resolveOmpFeatureCenterOptions(input.workspaceId))
+  })
+
+  server.handle(RPC_CHANNELS.omp.SET_RESOURCE_ENABLED, async (_ctx, input: OmpResourceSetEnabledInput): Promise<OmpResourceOperationResult> => {
+    return setResourceEnabled(input, await resolveOmpFeatureCenterOptions(input.workspaceId))
+  })
+
+  server.handle(RPC_CHANNELS.omp.REMOVE_RESOURCE, async (_ctx, input: OmpResourceRemoveInput): Promise<OmpResourceOperationResult> => {
+    return removeResource(input, await resolveOmpFeatureCenterOptions(input.workspaceId))
+  })
+
+  server.handle(RPC_CHANNELS.omp.TEST_MCP_RESOURCE, async (_ctx, input: OmpResourceTestMcpInput): Promise<OmpResourceMcpTestResult> => {
+    return testMcpResource(input, await resolveOmpFeatureCenterOptions(input.workspaceId))
+  })
+
+  server.handle(RPC_CHANNELS.omp.REFRESH_RESOURCES, async (_ctx, input: OmpResourceSnapshotInput): Promise<OmpResourceSnapshot> => {
+    return refreshResources(input, await resolveOmpFeatureCenterOptions(input.workspaceId))
   })
 
   server.handle(RPC_CHANNELS.omp.GET_LOGIN_PROVIDERS, async (): Promise<OmpLoginProvidersResult> => {

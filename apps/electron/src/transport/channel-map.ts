@@ -179,6 +179,13 @@ export const CHANNEL_MAP = {
   getOmpFeatureCenterState: invoke(RPC_CHANNELS.omp.GET_FEATURE_CENTER_STATE),
   openOmpFeatureCenterPath: invoke(RPC_CHANNELS.omp.OPEN_FEATURE_CENTER_PATH),
   saveOmpFeatureCenterConfig: invoke(RPC_CHANNELS.omp.SAVE_FEATURE_CENTER_CONFIG),
+  getOmpResourceSnapshot: invoke(RPC_CHANNELS.omp.GET_RESOURCE_SNAPSHOT),
+  createOmpResource: invoke(RPC_CHANNELS.omp.CREATE_RESOURCE),
+  updateOmpResource: invoke(RPC_CHANNELS.omp.UPDATE_RESOURCE),
+  setOmpResourceEnabled: invoke(RPC_CHANNELS.omp.SET_RESOURCE_ENABLED),
+  removeOmpResource: invoke(RPC_CHANNELS.omp.REMOVE_RESOURCE),
+  testOmpMcpResource: invoke(RPC_CHANNELS.omp.TEST_MCP_RESOURCE),
+  refreshOmpResources: invoke(RPC_CHANNELS.omp.REFRESH_RESOURCES),
 
   // Session-specific model
   getSessionModel: invoke(RPC_CHANNELS.sessions.GET_MODEL),

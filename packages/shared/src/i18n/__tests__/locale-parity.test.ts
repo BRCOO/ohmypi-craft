@@ -1,17 +1,18 @@
 import { describe, it, expect } from "bun:test";
-import { readdirSync, readFileSync } from "fs";
+import { readFileSync } from "fs";
 import { join } from "path";
+import { SUPPORTED_LANGUAGE_CODES } from "../languages";
 
 // ---------------------------------------------------------------------------
-// Dynamic locale discovery — automatically picks up new languages
+// Supported locale discovery — only locales declared in the registry are
+// required to maintain full parity with en.json. Legacy locale files may
+// remain on disk without blocking CI.
 // ---------------------------------------------------------------------------
 const LOCALES_DIR = join(import.meta.dir, "../locales");
-const localeFiles = readdirSync(LOCALES_DIR).filter((f) => f.endsWith(".json"));
 
 const locales: Record<string, Record<string, string>> = {};
-for (const file of localeFiles) {
-  const lang = file.replace(".json", "");
-  locales[lang] = JSON.parse(readFileSync(join(LOCALES_DIR, file), "utf-8"));
+for (const code of SUPPORTED_LANGUAGE_CODES) {
+  locales[code] = JSON.parse(readFileSync(join(LOCALES_DIR, `${code}.json`), "utf-8"));
 }
 
 const en = locales["en"];

@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   Activity,
   Bot,
@@ -44,19 +45,25 @@ interface OmpTodoCardProps {
   isProcessing: boolean
 }
 
-const STATUS_LABEL: Record<OmpTodoStatusDto, string> = {
-  pending: 'Pending',
-  in_progress: 'Now',
-  completed: 'Done',
-  abandoned: 'Dropped',
+function todoStatusLabel(status: OmpTodoStatusDto, t: ReturnType<typeof useTranslation>['t']): string {
+  switch (status) {
+    case 'in_progress': return t('omp.todo.status.inProgress')
+    case 'completed': return t('omp.todo.status.completed')
+    case 'abandoned': return t('omp.todo.status.abandoned')
+    case 'pending':
+    default: return t('omp.todo.status.pending')
+  }
 }
 
-const SUBAGENT_STATUS_LABEL: Record<OmpSubagentStatusDto, string> = {
-  pending: 'Pending',
-  running: 'Running',
-  completed: 'Done',
-  failed: 'Failed',
-  aborted: 'Aborted',
+function subagentStatusLabel(status: OmpSubagentStatusDto, t: ReturnType<typeof useTranslation>['t']): string {
+  switch (status) {
+    case 'running': return t('omp.subagent.status.running')
+    case 'completed': return t('omp.subagent.status.completed')
+    case 'failed': return t('omp.subagent.status.failed')
+    case 'aborted': return t('omp.subagent.status.aborted')
+    case 'pending':
+    default: return t('omp.subagent.status.pending')
+  }
 }
 
 function actionableCount(phases: OmpTodoPhaseDto[]): { done: number; total: number } {
@@ -116,7 +123,7 @@ function taskStatusClass(status: OmpTodoStatusDto): string {
 function statusDotClass(status: OmpTodoStatusDto): string {
   switch (status) {
     case 'in_progress':
-      return 'bg-blue-300 shadow-[0_0_12px_rgba(96,165,250,0.45)]'
+      return 'bg-blue-300 shadow-tinted'
     case 'completed':
       return 'bg-violet-300'
     case 'abandoned':
@@ -150,6 +157,7 @@ function formatCompactNumber(value: number | undefined): string | undefined {
 }
 
 function SubagentTodoPreview({ phases }: { phases: OmpTodoPhaseDto[] }) {
+  const { t } = useTranslation()
   return (
     <div className="space-y-1.5">
       {phases.map((phase, phaseIndex) => (
@@ -162,7 +170,7 @@ function SubagentTodoPreview({ phases }: { phases: OmpTodoPhaseDto[] }) {
           </div>
           <div className="space-y-1">
             {phase.tasks.length === 0 ? (
-              <div className="text-[11px] text-muted-foreground">Empty phase</div>
+              <div className="text-[11px] text-muted-foreground">{t('omp.todo.emptyPhase')}</div>
             ) : (
               phase.tasks.slice(0, 4).map((task, taskIndex) => (
                 <div
@@ -172,13 +180,13 @@ function SubagentTodoPreview({ phases }: { phases: OmpTodoPhaseDto[] }) {
                   <span className={cn('size-1.5 rounded-full', statusDotClass(task.status))} />
                   <span className="min-w-0 flex-1 truncate" title={task.content}>{task.content}</span>
                   <span className="shrink-0 text-[9px] uppercase tracking-wide text-muted-foreground">
-                    {STATUS_LABEL[task.status]}
+                    {todoStatusLabel(task.status, t)}
                   </span>
                 </div>
               ))
             )}
             {phase.tasks.length > 4 && (
-              <div className="px-2 text-[10px] text-muted-foreground">+{phase.tasks.length - 4} more</div>
+              <div className="px-2 text-[10px] text-muted-foreground">+{phase.tasks.length - 4} {t('common.more')}</div>
             )}
           </div>
         </div>
@@ -188,6 +196,7 @@ function SubagentTodoPreview({ phases }: { phases: OmpTodoPhaseDto[] }) {
 }
 
 function OmpSubagentsSection({ subagents }: { subagents: OmpSubagentSnapshotDto[] }) {
+  const { t } = useTranslation()
   if (subagents.length === 0) return null
 
   return (
@@ -197,8 +206,8 @@ function OmpSubagentsSection({ subagents }: { subagents: OmpSubagentSnapshotDto[
           <Bot className="size-3.5" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-xs font-semibold uppercase tracking-[0.14em] text-violet-100/80">Subagents</div>
-          <div className="text-[11px] text-muted-foreground">Read-only OMP subagent work, kept separate from the main Todo list</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.14em] text-violet-100/80">{t('omp.todo.subagentsTitle')}</div>
+          <div className="text-[11px] text-muted-foreground">{t('omp.todo.subagentsDescription')}</div>
         </div>
       </div>
 
@@ -221,7 +230,7 @@ function OmpSubagentsSection({ subagents }: { subagents: OmpSubagentSnapshotDto[
                       {subagent.description || subagent.agent}
                     </span>
                     <span className={cn('shrink-0 rounded-full border px-1.5 py-0.5 text-[10px]', subagentStatusClass(subagent.status))}>
-                      {SUBAGENT_STATUS_LABEL[subagent.status]}
+                      {subagentStatusLabel(subagent.status, t)}
                     </span>
                   </div>
                   <div className="mt-0.5 truncate text-[11px] text-muted-foreground" title={subagent.assignment || subagent.task}>
@@ -231,17 +240,17 @@ function OmpSubagentsSection({ subagents }: { subagents: OmpSubagentSnapshotDto[
                     <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-blue-100/60">
                       {progress?.currentTool && (
                         <span className="rounded-full bg-blue-400/10 px-1.5 py-0.5">
-                          tool: {progress.currentTool}
+                          {t('omp.todo.tool', { tool: progress.currentTool })}
                         </span>
                       )}
                       {compactRequests && (
                         <span className="rounded-full bg-violet-400/10 px-1.5 py-0.5">
-                          {compactRequests} requests
+                          {t('omp.todo.requests', { value: compactRequests })}
                         </span>
                       )}
                       {compactTokens && (
                         <span className="rounded-full bg-violet-400/10 px-1.5 py-0.5">
-                          {compactTokens} tokens
+                          {t('omp.todo.tokens', { value: compactTokens })}
                         </span>
                       )}
                     </div>
@@ -255,7 +264,7 @@ function OmpSubagentsSection({ subagents }: { subagents: OmpSubagentSnapshotDto[
                 </div>
               ) : (
                 <div className="mt-2 rounded-lg border border-dashed border-violet-300/10 px-2 py-2 text-[11px] text-muted-foreground">
-                  No Todo snapshot found in this subagent transcript yet.
+                  {t('omp.todo.noSnapshot')}
                 </div>
               )}
 
@@ -277,6 +286,7 @@ function OmpSubagentsSection({ subagents }: { subagents: OmpSubagentSnapshotDto[
 }
 
 export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps) {
+  const { t } = useTranslation()
   const [expanded, setExpanded] = React.useState(false)
   const [importOpen, setImportOpen] = React.useState(false)
   const disabled = isProcessing || !!state.pendingAction || !state.available
@@ -307,51 +317,51 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
   }, [sessionId])
 
   const addPhase = React.useCallback(() => {
-    const name = window.prompt('Phase name', `Phase ${state.phases.length + 1}`)
+    const name = window.prompt(t('omp.todo.phaseName'), t('omp.todo.phaseNameDefault', { number: state.phases.length + 1 }))
     if (name === null) return
     void runMutation({ type: 'addPhase', name })
-  }, [runMutation, state.phases.length])
+  }, [runMutation, state.phases.length, t])
 
   const renamePhase = React.useCallback((phaseIndex: number, currentName: string) => {
-    const name = window.prompt('Rename phase', currentName)
+    const name = window.prompt(t('omp.todo.renamePhase'), currentName)
     if (name === null) return
     void runMutation({ type: 'renamePhase', phaseIndex, name })
-  }, [runMutation])
+  }, [runMutation, t])
 
   const removePhase = React.useCallback((phaseIndex: number, phase: OmpTodoPhaseDto) => {
-    if (phase.tasks.length > 0 && !window.confirm(`Remove phase "${phase.name}" and its ${phase.tasks.length} task(s)?`)) return
+    if (phase.tasks.length > 0 && !window.confirm(t('omp.todo.removePhaseConfirm', { phaseName: phase.name, count: phase.tasks.length }))) return
     void runMutation({ type: 'removePhase', phaseIndex })
-  }, [runMutation])
+  }, [runMutation, t])
 
   const addTask = React.useCallback((phaseIndex: number) => {
-    const content = window.prompt('New Todo item')
+    const content = window.prompt(t('omp.todo.newTask'))
     if (content === null) return
     void runMutation({ type: 'addTask', phaseIndex, content })
-  }, [runMutation])
+  }, [runMutation, t])
 
   const editTask = React.useCallback((phaseIndex: number, taskIndex: number, currentContent: string) => {
-    const content = window.prompt('Edit Todo item', currentContent)
+    const content = window.prompt(t('omp.todo.editTask'), currentContent)
     if (content === null) return
     void runMutation({ type: 'editTask', phaseIndex, taskIndex, content })
-  }, [runMutation])
+  }, [runMutation, t])
 
   const removeTask = React.useCallback((phaseIndex: number, taskIndex: number, content: string) => {
-    if (!window.confirm(`Remove Todo item "${content}"?`)) return
+    if (!window.confirm(t('omp.todo.removeTaskConfirm', { content }))) return
     void runMutation({ type: 'removeTask', phaseIndex, taskIndex })
-  }, [runMutation])
+  }, [runMutation, t])
 
   const exportMarkdown = React.useCallback(async () => {
     try {
       const result = await window.electronAPI.sessionCommand(sessionId, { type: 'exportOmpTodosMarkdown' }) as { success: boolean; markdown?: string; error?: string } | undefined
       if (!result?.success || result.markdown === undefined) {
-        throw new Error(result?.error ?? 'Failed to export OMP Todos')
+        throw new Error(result?.error ?? t('omp.todo.exportFailed'))
       }
       await navigator.clipboard.writeText(result.markdown)
-      toast.success('OMP Todo Markdown copied')
+      toast.success(t('omp.todo.markdownCopied'))
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
     }
-  }, [sessionId])
+  }, [sessionId, t])
 
   const openImportDialog = React.useCallback(() => {
     setImportOpen(true)
@@ -359,7 +369,7 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
 
   return (
     <div className="mx-auto w-full max-w-3xl px-3 pb-2">
-      <div className="overflow-hidden rounded-xl border border-blue-300/15 bg-[#090B18]/85 shadow-[0_12px_38px_rgba(35,35,95,0.18)] backdrop-blur">
+      <div className="overflow-hidden rounded-xl border border-blue-300/15 bg-[#090B18]/85 shadow-strong backdrop-blur">
         <div className="pointer-events-none h-[2px] bg-gradient-to-r from-blue-400 via-violet-400 to-fuchsia-400" />
         <div className="flex items-center gap-2 px-3 py-2">
           <button
@@ -372,7 +382,7 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
             </span>
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-2">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-100/80">OMP Todos</span>
+                <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-100/80">{t('omp.todo.title')}</span>
                 {state.pendingAction && (
                   <span className="inline-flex items-center gap-1 rounded-full bg-blue-400/10 px-1.5 py-0.5 text-[10px] text-blue-100/80">
                     <Loader2 className="size-3 animate-spin" />
@@ -382,22 +392,21 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
                 {state.reminder && (
                   <span className="inline-flex items-center gap-1 rounded-full bg-violet-400/10 px-1.5 py-0.5 text-[10px] text-violet-100/85">
                     <Sparkles className="size-3" />
-                    reminder {state.reminder.attempt}/{state.reminder.maxAttempts}
+                    {t('omp.todo.reminder', { attempt: state.reminder.attempt, max: state.reminder.maxAttempts })}
                   </span>
                 )}
               </span>
               <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
                 {activeTask
-                  ? `Now: ${activeTask}`
+                  ? t('omp.todo.activeNow', { task: activeTask })
                   : hasTodos
-                    ? `${progress.done}/${progress.total} actionable tasks complete`
+                    ? t('omp.todo.progress', { done: progress.done, total: progress.total })
                     : subagents.length > 0
-                      ? `${subagents.length} OMP subagent${subagents.length === 1 ? '' : 's'} active${
-                          subagentProgress.total > 0 ? ` · ${subagentProgress.done}/${subagentProgress.total} subagent tasks done` : ''
-                        }`
+                      ? t('omp.todo.subagentsActive', { count: subagents.length }) +
+                        (subagentProgress.total > 0 ? t('omp.todo.subagentTasksDone', { done: subagentProgress.done, total: subagentProgress.total }) : '')
                     : state.available
-                      ? 'No OMP Todo items yet'
-                      : 'Waiting for OMP Todo state'}
+                      ? t('omp.todo.noItems')
+                      : t('omp.todo.waiting')}
               </span>
             </span>
             {expanded ? <ChevronDown className="size-4 text-muted-foreground" /> : <ChevronRight className="size-4 text-muted-foreground" />}
@@ -416,15 +425,15 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
               <DropdownMenuContent align="end">
                 <DropdownMenuItem disabled={disabled} onSelect={addPhase}>
                   <Plus className="size-4" />
-                  Add phase
+                  {t('omp.todo.addPhase')}
                 </DropdownMenuItem>
                 <DropdownMenuItem disabled={!state.available} onSelect={exportMarkdown}>
                   <ClipboardCopy className="size-4" />
-                  Copy Markdown
+                  {t('omp.todo.copyMarkdown')}
                 </DropdownMenuItem>
                 <DropdownMenuItem disabled={disabled} onSelect={openImportDialog}>
                   <RotateCcw className="size-4" />
-                  Import Markdown
+                  {t('omp.todo.importMarkdown')}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -441,7 +450,7 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
 
             {state.phases.length === 0 ? (
               <div className="rounded-xl border border-dashed border-blue-300/15 bg-blue-400/[0.03] px-3 py-3 text-xs text-muted-foreground">
-                OMP has no Todo phases yet. Add a phase, or let the agent create Todos with its native Todo tool.
+                {t('omp.todo.emptyState')}
               </div>
             ) : (
               state.phases.map((phase, phaseIndex) => (
@@ -460,12 +469,12 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem disabled={disabled} onSelect={() => renamePhase(phaseIndex, phase.name)}>
                           <Edit3 className="size-4" />
-                          Rename phase
+                          {t('omp.todo.renamePhase')}
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem disabled={disabled} variant="destructive" onSelect={() => removePhase(phaseIndex, phase)}>
                           <Trash2 className="size-4" />
-                          Remove phase
+                          {t('omp.todo.removePhase')}
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -479,7 +488,7 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
                         onClick={() => addTask(phaseIndex)}
                         className="w-full rounded-lg border border-dashed border-foreground/10 px-2 py-2 text-left text-xs text-muted-foreground hover:bg-foreground/[0.03] disabled:pointer-events-none disabled:opacity-50"
                       >
-                        Add the first task...
+                        {t('omp.todo.addTask')}
                       </button>
                     ) : (
                       phase.tasks.map((task, taskIndex) => (
@@ -498,7 +507,7 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
                             {task.content}
                           </button>
                           <span className="hidden shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground group-hover:inline">
-                            {STATUS_LABEL[task.status]}
+                            {todoStatusLabel(task.status, t)}
                           </span>
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
@@ -509,28 +518,28 @@ export function OmpTodoCard({ sessionId, state, isProcessing }: OmpTodoCardProps
                             <DropdownMenuContent align="end">
                               <DropdownMenuItem disabled={disabled || task.status === 'in_progress'} onSelect={() => runMutation({ type: 'startTask', phaseIndex, taskIndex })}>
                                 <Sparkles className="size-4" />
-                                Start
+                                {t('omp.todo.start')}
                               </DropdownMenuItem>
                               <DropdownMenuItem disabled={disabled || task.status === 'completed'} onSelect={() => runMutation({ type: 'completeTask', phaseIndex, taskIndex })}>
                                 <CheckCircle2 className="size-4" />
-                                Done
+                                {t('omp.todo.done')}
                               </DropdownMenuItem>
                               <DropdownMenuItem disabled={disabled || task.status === 'abandoned'} onSelect={() => runMutation({ type: 'abandonTask', phaseIndex, taskIndex })}>
                                 <XCircle className="size-4" />
-                                Drop
+                                {t('omp.todo.drop')}
                               </DropdownMenuItem>
                               <DropdownMenuItem disabled={disabled || task.status === 'pending'} onSelect={() => runMutation({ type: 'reopenTask', phaseIndex, taskIndex })}>
                                 <RotateCcw className="size-4" />
-                                Reopen
+                                {t('omp.todo.reopen')}
                               </DropdownMenuItem>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem disabled={disabled} onSelect={() => editTask(phaseIndex, taskIndex, task.content)}>
                                 <Edit3 className="size-4" />
-                                Edit
+                                {t('common.edit')}
                               </DropdownMenuItem>
                               <DropdownMenuItem disabled={disabled} variant="destructive" onSelect={() => removeTask(phaseIndex, taskIndex, task.content)}>
                                 <Trash2 className="size-4" />
-                                Remove
+                                {t('common.remove')}
                               </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>

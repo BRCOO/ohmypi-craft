@@ -1,6 +1,15 @@
-import { describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { resolveOmpCommand, resolveOmpRuntimeCommand } from '../omp-command.ts';
+import { resolveBundledOmpCommand, resolveOmpCommand, resolveOmpRuntimeCommand } from '../omp-command.ts';
+
+const temporaryRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(temporaryRoots.splice(0).map(path => rm(path, { recursive: true, force: true })));
+});
 
 describe('resolveOmpCommand', () => {
   it('uses the default OMP command for empty values', () => {
@@ -48,6 +57,33 @@ describe('resolveOmpCommand', () => {
     expect(resolveOmpRuntimeCommand({
       configuredCommand: '',
       envCommand: '',
+      bundledCommand: 'C:\\Oh My Pi\\omp.exe',
+    })).toEqual({
+      command: 'C:\\Oh My Pi\\omp.exe',
+      args: [],
+      rawCommand: 'C:\\Oh My Pi\\omp.exe',
+      source: 'bundled',
+    });
+
+    expect(resolveOmpRuntimeCommand({
+      configuredCommand: '',
+      envCommand: '',
+      bundledCommand: '',
     }).source).toBe('default');
+  });
+
+  it('resolves the packaged platform runtime when it is present', async () => {
+    const resourcesPath = await mkdtemp(join(tmpdir(), 'omp-runtime-'));
+    temporaryRoots.push(resourcesPath);
+    const executable = process.platform === 'win32' ? 'omp.exe' : 'omp';
+    const bundled = join(resourcesPath, 'omp', `${process.platform}-${process.arch}`, executable);
+    await mkdir(join(resourcesPath, 'omp', `${process.platform}-${process.arch}`), { recursive: true });
+    await writeFile(bundled, 'omp');
+
+    expect(resolveBundledOmpCommand({
+      appRootPath: resourcesPath,
+      resourcesPath,
+      isPackaged: true,
+    })).toBe(bundled);
   });
 });

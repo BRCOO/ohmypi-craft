@@ -121,22 +121,6 @@ function formatFollowUpChipText(text: string, fallback: string, maxLength = 50):
 }
 
 
-const OMP_DELIVERY_LABEL: Record<OmpDeliveryMode, string> = {
-  steer: 'Steer',
-  followUp: 'Follow-up',
-  abortAndPrompt: 'Abort + prompt',
-}
-
-const OMP_QUEUE_LABEL: Record<OmpQueueMode, string> = {
-  all: 'All',
-  'one-at-a-time': 'One at a time',
-}
-
-const OMP_INTERRUPT_LABEL: Record<OmpInterruptMode, string> = {
-  immediate: 'Immediate',
-  wait: 'Wait',
-}
-
 const EMPTY_LLM_CONNECTIONS: LlmConnectionWithStatus[] = []
 
 function OmpQueueControl({
@@ -152,6 +136,7 @@ function OmpQueueControl({
   onDeliveryModeChange: (mode: OmpDeliveryMode) => void
   disabled?: boolean
 }) {
+  const { t } = useTranslation()
   if (!controlState) return null
 
   const queue = controlState.queue
@@ -176,6 +161,17 @@ function OmpQueueControl({
     <Check className={cn('h-3.5 w-3.5', active ? 'opacity-100' : 'opacity-0')} />
   )
 
+  const deliveryLabel = (mode: OmpDeliveryMode) =>
+    mode === 'steer' ? t('omp.controls.delivery.steer')
+    : mode === 'followUp' ? t('omp.controls.delivery.followUp')
+    : t('omp.controls.delivery.abortAndPrompt')
+
+  const queueLabel = (mode: OmpQueueMode) =>
+    mode === 'all' ? t('omp.controls.queue.all') : t('omp.controls.queue.oneAtATime')
+
+  const interruptLabel = (mode: OmpInterruptMode) =>
+    mode === 'immediate' ? t('omp.controls.interrupt.immediate') : t('omp.controls.interrupt.wait')
+
   return (
     <DropdownMenu>
       <Tooltip>
@@ -190,7 +186,7 @@ function OmpQueueControl({
               )}
             >
               <Sparkles className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">{OMP_DELIVERY_LABEL[deliveryMode]}</span>
+              <span className="hidden sm:inline">{deliveryLabel(deliveryMode)}</span>
               {queue.queuedMessageCount > 0 && (
                 <span className="rounded-full bg-violet-400/15 px-1.5 py-0.5 text-[10px] text-violet-200">
                   {queue.queuedMessageCount}
@@ -201,57 +197,57 @@ function OmpQueueControl({
           </DropdownMenuTrigger>
         </TooltipTrigger>
         <TooltipContent side="top">
-          OMP controls · {commandCount} commands
+          {t('omp.controls.tooltip', { count: commandCount })}
         </TooltipContent>
       </Tooltip>
       <StyledDropdownMenuContent side="top" align="end" sideOffset={8} className="min-w-[250px]">
-        <div className="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">Mid-stream delivery</div>
+        <div className="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">{t('omp.controls.midStreamDelivery')}</div>
         {(['steer', 'followUp', 'abortAndPrompt'] as const).map((mode) => (
           <StyledDropdownMenuItem
             key={mode}
             onSelect={() => onDeliveryModeChange(mode)}
             className="flex cursor-pointer items-center justify-between rounded-lg px-2 py-1.5"
           >
-            <span>{OMP_DELIVERY_LABEL[mode]}</span>
+            <span>{deliveryLabel(mode)}</span>
             {renderCheck(deliveryMode === mode)}
           </StyledDropdownMenuItem>
         ))}
 
         <StyledDropdownMenuSeparator />
-        <div className="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">Steer queue</div>
+        <div className="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">{t('omp.controls.steerQueue')}</div>
         {(['all', 'one-at-a-time'] as const).map((mode) => (
           <StyledDropdownMenuItem
             key={`steer-${mode}`}
             onSelect={() => updateSteeringMode(mode)}
             className="flex cursor-pointer items-center justify-between rounded-lg px-2 py-1.5"
           >
-            <span>{OMP_QUEUE_LABEL[mode]}</span>
+            <span>{queueLabel(mode)}</span>
             {renderCheck(queue.steeringMode === mode)}
           </StyledDropdownMenuItem>
         ))}
 
         <StyledDropdownMenuSeparator />
-        <div className="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">Follow-up queue</div>
+        <div className="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">{t('omp.controls.followUpQueue')}</div>
         {(['all', 'one-at-a-time'] as const).map((mode) => (
           <StyledDropdownMenuItem
             key={`follow-${mode}`}
             onSelect={() => updateFollowUpMode(mode)}
             className="flex cursor-pointer items-center justify-between rounded-lg px-2 py-1.5"
           >
-            <span>{OMP_QUEUE_LABEL[mode]}</span>
+            <span>{queueLabel(mode)}</span>
             {renderCheck(queue.followUpMode === mode)}
           </StyledDropdownMenuItem>
         ))}
 
         <StyledDropdownMenuSeparator />
-        <div className="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">Interrupt</div>
+        <div className="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">{t('omp.controls.interrupt')}</div>
         {(['immediate', 'wait'] as const).map((mode) => (
           <StyledDropdownMenuItem
             key={`interrupt-${mode}`}
             onSelect={() => updateInterruptMode(mode)}
             className="flex cursor-pointer items-center justify-between rounded-lg px-2 py-1.5"
           >
-            <span>{OMP_INTERRUPT_LABEL[mode]}</span>
+            <span>{interruptLabel(mode)}</span>
             {renderCheck(queue.interruptMode === mode)}
           </StyledDropdownMenuItem>
         ))}
@@ -1182,8 +1178,15 @@ export function FreeFormInput({
       if (commandId.kind === 'advisor') {
         void toggleOmpAdvisor()
       } else if (commandId.kind === 'plan') {
-        // Plan Mode is not executable until RPC exposes a real toggle.
-        return
+        if (!sessionId) return
+        const enabled = ompControlState?.plan.state.enabled !== true
+        void window.electronAPI?.sessionCommand?.(sessionId, { type: 'setOmpPlanMode', enabled })
+          .then(() => {
+            toast.success(t(enabled ? 'omp.quickControls.planEnabled' : 'omp.quickControls.planDisabled'))
+          })
+          .catch((error) => {
+            toast.error(error instanceof Error ? error.message : String(error))
+          })
       } else if (commandId.kind === 'mcp' || commandId.kind === 'skills' || commandId.kind === 'agents' || commandId.kind === 'models') {
         const targetSection: OmpFeatureCenterSection = commandId.kind
         navigate(routes.view.settings('omp'))
@@ -1195,7 +1198,7 @@ export function FreeFormInput({
     else if (commandId === 'ask') onPermissionModeChange?.('ask')
     else if (commandId === 'allow-all') onPermissionModeChange?.('allow-all')
     else if (commandId === 'compact' && !isProcessing) onSubmit('/compact', undefined)
-  }, [onPermissionModeChange, isProcessing, onSubmit, toggleOmpAdvisor])
+  }, [onPermissionModeChange, isProcessing, onSubmit, toggleOmpAdvisor, ompControlState, sessionId, t])
 
   // Handle folder selection from slash command menu
   const handleSlashFolderSelect = React.useCallback((path: string) => {
@@ -1231,6 +1234,7 @@ export function FreeFormInput({
     isOmpSession,
     ompFeatureCenterState,
     ompModelCount: isOmpSession ? availableModels.length : undefined,
+    ompPlanState: ompControlState?.plan,
     recentFolders,
     homeDir,
   })

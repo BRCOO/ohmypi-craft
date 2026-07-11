@@ -1,7 +1,8 @@
-import { access, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, readdir, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
+import { createHash } from 'node:crypto'
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml'
 import type {
   OmpDiagnosticsSummary,
@@ -15,6 +16,21 @@ import type {
   OmpFeatureModelRoleDto,
   OmpFeaturePathLevel,
   OmpFeatureValueSource,
+  OmpResourceCategory,
+  OmpResourceCreateInput,
+  OmpResourceDiagnostic,
+  OmpResourceEntry,
+  OmpResourceMcpTestResult,
+  OmpResourceOperationResult,
+  OmpResourceRemoveInput,
+  OmpResourceScope,
+  OmpResourceSetEnabledInput,
+  OmpResourceSnapshot,
+  OmpResourceSnapshotInput,
+  OmpResourceSource,
+  OmpResourceTestMcpInput,
+  OmpResourceType,
+  OmpResourceUpdateInput,
   OmpRuntimeStatus,
   SaveOmpFeatureCenterConfigInput,
   SaveOmpFeatureCenterConfigResult,
@@ -47,13 +63,6 @@ const BUILT_IN_MODEL_ROLES: Array<{ role: string; label: string }> = [
 ]
 
 const UNAVAILABLE_TUI_COMMANDS: OmpFeatureUnavailableCommandDto[] = [
-  {
-    command: '/plan',
-    label: 'Native Plan Mode',
-    status: 'needs-upstream-rpc',
-    reason: 'Current OMP RPC exposes no plan-mode toggle, state, or review command.',
-    alternative: 'Configure modelRoles.plan here; use Craft plan approval if OMP emits an extension UI request.',
-  },
   {
     command: '/plan-review',
     label: 'Reopen Plan Review',
@@ -640,12 +649,11 @@ export async function getOmpFeatureCenterState(options: OmpFeatureCenterOptions)
     agents,
     nativePlan: {
       modelRole: commonPlan?.effectiveValue,
-      supportStatus: 'rpc-unavailable',
-      toggleAvailable: false,
+      supportStatus: 'rpc-command-available',
+      toggleAvailable: true,
       approvalUi: 'extension-ui-if-emitted',
-      rpcCommands: [],
-      unavailableReason: 'Upstream OMP RPC currently exposes no plan-mode toggle, state, or plan-review command.',
-      message: 'OMP native /plan controls are hidden until upstream exposes stable RPC state. This page configures modelRoles.plan and is ready to surface approval UI if OMP emits an extension request.',
+      rpcCommands: ['get_plan_mode_state', 'set_plan_mode', 'plan_review_result'],
+      message: 'OMP native Plan Mode is controlled from the session command menu. Each session negotiates support with its active OMP runtime before enabling the toggle.',
     },
     unavailableCommands: UNAVAILABLE_TUI_COMMANDS.map(command => ({ ...command })),
     lastRefreshedAt: now(),
@@ -752,5 +760,740 @@ export async function saveOmpFeatureCenterConfig(
   return {
     success: true,
     state: await getOmpFeatureCenterState(options),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// OMP resource lifecycle (MCP, Skills, Agents)
+// ---------------------------------------------------------------------------
+
+const RESOURCE_DISABLED_LIST_KEYS: Record<OmpResourceType, string> = {
+  mcp: 'disabledMcp',
+  skill: 'disabledSkills',
+  agent: 'disabledAgents',
+}
+
+function resourceId(type: OmpResourceType, name: string): string {
+  return `${type}/${name}`
+}
+
+function resourceNameFromId(id: string): string {
+  const slash = id.indexOf('/')
+  return slash === -1 ? id : id.slice(slash + 1)
+}
+
+function resourceCategoryKey(type: OmpResourceType): 'mcp' | 'skills' | 'agents' {
+  if (type === 'skill') return 'skills'
+  if (type === 'agent') return 'agents'
+  return 'mcp'
+}
+
+function resolveScopeDir(options: OmpFeatureCenterOptions, scope: OmpResourceScope): string | undefined {
+  const agentDir = resolveAgentDir(options)
+  if (scope === 'user') return agentDir
+  const projectRoot = resolveProjectRoot(options)
+  return projectRoot ? join(projectRoot, '.omp') : undefined
+}
+
+function resolveMcpPath(options: OmpFeatureCenterOptions, scope: OmpResourceScope): string | undefined {
+  const scopeDir = resolveScopeDir(options, scope)
+  return scopeDir ? join(scopeDir, 'mcp.json') : undefined
+}
+
+function resolveSkillPath(options: OmpFeatureCenterOptions, scope: OmpResourceScope, name: string): string | undefined {
+  const scopeDir = resolveScopeDir(options, scope)
+  return scopeDir ? join(scopeDir, 'skills', name, 'SKILL.md') : undefined
+}
+
+function resolveAgentPath(options: OmpFeatureCenterOptions, scope: OmpResourceScope, name: string): string | undefined {
+  const scopeDir = resolveScopeDir(options, scope)
+  return scopeDir ? join(scopeDir, 'agents', `${name}.md`) : undefined
+}
+
+function resolveConfigPath(options: OmpFeatureCenterOptions, scope: OmpResourceScope): string | undefined {
+  const scopeDir = resolveScopeDir(options, scope)
+  return scopeDir ? join(scopeDir, 'config.yml') : undefined
+}
+
+function levelToScope(level: OmpFeaturePathLevel): OmpResourceScope {
+  return level === 'user' ? 'user' : 'project'
+}
+
+function levelToSource(level: OmpFeaturePathLevel): OmpResourceSource {
+  return level === 'user' ? 'user' : 'project'
+}
+
+async function atomicWriteJson(filePath: string, data: unknown): Promise<void> {
+  const content = `${JSON.stringify(data, null, 2)}\n`
+  await atomicWriteText(filePath, content)
+}
+
+function hashString(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 16)
+}
+
+async function computeFileRevision(filePath: string): Promise<string | undefined> {
+  try {
+    const stats = await stat(filePath)
+    return `${stats.mtimeMs}:${stats.size}`
+  } catch {
+    return undefined
+  }
+}
+
+function computeObjectRevision(value: unknown): string {
+  return hashString(JSON.stringify(value))
+}
+
+function getDisabledList(config: RawConfig, type: OmpResourceType): string[] {
+  const key = RESOURCE_DISABLED_LIST_KEYS[type]
+  const value = config[key]
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string')
+}
+
+function isResourceEnabled(id: string, disabledList: string[]): boolean {
+  return !disabledList.includes(id)
+}
+
+async function readJsonConfig(filePath: string): Promise<{ exists: boolean; parseError?: string; data: RawConfig }> {
+  const result = await readYamlConfig(filePath)
+  return result
+}
+
+async function readMcpJson(filePath: string): Promise<{ exists: boolean; parseError?: string; data: RawConfig }> {
+  let content: string
+  try {
+    content = await readFile(filePath, 'utf-8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { exists: false, data: {} }
+    }
+    return { exists: false, parseError: error instanceof Error ? error.message : String(error), data: {} }
+  }
+  try {
+    const parsed = JSON.parse(content) as unknown
+    if (!isRecord(parsed)) {
+      return { exists: true, parseError: 'mcp.json must contain an object.', data: {} }
+    }
+    return { exists: true, data: parsed }
+  } catch (error) {
+    return { exists: true, parseError: error instanceof Error ? error.message : String(error), data: {} }
+  }
+}
+
+interface McpServerDefinition {
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+}
+
+function filterStringRecord(value: RawConfig): Record<string, string> {
+  const result: Record<string, string> = {}
+  for (const [k, v] of Object.entries(value)) {
+    if (typeof v === 'string') result[k] = v
+  }
+  return result
+}
+
+function getMcpServers(data: RawConfig): Record<string, McpServerDefinition> {
+  const servers = data.mcpServers
+  if (!isRecord(servers)) return {}
+  const result: Record<string, McpServerDefinition> = {}
+  for (const [name, value] of Object.entries(servers)) {
+    if (isRecord(value)) {
+      result[name] = {
+        command: typeof value.command === 'string' ? value.command : undefined,
+        args: Array.isArray(value.args) ? value.args.filter((a): a is string => typeof a === 'string') : undefined,
+        env: isRecord(value.env) ? filterStringRecord(value.env) : undefined,
+      }
+    }
+  }
+  return result
+}
+
+async function readResourceDescription(path: string): Promise<string | undefined> {
+  try {
+    const content = await readFile(path, 'utf-8')
+    const frontMatter = content.match(/^---\s*[\r\n]+([\s\S]*?)[\r\n]+---/)
+    const descLine = frontMatter?.[1].split(/\r?\n/).find(line => line.trim().startsWith('description:'))
+    if (descLine) return descLine.replace(/^description:\s*/, '').replace(/^["']|["']$/g, '').trim() || undefined
+    return undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function buildResourceCategory(
+  type: OmpResourceType,
+  capability: OmpFeatureCapabilityDto,
+  options: OmpFeatureCenterOptions,
+  disabledLists: Map<OmpResourceScope, string[]>,
+  now: number,
+): Promise<OmpResourceCategory> {
+  const entries: OmpResourceEntry[] = []
+  const diagnostics: OmpResourceDiagnostic[] = []
+
+  for (const pathDto of capability.sourcePaths) {
+    if (pathDto.parseError) {
+      diagnostics.push({
+        code: 'CONFIG_INVALID',
+        message: pathDto.parseError,
+        path: pathDto.path,
+      })
+    }
+  }
+
+  const mcpDefinitionsByPath = new Map<string, Record<string, McpServerDefinition>>()
+
+  for (const item of capability.items) {
+    const scope = levelToScope(item.level)
+    const source = levelToSource(item.level)
+    const id = resourceId(type, item.name)
+    const disabledList = disabledLists.get(scope) ?? []
+    const enabled = isResourceEnabled(id, disabledList)
+
+    let revision: string
+    let description = item.description
+    let toolCount: number | undefined
+
+    if (type === 'mcp') {
+      let definitions = mcpDefinitionsByPath.get(item.path)
+      if (!definitions) {
+        const parsed = await readMcpJson(item.path)
+        definitions = getMcpServers(parsed.data)
+        mcpDefinitionsByPath.set(item.path, definitions)
+      }
+      const definition = definitions[item.name]
+      revision = definition ? computeObjectRevision(definition) : (await computeFileRevision(item.path) ?? `${now}`)
+    } else {
+      if (type === 'agent') {
+        description = (await readResourceDescription(item.path)) ?? item.description
+      }
+      revision = await computeFileRevision(item.path) ?? `${now}`
+    }
+
+    entries.push({
+      id,
+      type,
+      name: item.name,
+      source,
+      scope,
+      enabled,
+      effectiveEnabled: enabled,
+      path: item.path,
+      description,
+      toolCount,
+      diagnostics: [],
+      revision,
+      lastRefreshedAt: now,
+    })
+  }
+
+  return {
+    entries,
+    sourcePaths: capability.sourcePaths,
+    error: capability.error,
+  }
+}
+
+export async function getOmpResourceSnapshot(
+  input: OmpResourceSnapshotInput,
+  options: OmpFeatureCenterOptions,
+): Promise<OmpResourceSnapshot> {
+  const now = options.now?.() ?? Date.now()
+  const agentDir = resolveAgentDir(options)
+  const projectRoot = resolveProjectRoot(options)
+
+  const [skillsCapability, mcpCapability, agentsCapability] = await Promise.all([
+    scanSkills(options, agentDir),
+    scanMcp(options, agentDir),
+    scanAgents(options, agentDir),
+  ])
+
+  const globalConfig = await readYamlConfig(resolveGlobalConfigPath(options))
+  const projectConfigPath = resolveProjectConfigPath(options)
+  const projectConfig = projectConfigPath ? await readYamlConfig(projectConfigPath) : undefined
+
+  const disabledLists = new Map<OmpResourceScope, string[]>()
+  disabledLists.set('user', getDisabledList(globalConfig.parseError ? {} : globalConfig.data, 'mcp'))
+  disabledLists.get('user')!.push(...getDisabledList(globalConfig.parseError ? {} : globalConfig.data, 'skill'))
+  disabledLists.get('user')!.push(...getDisabledList(globalConfig.parseError ? {} : globalConfig.data, 'agent'))
+
+  if (projectConfig && !projectConfig.parseError && projectRoot) {
+    disabledLists.set('project', [
+      ...getDisabledList(projectConfig.data, 'mcp'),
+      ...getDisabledList(projectConfig.data, 'skill'),
+      ...getDisabledList(projectConfig.data, 'agent'),
+    ])
+  }
+
+  const [skills, mcp, agents] = await Promise.all([
+    buildResourceCategory('skill', skillsCapability, options, disabledLists, now),
+    buildResourceCategory('mcp', mcpCapability, options, disabledLists, now),
+    buildResourceCategory('agent', agentsCapability, options, disabledLists, now),
+  ])
+
+  const diagnostics: OmpResourceDiagnostic[] = []
+  if (globalConfig.parseError) {
+    diagnostics.push({ code: 'CONFIG_INVALID', message: globalConfig.parseError, path: globalConfig.path })
+  }
+  if (projectConfig?.parseError) {
+    diagnostics.push({ code: 'CONFIG_INVALID', message: projectConfig.parseError, path: projectConfig.path })
+  }
+
+  return {
+    mcp,
+    skills,
+    agents,
+    diagnostics,
+    refreshedAt: now,
+  }
+}
+
+export async function refreshResources(
+  input: OmpResourceSnapshotInput,
+  options: OmpFeatureCenterOptions,
+): Promise<OmpResourceSnapshot> {
+  return getOmpResourceSnapshot(input, options)
+}
+
+function normalizeMcpDraft(draft: Record<string, unknown>): { name: string; definition: McpServerDefinition } | null {
+  const name = typeof draft.name === 'string' ? draft.name.trim() : ''
+  if (!name) return null
+  const command = typeof draft.command === 'string' ? draft.command.trim() : undefined
+  const args = Array.isArray(draft.args)
+    ? draft.args.filter((a): a is string => typeof a === 'string').map(a => a.trim()).filter(Boolean)
+    : undefined
+  const env = isRecord(draft.env) ? normalizeStringEnv(draft.env) : undefined
+  return { name, definition: { command, args, env } }
+}
+
+function normalizeStringEnv(value: RawConfig): Record<string, string> {
+  const result: Record<string, string> = {}
+  for (const [k, v] of Object.entries(value)) {
+    if (typeof v === 'string') result[k.trim()] = v.trim()
+  }
+  return result
+}
+
+function normalizeSkillDraft(draft: Record<string, unknown>): { name: string; description?: string } | null {
+  const name = typeof draft.name === 'string' ? draft.name.trim() : ''
+  if (!name) return null
+  const description = typeof draft.description === 'string' ? draft.description.trim() : undefined
+  return { name, description }
+}
+
+function normalizeAgentDraft(draft: Record<string, unknown>): { name: string; description?: string } | null {
+  return normalizeSkillDraft(draft)
+}
+
+async function readScopeConfig(options: OmpFeatureCenterOptions, scope: OmpResourceScope): Promise<ReadConfigResult | undefined> {
+  const path = resolveConfigPath(options, scope)
+  if (!path) return undefined
+  return readYamlConfig(path)
+}
+
+async function writeScopeConfig(path: string, data: RawConfig): Promise<void> {
+  const content = dumpYaml(data, { lineWidth: 120, noRefs: true })
+  await atomicWriteText(path, content.endsWith('\n') ? content : `${content}\n`)
+}
+
+async function toggleDisabledInConfig(
+  configResult: ReadConfigResult,
+  type: OmpResourceType,
+  id: string,
+  enabled: boolean,
+): Promise<{ success: boolean; error?: string }> {
+  if (configResult.parseError) {
+    return {
+      success: false,
+      error: `Cannot update ${basename(configResult.path)} because it could not be parsed: ${configResult.parseError}`,
+    }
+  }
+  const key = RESOURCE_DISABLED_LIST_KEYS[type]
+  const next: RawConfig = structuredClone(configResult.data)
+  const existing = Array.isArray(next[key]) ? next[key] as unknown[] : []
+  const list = existing.filter((item): item is string => typeof item === 'string')
+  const index = list.indexOf(id)
+  if (enabled) {
+    if (index !== -1) {
+      list.splice(index, 1)
+      next[key] = list.length > 0 ? list : undefined
+    }
+  } else {
+    if (index === -1) {
+      list.push(id)
+      next[key] = list
+    }
+  }
+  await writeScopeConfig(configResult.path, next)
+  return { success: true }
+}
+
+export async function createResource(
+  input: OmpResourceCreateInput,
+  options: OmpFeatureCenterOptions,
+): Promise<OmpResourceOperationResult> {
+  try {
+    const { type, scope, draft } = input
+    const now = options.now?.() ?? Date.now()
+
+    if (type === 'mcp') {
+      const normalized = normalizeMcpDraft(draft)
+      if (!normalized) {
+        return { success: false, error: 'MCP server requires a non-empty name.', code: 'INVALID_INPUT' }
+      }
+      const { name, definition } = normalized
+      const filePath = resolveMcpPath(options, scope)
+      if (!filePath) {
+        return { success: false, error: `Cannot create ${scope} MCP server: scope directory is not available.`, code: 'SCOPE_MISSING' }
+      }
+      const parsed = await readMcpJson(filePath)
+      if (parsed.parseError) {
+        return { success: false, error: `Cannot modify ${filePath}: ${parsed.parseError}`, code: 'CONFIG_INVALID' }
+      }
+      const next: RawConfig = { ...parsed.data }
+      const servers = isRecord(next.mcpServers) ? { ...next.mcpServers } : {}
+      if (servers[name] !== undefined) {
+        return { success: false, error: `MCP server "${name}" already exists in this scope.`, code: 'ALREADY_EXISTS' }
+      }
+      servers[name] = definition
+      next.mcpServers = servers
+      await atomicWriteJson(filePath, next)
+      return { success: true, snapshot: await getOmpResourceSnapshot({ scope }, options) }
+    }
+
+    if (type === 'skill') {
+      const normalized = normalizeSkillDraft(draft)
+      if (!normalized) {
+        return { success: false, error: 'Skill requires a non-empty name.', code: 'INVALID_INPUT' }
+      }
+      const { name, description } = normalized
+      const filePath = resolveSkillPath(options, scope, name)
+      if (!filePath) {
+        return { success: false, error: `Cannot create ${scope} skill: scope directory is not available.`, code: 'SCOPE_MISSING' }
+      }
+      if (await pathExists(filePath)) {
+        return { success: false, error: `Skill "${name}" already exists in this scope.`, code: 'ALREADY_EXISTS' }
+      }
+      const frontMatter = description ? `---\nname: ${name}\ndescription: ${description}\n---\n\n` : `---\nname: ${name}\n---\n\n`
+      const body = `# ${name}\n\n`
+      await atomicWriteText(filePath, `${frontMatter}${body}`)
+      return { success: true, snapshot: await getOmpResourceSnapshot({ scope }, options) }
+    }
+
+    if (type === 'agent') {
+      const normalized = normalizeAgentDraft(draft)
+      if (!normalized) {
+        return { success: false, error: 'Agent requires a non-empty name.', code: 'INVALID_INPUT' }
+      }
+      const { name, description } = normalized
+      const filePath = resolveAgentPath(options, scope, name)
+      if (!filePath) {
+        return { success: false, error: `Cannot create ${scope} agent: scope directory is not available.`, code: 'SCOPE_MISSING' }
+      }
+      if (await pathExists(filePath)) {
+        return { success: false, error: `Agent "${name}" already exists in this scope.`, code: 'ALREADY_EXISTS' }
+      }
+      const frontMatter = description ? `---\nname: ${name}\ndescription: ${description}\n---\n\n` : `---\nname: ${name}\n---\n\n`
+      const body = `# ${name}\n\n`
+      await atomicWriteText(filePath, `${frontMatter}${body}`)
+      return { success: true, snapshot: await getOmpResourceSnapshot({ scope }, options) }
+    }
+
+    return { success: false, error: `Unsupported resource type: ${type}`, code: 'INVALID_TYPE' }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error), code: 'UNKNOWN' }
+  }
+}
+
+export async function updateResource(
+  input: OmpResourceUpdateInput,
+  options: OmpFeatureCenterOptions,
+): Promise<OmpResourceOperationResult> {
+  try {
+    const { type, id, scope, expectedRevision, patch } = input
+    const name = resourceNameFromId(id)
+
+    const snapshot = await getOmpResourceSnapshot({ scope }, options)
+    const category = snapshot[resourceCategoryKey(type)]
+    const entry = category.entries.find(e => e.id === id && e.scope === scope)
+    if (!entry) {
+      return { success: false, error: `${type} "${name}" not found in ${scope} scope.`, code: 'NOT_FOUND' }
+    }
+    if (entry.revision !== expectedRevision) {
+      return { success: false, error: 'Resource was modified elsewhere. Refresh and try again.', code: 'REVISION_CONFLICT' }
+    }
+
+    if (type === 'mcp') {
+      const filePath = resolveMcpPath(options, scope)
+      if (!filePath) {
+        return { success: false, error: `Cannot update ${scope} MCP server: scope directory is not available.`, code: 'SCOPE_MISSING' }
+      }
+      const parsed = await readMcpJson(filePath)
+      if (parsed.parseError) {
+        return { success: false, error: `Cannot modify ${filePath}: ${parsed.parseError}`, code: 'CONFIG_INVALID' }
+      }
+      const servers = getMcpServers(parsed.data)
+      const existing = servers[name]
+      if (!existing) {
+        return { success: false, error: `MCP server "${name}" not found.`, code: 'NOT_FOUND' }
+      }
+      const newName = typeof patch.name === 'string' ? patch.name.trim() : name
+      const nextDefinition: McpServerDefinition = {
+        command: typeof patch.command === 'string' ? patch.command.trim() : existing.command,
+        args: Array.isArray(patch.args)
+          ? patch.args.filter((a): a is string => typeof a === 'string').map(a => a.trim()).filter(Boolean)
+          : existing.args,
+        env: isRecord(patch.env) ? normalizeStringEnv(patch.env) : existing.env,
+      }
+      const nextServers: Record<string, McpServerDefinition> = {}
+      for (const [key, value] of Object.entries(servers)) {
+        if (key === name) continue
+        nextServers[key] = value
+      }
+      nextServers[newName] = nextDefinition
+      await atomicWriteJson(filePath, { ...parsed.data, mcpServers: nextServers })
+      return { success: true, snapshot: await getOmpResourceSnapshot({ scope }, options) }
+    }
+
+    if (type === 'skill') {
+      const oldPath = resolveSkillPath(options, scope, name)
+      if (!oldPath) {
+        return { success: false, error: `Cannot update ${scope} skill: scope directory is not available.`, code: 'SCOPE_MISSING' }
+      }
+      const newName = typeof patch.name === 'string' ? patch.name.trim() : name
+      const newDescription = typeof patch.description === 'string' ? patch.description.trim() : entry.description
+      const newPath = newName !== name ? resolveSkillPath(options, scope, newName) : oldPath
+      if (!newPath) {
+        return { success: false, error: `Cannot update ${scope} skill: scope directory is not available.`, code: 'SCOPE_MISSING' }
+      }
+      if (newName !== name && (await pathExists(newPath))) {
+        return { success: false, error: `Skill "${newName}" already exists in this scope.`, code: 'ALREADY_EXISTS' }
+      }
+      let content: string
+      try {
+        content = await readFile(oldPath, 'utf-8')
+      } catch (error) {
+        return { success: false, error: `Cannot read skill file: ${error instanceof Error ? error.message : String(error)}`, code: 'READ_FAILED' }
+      }
+      const body = content.replace(/^---[\s\S]*?---\s*/, '').trimStart() || `# ${newName}\n\n`
+      const frontMatter = newDescription
+        ? `---\nname: ${newName}\ndescription: ${newDescription}\n---\n\n`
+        : `---\nname: ${newName}\n---\n\n`
+      await mkdir(dirname(newPath), { recursive: true })
+      await atomicWriteText(newPath, `${frontMatter}${body}`)
+      if (newName !== name && oldPath !== newPath) {
+        await rm(oldPath).catch(() => {})
+        await rmdir(dirname(oldPath)).catch(() => {})
+      }
+      return { success: true, snapshot: await getOmpResourceSnapshot({ scope }, options) }
+    }
+
+    if (type === 'agent') {
+      const oldPath = resolveAgentPath(options, scope, name)
+      if (!oldPath) {
+        return { success: false, error: `Cannot update ${scope} agent: scope directory is not available.`, code: 'SCOPE_MISSING' }
+      }
+      const newName = typeof patch.name === 'string' ? patch.name.trim() : name
+      const newDescription = typeof patch.description === 'string' ? patch.description.trim() : entry.description
+      const newPath = newName !== name ? resolveAgentPath(options, scope, newName) : oldPath
+      if (!newPath) {
+        return { success: false, error: `Cannot update ${scope} agent: scope directory is not available.`, code: 'SCOPE_MISSING' }
+      }
+      if (newName !== name && (await pathExists(newPath))) {
+        return { success: false, error: `Agent "${newName}" already exists in this scope.`, code: 'ALREADY_EXISTS' }
+      }
+      let content: string
+      try {
+        content = await readFile(oldPath, 'utf-8')
+      } catch (error) {
+        return { success: false, error: `Cannot read agent file: ${error instanceof Error ? error.message : String(error)}`, code: 'READ_FAILED' }
+      }
+      const body = content.replace(/^---[\s\S]*?---\s*/, '').trimStart() || `# ${newName}\n\n`
+      const frontMatter = newDescription
+        ? `---\nname: ${newName}\ndescription: ${newDescription}\n---\n\n`
+        : `---\nname: ${newName}\n---\n\n`
+      await mkdir(dirname(newPath), { recursive: true })
+      await atomicWriteText(newPath, `${frontMatter}${body}`)
+      if (newName !== name && oldPath !== newPath) {
+        await rm(oldPath).catch(() => {})
+      }
+      return { success: true, snapshot: await getOmpResourceSnapshot({ scope }, options) }
+    }
+
+    return { success: false, error: `Unsupported resource type: ${type}`, code: 'INVALID_TYPE' }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error), code: 'UNKNOWN' }
+  }
+}
+
+export async function setResourceEnabled(
+  input: OmpResourceSetEnabledInput,
+  options: OmpFeatureCenterOptions,
+): Promise<OmpResourceOperationResult> {
+  try {
+    const { type, id, scope, expectedRevision, enabled } = input
+    const name = resourceNameFromId(id)
+
+    const snapshot = await getOmpResourceSnapshot({ scope }, options)
+    const category = snapshot[resourceCategoryKey(type)]
+    const entry = category.entries.find(e => e.id === id && e.scope === scope)
+    if (!entry) {
+      return { success: false, error: `${type} "${name}" not found in ${scope} scope.`, code: 'NOT_FOUND' }
+    }
+    if (entry.revision !== expectedRevision) {
+      return { success: false, error: 'Resource was modified elsewhere. Refresh and try again.', code: 'REVISION_CONFLICT' }
+    }
+
+    const config = await readScopeConfig(options, scope)
+    if (!config) {
+      return { success: false, error: `Cannot update ${scope} config: scope directory is not available.`, code: 'SCOPE_MISSING' }
+    }
+    const result = await toggleDisabledInConfig(config, type, id, enabled)
+    if (!result.success) {
+      return { success: false, error: result.error, code: 'CONFIG_WRITE_FAILED' }
+    }
+    return { success: true, snapshot: await getOmpResourceSnapshot({ scope }, options) }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error), code: 'UNKNOWN' }
+  }
+}
+
+export async function removeResource(
+  input: OmpResourceRemoveInput,
+  options: OmpFeatureCenterOptions,
+): Promise<OmpResourceOperationResult> {
+  try {
+    const { type, id, scope, expectedRevision } = input
+    const name = resourceNameFromId(id)
+
+    const snapshot = await getOmpResourceSnapshot({ scope }, options)
+    const category = snapshot[resourceCategoryKey(type)]
+    const entry = category.entries.find(e => e.id === id && e.scope === scope)
+    if (!entry) {
+      return { success: false, error: `${type} "${name}" not found in ${scope} scope.`, code: 'NOT_FOUND' }
+    }
+    if (entry.revision !== expectedRevision) {
+      return { success: false, error: 'Resource was modified elsewhere. Refresh and try again.', code: 'REVISION_CONFLICT' }
+    }
+
+    if (type === 'mcp') {
+      const filePath = resolveMcpPath(options, scope)
+      if (!filePath) {
+        return { success: false, error: `Cannot remove ${scope} MCP server: scope directory is not available.`, code: 'SCOPE_MISSING' }
+      }
+      const parsed = await readMcpJson(filePath)
+      if (parsed.parseError) {
+        return { success: false, error: `Cannot modify ${filePath}: ${parsed.parseError}`, code: 'CONFIG_INVALID' }
+      }
+      const servers = getMcpServers(parsed.data)
+      if (servers[name] === undefined) {
+        return { success: false, error: `MCP server "${name}" not found.`, code: 'NOT_FOUND' }
+      }
+      const nextServers: Record<string, McpServerDefinition> = {}
+      for (const [key, value] of Object.entries(servers)) {
+        if (key !== name) nextServers[key] = value
+      }
+      await atomicWriteJson(filePath, { ...parsed.data, mcpServers: nextServers })
+      return { success: true, snapshot: await getOmpResourceSnapshot({ scope }, options) }
+    }
+
+    if (type === 'skill') {
+      const filePath = resolveSkillPath(options, scope, name)
+      if (!filePath) {
+        return { success: false, error: `Cannot remove ${scope} skill: scope directory is not available.`, code: 'SCOPE_MISSING' }
+      }
+      await rm(filePath).catch(() => {})
+      await rmdir(dirname(filePath)).catch(() => {})
+      return { success: true, snapshot: await getOmpResourceSnapshot({ scope }, options) }
+    }
+
+    if (type === 'agent') {
+      const filePath = resolveAgentPath(options, scope, name)
+      if (!filePath) {
+        return { success: false, error: `Cannot remove ${scope} agent: scope directory is not available.`, code: 'SCOPE_MISSING' }
+      }
+      await rm(filePath).catch(() => {})
+      return { success: true, snapshot: await getOmpResourceSnapshot({ scope }, options) }
+    }
+
+    return { success: false, error: `Unsupported resource type: ${type}`, code: 'INVALID_TYPE' }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error), code: 'UNKNOWN' }
+  }
+}
+
+async function findMcpDefinition(
+  options: OmpFeatureCenterOptions,
+  scope: OmpResourceScope,
+  name: string,
+): Promise<{ filePath: string; definition: McpServerDefinition } | null> {
+  const filePath = resolveMcpPath(options, scope)
+  if (!filePath) return null
+  const parsed = await readMcpJson(filePath)
+  if (parsed.parseError) return null
+  const servers = getMcpServers(parsed.data)
+  const definition = servers[name]
+  if (!definition) return null
+  return { filePath, definition }
+}
+
+export async function testMcpResource(
+  input: OmpResourceTestMcpInput,
+  options: OmpFeatureCenterOptions,
+): Promise<OmpResourceMcpTestResult> {
+  const { id, scope } = input
+  const name = resourceNameFromId(id)
+
+  const found = await findMcpDefinition(options, scope, name)
+  if (!found) {
+    return { success: false, error: `MCP server "${name}" not found in ${scope} scope.`, code: 'NOT_FOUND' }
+  }
+  const { definition } = found
+  if (!definition.command) {
+    return { success: false, error: `MCP server "${name}" has no command.`, code: 'INVALID_CONFIG' }
+  }
+
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
+  const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js')
+
+  const client = new Client({ name: 'craft-agent-omp-mcp-test', version: '0.1.0' }, { capabilities: {} })
+  const transport = new StdioClientTransport({
+    command: definition.command,
+    args: definition.args,
+    env: definition.env,
+    stderr: 'pipe',
+  })
+
+  const timeoutMs = 15_000
+  try {
+    await Promise.race([
+      client.connect(transport),
+      new Promise<void>((_, reject) => setTimeout(() => reject(new Error('MCP connection timed out')), timeoutMs)),
+    ])
+    const result = await Promise.race([
+      client.listTools(),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('MCP listTools timed out')), timeoutMs)),
+    ])
+    await client.close().catch(() => {})
+    const tools = (result.tools ?? []).map(tool => ({ name: tool.name, description: tool.description }))
+    return {
+      success: true,
+      connected: true,
+      tools,
+      snapshot: await getOmpResourceSnapshot({ scope }, options),
+    }
+  } catch (error) {
+    await client.close().catch(() => {})
+    const message = error instanceof Error ? error.message : String(error)
+    return {
+      success: false,
+      connected: false,
+      testError: message,
+      error: `MCP test failed: ${message}`,
+      code: 'MCP_CONNECT_FAILED',
+    }
   }
 }

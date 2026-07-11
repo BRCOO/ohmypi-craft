@@ -81,13 +81,13 @@ describe('preferences.uiLanguage', () => {
     subprocessIt('returns the code when valid', () => {
       const { configDir, prefsFile } = setupDir();
       try {
-        writeRawPrefs(prefsFile, { uiLanguage: 'es' });
+        writeRawPrefs(prefsFile, { uiLanguage: 'en' });
         const r = runScript(configDir, `
           import { getPersistedUiLanguage } from '${PREFS_MODULE}';
           console.log(JSON.stringify({ value: getPersistedUiLanguage() ?? null }));
         `);
         expect(r.exitCode).toBe(0);
-        expect(JSON.parse(r.stdout)).toEqual({ value: 'es' });
+        expect(JSON.parse(r.stdout)).toEqual({ value: 'en' });
       } finally {
         rmSync(configDir, { recursive: true, force: true });
       }
@@ -115,11 +115,11 @@ describe('preferences.uiLanguage', () => {
       try {
         const r = runScript(configDir, `
           import { setPersistedUiLanguage, getPersistedUiLanguage } from '${PREFS_MODULE}';
-          setPersistedUiLanguage('hu');
+          setPersistedUiLanguage('zh-Hans');
           console.log(JSON.stringify({ value: getPersistedUiLanguage() ?? null }));
         `);
         expect(r.exitCode).toBe(0);
-        expect(JSON.parse(r.stdout)).toEqual({ value: 'hu' });
+        expect(JSON.parse(r.stdout)).toEqual({ value: 'zh-Hans' });
         expect(existsSync(prefsFile)).toBe(true);
       } finally {
         rmSync(configDir, { recursive: true, force: true });
@@ -133,11 +133,11 @@ describe('preferences.uiLanguage', () => {
         const r = runScript(configDir, `
           import { setPersistedUiLanguage } from '${PREFS_MODULE}';
           import { statSync } from 'fs';
-          setPersistedUiLanguage('hu');
+          setPersistedUiLanguage('zh-Hans');
           const first = statSync(${prefsFileLiteral}).mtimeMs;
           const start = Date.now();
           while (Date.now() - start < 30) {}
-          setPersistedUiLanguage('hu');
+          setPersistedUiLanguage('zh-Hans');
           const second = statSync(${prefsFileLiteral}).mtimeMs;
           console.log(JSON.stringify({ first, second }));
         `);
@@ -155,13 +155,13 @@ describe('preferences.uiLanguage', () => {
         writeRawPrefs(prefsFile, { name: 'Alice', timezone: 'Europe/Budapest' });
         const r = runScript(configDir, `
           import { setPersistedUiLanguage } from '${PREFS_MODULE}';
-          setPersistedUiLanguage('hu');
+          setPersistedUiLanguage('zh-Hans');
         `);
         expect(r.exitCode).toBe(0);
         const raw = JSON.parse(readFileSync(prefsFile, 'utf-8'));
         expect(raw.name).toBe('Alice');
         expect(raw.timezone).toBe('Europe/Budapest');
-        expect(raw.uiLanguage).toBe('hu');
+        expect(raw.uiLanguage).toBe('zh-Hans');
       } finally {
         rmSync(configDir, { recursive: true, force: true });
       }
@@ -186,13 +186,13 @@ describe('preferences.uiLanguage', () => {
     subprocessIt('maps a persisted code to its native language name', () => {
       const { configDir, prefsFile } = setupDir();
       try {
-        writeRawPrefs(prefsFile, { uiLanguage: 'es' });
+        writeRawPrefs(prefsFile, { uiLanguage: 'en' });
         const r = runScript(configDir, `
           import { resolveTitleLanguageName } from '${PREFS_MODULE}';
           console.log(JSON.stringify({ value: resolveTitleLanguageName() ?? null }));
         `);
         expect(r.exitCode).toBe(0);
-        expect(JSON.parse(r.stdout)).toEqual({ value: 'Español' });
+        expect(JSON.parse(r.stdout)).toEqual({ value: 'English' });
       } finally {
         rmSync(configDir, { recursive: true, force: true });
       }
@@ -268,12 +268,12 @@ describe('preferences.uiLanguage', () => {
         writeRawPrefs(prefsFile, { name: 'Alice', language: 'Hungarian' });
         const r = runScript(configDir, `
           import { setPersistedUiLanguage } from '${PREFS_MODULE}';
-          setPersistedUiLanguage('hu');
+          setPersistedUiLanguage('zh-Hans');
         `);
         expect(r.exitCode).toBe(0);
         const raw = JSON.parse(readFileSync(prefsFile, 'utf-8'));
         expect(raw).not.toHaveProperty('language');
-        expect(raw.uiLanguage).toBe('hu');
+        expect(raw.uiLanguage).toBe('zh-Hans');
         expect(raw.name).toBe('Alice');
       } finally {
         rmSync(configDir, { recursive: true, force: true });

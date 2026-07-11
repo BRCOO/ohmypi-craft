@@ -318,6 +318,16 @@ try {
 # Copy all resources and bundled assets using the shared script.
 # Single source of truth — matches Mac/Linux build (bun run build:copy).
 # Copies: resources (icons, DMG bg), docs, tool-icons, themes, permissions, config-defaults.
+Write-Host "  Building bundled OMP runtime..."
+Push-Location $ElectronDir
+try {
+    bun scripts/prepare-omp-runtime.ts --platform win32 --arch x64
+    if ($LASTEXITCODE -ne 0) { throw "OMP runtime build failed" }
+    Write-Host "  OMP runtime bundled" -ForegroundColor Green
+} finally {
+    Pop-Location
+}
+
 Write-Host "  Copying resources and bundled assets..."
 Push-Location $ElectronDir
 try {

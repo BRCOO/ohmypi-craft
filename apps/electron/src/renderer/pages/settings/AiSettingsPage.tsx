@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
@@ -98,23 +99,34 @@ function getModelOptionsForConnection(
   }))
 }
 
-function getOmpSourceLabel(source: OmpRuntimeStatus['source']): string {
+function getOmpSourceLabel(source: OmpRuntimeStatus['source'], t: TFunction): string {
   switch (source) {
-    case 'config': return 'saved path'
-    case 'env': return 'OMP_COMMAND'
-    default: return 'PATH fallback'
+    case 'config': return t('settings.ai.ompRuntime.source.config')
+    case 'env': return t('settings.ai.ompRuntime.source.env')
+    case 'bundled': return t('settings.ai.ompRuntime.source.bundled')
+    default: return t('settings.ai.ompRuntime.source.default')
   }
 }
 
-function getOmpStatusDescription(status: OmpRuntimeStatus | null): string {
-  if (!status) return 'Checking local OMP RPC runtime…'
+function getOmpStatusDescription(status: OmpRuntimeStatus | null, t: TFunction): string {
+  if (!status) return t('settings.ai.ompRuntime.checkingDescription')
   const command = status.rawCommand || status.command
   if (status.ok) {
-    const models = typeof status.modelCount === 'number' ? `${status.modelCount} models` : 'models available'
-    const version = status.version ? ` · ${status.version}` : ''
-    return `${models}${version} · ${getOmpSourceLabel(status.source)} · ${command}`
+    const models = typeof status.modelCount === 'number'
+      ? t('settings.ai.ompRuntime.modelCount', { count: status.modelCount })
+      : t('settings.ai.ompRuntime.modelsAvailable')
+    return t('settings.ai.ompRuntime.readyDescription', {
+      models,
+      version: status.version ?? '',
+      source: getOmpSourceLabel(status.source, t),
+      command,
+    })
   }
-  return `${getOmpSourceLabel(status.source)} · ${command} · ${status.error || 'OMP runtime is not reachable'}`
+  return t('settings.ai.ompRuntime.unavailableDescription', {
+    source: getOmpSourceLabel(status.source, t),
+    command,
+    error: status.error || t('settings.ai.ompRuntime.unreachable'),
+  })
 }
 
 export const meta: DetailsPageMeta = {
@@ -1302,7 +1314,7 @@ export default function AiSettingsPage() {
               )}
 
               {/* Oh My Pi runtime */}
-              <SettingsSection title="Oh My Pi runtime" description="Local OMP RPC status, command path, and live model discovery.">
+              <SettingsSection title={t('settings.ai.ompRuntime.title')} description={t('settings.ai.ompRuntime.description')}>
                 <SettingsCard>
                   <SettingsRow
                     label={(
@@ -1314,10 +1326,10 @@ export default function AiSettingsPage() {
                         ) : (
                           <Spinner className="text-xs" />
                         )}
-                        <span>{ompStatus?.ok ? 'Runtime ready' : ompStatus ? 'Runtime needs attention' : 'Checking runtime'}</span>
+                        <span>{ompStatus?.ok ? t('settings.ai.ompRuntime.ready') : ompStatus ? t('settings.ai.ompRuntime.attention') : t('settings.ai.ompRuntime.checking')}</span>
                       </div>
                     )}
-                    description={getOmpStatusDescription(ompStatus)}
+                    description={getOmpStatusDescription(ompStatus, t)}
                   >
                     <Button
                       size="sm"
@@ -1325,7 +1337,7 @@ export default function AiSettingsPage() {
                       disabled={ompChecking}
                       className="bg-background shadow-minimal text-foreground hover:bg-foreground/5 rounded-lg"
                     >
-                      {ompChecking ? 'Checking' : 'Recheck'}
+                      {ompChecking ? t('settings.ai.ompRuntime.checking') : t('settings.ai.ompRuntime.recheck')}
                     </Button>
                     <Button
                       size="sm"
@@ -1333,7 +1345,7 @@ export default function AiSettingsPage() {
                       disabled={ompRefreshingModels}
                       className="bg-background shadow-minimal text-foreground hover:bg-foreground/5 rounded-lg"
                     >
-                      {ompRefreshingModels ? 'Refreshing' : 'Refresh models'}
+                      {ompRefreshingModels ? t('settings.ai.ompRuntime.refreshing') : t('settings.ai.ompRuntime.refreshModels')}
                     </Button>
                     <Button
                       size="sm"
@@ -1342,7 +1354,7 @@ export default function AiSettingsPage() {
                       className="bg-background shadow-minimal text-foreground hover:bg-foreground/5 rounded-lg"
                     >
                       <ClipboardCopy className="mr-1.5 size-3.5" />
-                      Copy diagnostics
+                      {t('settings.ai.ompRuntime.copyDiagnostics')}
                     </Button>
                   </SettingsRow>
                   {ompDiagnostics?.versionCompatibility?.warning && (
@@ -1352,7 +1364,7 @@ export default function AiSettingsPage() {
                     </div>
                   )}
                   <div className="px-4 pb-4 pt-1 space-y-2">
-                    <div className="text-xs font-medium text-foreground/70">OMP command or executable path</div>
+                    <div className="text-xs font-medium text-foreground/70">{t('settings.ai.ompRuntime.commandPath')}</div>
                     <div className="flex gap-2">
                       <input
                         value={ompCommandInput}
@@ -1366,7 +1378,7 @@ export default function AiSettingsPage() {
                         disabled={ompSaving || !ompCommandInput.trim()}
                         className="bg-background shadow-minimal text-foreground hover:bg-foreground/5 rounded-lg"
                       >
-                        {ompSaving ? 'Saving' : 'Save'}
+                        {ompSaving ? t('common.saving') : t('common.save')}
                       </Button>
                       <Button
                         size="sm"
@@ -1374,12 +1386,12 @@ export default function AiSettingsPage() {
                         disabled={ompSaving || ompStatus?.source !== 'config'}
                         className="bg-background shadow-minimal text-foreground hover:bg-foreground/5 rounded-lg"
                       >
-                        Clear
+                        {t('common.clear')}
                       </Button>
                     </div>
                     {ompStatus?.defaultModel && (
                       <div className="text-xs text-muted-foreground">
-                        Default from OMP: {ompStatus.defaultModel}
+                        {t('settings.ai.ompRuntime.defaultModel', { model: ompStatus.defaultModel })}
                       </div>
                     )}
                   </div>
@@ -1449,15 +1461,15 @@ export default function AiSettingsPage() {
               </SettingsSection>
 
               {/* OMP subsystem status */}
-              <SettingsSection title="Oh My Pi subsystems" description="Status of Browser, LSP, GitHub, SSH, and MCP as reported by OMP.">
+              <SettingsSection title={t('settings.ai.ompSubsystems.title')} description={t('settings.ai.ompSubsystems.description')}>
                 <SettingsCard>
                   <div className="divide-y divide-border/50">
                     {[
-                      { icon: Globe, label: 'Browser', description: 'OMP does not report browser status via RPC' },
-                      { icon: Layers, label: 'LSP', description: 'OMP does not report LSP server status via RPC' },
-                      { icon: GitBranch, label: 'GitHub', description: 'OMP does not report GitHub auth status via RPC' },
-                      { icon: Terminal, label: 'SSH', description: 'OMP does not report SSH host status via RPC' },
-                      { icon: Search, label: 'MCP / Tool discovery', description: 'OMP does not report MCP server status via RPC' },
+                      { icon: Globe, label: t('settings.ai.ompSubsystems.browser'), description: t('settings.ai.ompSubsystems.browserDescription') },
+                      { icon: Layers, label: 'LSP', description: t('settings.ai.ompSubsystems.lspDescription') },
+                      { icon: GitBranch, label: 'GitHub', description: t('settings.ai.ompSubsystems.githubDescription') },
+                      { icon: Terminal, label: 'SSH', description: t('settings.ai.ompSubsystems.sshDescription') },
+                      { icon: Search, label: t('settings.ai.ompSubsystems.mcp'), description: t('settings.ai.ompSubsystems.mcpDescription') },
                     ].map(({ icon: Icon, label, description }) => (
                       <div key={label} className="flex items-start gap-3 px-4 py-3">
                         <span className="mt-0.5 flex size-7 items-center justify-center rounded-lg bg-foreground/5 text-foreground/70">
@@ -1468,7 +1480,7 @@ export default function AiSettingsPage() {
                             {label}
                             <span className="inline-flex items-center rounded-full bg-amber-400/10 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400">
                               <AlertTriangle className="mr-1 size-3" />
-                              Not reported
+                              {t('settings.ai.ompSubsystems.notReported')}
                             </span>
                           </div>
                           <div className="text-xs text-muted-foreground">{description}</div>

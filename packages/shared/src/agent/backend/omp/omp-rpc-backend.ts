@@ -84,6 +84,7 @@ import {
 } from './omp-subagent-state.ts';
 import {
   type OmpControlState,
+  type OmpPlanControlState,
   DEFAULT_OMP_RPC_LONG_REQUEST_TIMEOUT_MS,
   DEFAULT_OMP_RPC_REQUEST_TIMEOUT_MS,
   getOmpRpcCommandTimeout,
@@ -108,6 +109,7 @@ import {
   parseOmpSetHostUriSchemesResponseData,
   parseOmpLastAssistantTextResponseData,
   parseOmpMessagesResponseData,
+  parseOmpPlanModeState,
   parseOmpPromptResponseData,
   parseOmpRuntimeEvent,
   parseOmpSessionShutdownFrame,
@@ -145,6 +147,8 @@ import {
   type OmpRpcHostUriResultFrame,
   type OmpRpcLoginProvider,
   type OmpRpcLoginResult,
+  type OmpRpcPlanModeState,
+  type OmpRpcPlanReviewRequestFrame,
   type OmpRpcReadyFrame,
   type OmpRpcSessionShutdownFrame,
   type OmpRpcSessionState,
@@ -376,10 +380,29 @@ export function buildOmpExtensionUiResponseFrame(
     };
   }
 
+  if ('action' in response) {
+    throw new Error('OMP Plan review responses must use plan_review_result, not extension_ui_response');
+  }
+
   return {
     type: 'extension_ui_response',
     id: requestId,
     confirmed: response.confirmed,
+  };
+}
+
+function createOmpPlanControlState(): OmpPlanControlState {
+  return {
+    supported: false,
+    state: { enabled: false, phase: 'inactive' },
+    updatedAt: Date.now(),
+  };
+}
+
+function cloneOmpPlanControlState(state: OmpPlanControlState): OmpPlanControlState {
+  return {
+    ...state,
+    state: { ...state.state },
   };
 }
 
@@ -405,6 +428,7 @@ export class OmpRpcBackend extends BaseAgent {
   private readySyncGeneration: number | null = null;
   private sessionState: OmpRpcSessionState | null = null;
   private runtimeState: OmpRuntimeState = createOmpRuntimeState();
+  private planState: OmpPlanControlState = createOmpPlanControlState();
   private todoState: OmpTodoState = createOmpTodoState();
   private todoRefresh: Promise<OmpTodoState> | null = null;
   private todoWrite: Promise<OmpTodoState> | null = null;
@@ -878,8 +902,34 @@ export class OmpRpcBackend extends BaseAgent {
       availableCommands: this.getCachedAvailableCommands(),
       queue: this.currentQueueControlState(),
       runtime: cloneOmpRuntimeState(this.runtimeState),
+      plan: cloneOmpPlanControlState(this.planState),
       updatedAt: this.controlStateUpdatedAt,
     };
+  }
+
+  async setOmpPlanMode(enabled: boolean): Promise<OmpPlanControlState> {
+    await this.ensureSubprocess();
+    if (!this.planState.supported) {
+      throw new Error('This OMP runtime does not expose native Plan Mode over RPC');
+    }
+    const data = await this.send({ type: 'set_plan_mode', enabled });
+    const state = parseOmpPlanModeState(data);
+    if (!state) throw new Error('OMP set_plan_mode returned an invalid Plan Mode state');
+    this.applyPlanState(state, true);
+    return cloneOmpPlanControlState(this.planState);
+  }
+
+  async respondToOmpPlanReview(
+    requestId: string,
+    response: Extract<ExtensionUiResponse, { action: 'approve' | 'refine' | 'cancel' }>,
+  ): Promise<void> {
+    if (!this.child) throw new Error('OMP session is not running');
+    await this.send({
+      type: 'plan_review_result',
+      requestId,
+      action: response.action,
+      ...(response.feedback?.trim() ? { feedback: response.feedback.trim() } : {}),
+    });
   }
 
   getOmpTodoState(): OmpTodoState {
@@ -1582,6 +1632,14 @@ export class OmpRpcBackend extends BaseAgent {
       this.applyAvailableCommands(adapted.availableCommands);
     }
 
+    if (adapted.planModeState) {
+      this.applyPlanState(adapted.planModeState.state, true);
+    }
+
+    if (adapted.planReviewRequest) {
+      this.enqueuePlanReviewRequest(adapted.planReviewRequest);
+    }
+
     if (adapted.sessionInfoUpdate) {
       this.applySessionInfoUpdate(adapted.sessionInfoUpdate);
       this.updateRuntimeState({
@@ -1807,6 +1865,7 @@ export class OmpRpcBackend extends BaseAgent {
     this.readySyncGeneration = null;
     this.sessionState = null;
     this.availableCommands = [];
+    this.planState = createOmpPlanControlState();
     this.subagentRefresh = null;
     this.hostBridgeRegistration = null;
     this.registeredHostToolNames.clear();
@@ -3514,13 +3573,60 @@ export class OmpRpcBackend extends BaseAgent {
     this.touchControlState();
   }
 
+  private applyPlanState(state: OmpRpcPlanModeState, supported: boolean): void {
+    this.planState = {
+      supported,
+      state: { ...state },
+      updatedAt: Date.now(),
+    };
+    this.touchControlState();
+  }
+
+  private enqueuePlanReviewRequest(frame: OmpRpcPlanReviewRequestFrame): void {
+    this.planState = {
+      ...this.planState,
+      supported: true,
+      state: {
+        enabled: true,
+        phase: 'awaiting_review',
+        planFilePath: frame.planFilePath,
+      },
+      updatedAt: Date.now(),
+    };
+    this.touchControlState();
+    if (!this.eventQueue.isComplete) {
+      this.eventQueue.enqueue({
+        type: 'extension_ui_request',
+        request: {
+          requestId: frame.requestId,
+          method: 'plan_review',
+          title: frame.title,
+          message: 'OMP generated a native plan and is waiting for your decision.',
+          planMarkdown: frame.planMarkdown,
+          planFilePath: frame.planFilePath,
+          planOptions: [...frame.options],
+          raw: { ...frame },
+        },
+      });
+    }
+  }
+
   private applySessionState(state: OmpRpcSessionState): void {
     if (this.sessionState && this.sessionState.sessionId !== state.sessionId) {
       this.runtimeState = createOmpRuntimeState();
+      this.planState = createOmpPlanControlState();
       this.todoState = createOmpTodoState();
       this.subagentState = createOmpSubagentState();
     }
     this.sessionState = state;
+    this.planState = {
+      ...this.planState,
+      supported: state.capabilities?.planMode === true,
+      ...(state.capabilities?.planMode === true
+        ? {}
+        : { state: { enabled: false, phase: 'inactive' as const } }),
+      updatedAt: Date.now(),
+    };
     if (typeof state.model === 'string' && state.model.trim().length > 0) {
       super.setModel(state.model);
       this.selectedModelKey = state.model;

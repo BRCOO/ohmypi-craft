@@ -167,6 +167,7 @@ export class TokenRefreshManager {
         this.credManager.markSourceNeedsReauth(source, 'Token refresh failed');
         // Mirror disk write to in-memory state so isSourceUsable() returns false
         // and the failed source is excluded from intendedSlugs by callers.
+        // eslint-disable-next-line craft-shared/no-inline-source-auth-check -- state mutation not a check
         source.config.isAuthenticated = false;
         source.config.connectionStatus = 'needs_auth';
         source.config.connectionError = 'Token refresh failed';
@@ -177,6 +178,7 @@ export class TokenRefreshManager {
       const reason = err instanceof Error ? err.message : String(err);
       this.log(`[TokenRefresh] Failed for ${slug}: ${reason}`);
       this.credManager.markSourceNeedsReauth(source, `Refresh error: ${reason}`);
+      // eslint-disable-next-line craft-shared/no-inline-source-auth-check -- state mutation not a check
       source.config.isAuthenticated = false;
       source.config.connectionStatus = 'needs_auth';
       source.config.connectionError = `Refresh error: ${reason}`;

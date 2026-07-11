@@ -11,11 +11,20 @@
  * Run: bun scripts/copy-assets.ts
  */
 
-import { cpSync, copyFileSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { cpSync, copyFileSync, rmSync } from 'fs';
+import { join, resolve } from 'path';
 
 // Copy all resources (icons, themes, docs, permissions, tool-icons, etc.)
-cpSync('resources', 'dist/resources', { recursive: true });
+// The generated OMP executable is deliberately excluded: electron-builder copies
+// it directly to resources/omp via extraResources, where the runtime resolver
+// expects it. Keeping it out of dist/resources prevents a second 147 MB copy.
+const generatedOmpRuntime = resolve('resources', 'omp');
+const copiedOmpRuntime = resolve('dist', 'resources', 'omp');
+rmSync(copiedOmpRuntime, { recursive: true, force: true });
+cpSync('resources', 'dist/resources', {
+  recursive: true,
+  filter: source => resolve(source) !== generatedOmpRuntime,
+});
 
 console.log('✓ Copied resources/ → dist/resources/');
 

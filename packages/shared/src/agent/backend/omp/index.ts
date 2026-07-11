@@ -8,7 +8,7 @@ export { checkOmpRuntime, detectOmpVersion, getOmpDiagnosticsSummary } from './o
 export type { OmpRuntimeDiagnosticsOptions, OmpRuntimeDiagnosticsDependencies, OmpDiagnosticsSummary } from './omp-runtime-diagnostics.ts';
 export { checkOmpVersionCompatibility } from './omp-version-check.ts';
 export type { OmpVersionCheckResult } from './omp-version-check.ts';
-export { resolveOmpCommand, resolveOmpRuntimeCommand } from './omp-command.ts';
+export { resolveBundledOmpCommand, resolveOmpCommand, resolveOmpRuntimeCommand } from './omp-command.ts';
 export type { ResolvedOmpCommand, ResolvedOmpRuntimeCommand, OmpCommandSource } from './omp-command.ts';
 export { normalizeOmpModels, resolveOmpServerDefault, DEFAULT_OMP_CONTEXT_WINDOW } from './omp-models.ts';
 export { OmpRpcEventAdapter } from './omp-rpc-adapter.ts';

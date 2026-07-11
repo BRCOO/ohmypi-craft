@@ -60,6 +60,69 @@ describe('SessionManager extension UI responses', () => {
     expect(manager.pendingExtensionUiRequests.has('session-b:shared')).toBe(true)
   })
 
+  it('routes a Plan review decision through the OMP-native response command', async () => {
+    const manager = createManager()
+    const calls: unknown[][] = []
+    const agent = {
+      getOmpControlState: () => ({}),
+      steer: () => {},
+      followUp: () => {},
+      abortAndPrompt: () => {},
+      setSteeringMode: () => {},
+      setFollowUpMode: () => {},
+      setInterruptMode: () => {},
+      setOmpPlanMode: () => Promise.resolve({}),
+      respondToOmpPlanReview(this: unknown, ...args: unknown[]) {
+        expect(this).toBe(agent)
+        calls.push(args)
+      },
+    }
+    manager.sessions.set('session-a', { agent })
+    manager.pendingExtensionUiRequests.set('session-a:plan-review-1', {
+      sessionId: 'session-a',
+      method: 'plan_review',
+    })
+
+    expect(manager.respondToExtensionUiRequest('session-a', 'plan-review-1', {
+      action: 'refine',
+      feedback: 'Please split the migration into two steps.',
+    })).toBe(true)
+    await Promise.resolve()
+
+    expect(calls).toEqual([[
+      'plan-review-1',
+      { action: 'refine', feedback: 'Please split the migration into two steps.' },
+    ]])
+    expect(manager.pendingExtensionUiRequests.has('session-a:plan-review-1')).toBe(false)
+  })
+
+  it('creates the lazy OMP backend before enabling Plan Mode for a new session', async () => {
+    const manager = createManager()
+    const calls: unknown[] = []
+    const agent = {
+      getOmpControlState: () => ({ plan: { supported: true } }),
+      steer: () => {},
+      followUp: () => {},
+      abortAndPrompt: () => {},
+      setSteeringMode: () => {},
+      setFollowUpMode: () => {},
+      setInterruptMode: () => {},
+      setOmpPlanMode: async (enabled: boolean) => { calls.push(enabled) },
+      respondToOmpPlanReview: () => {},
+    }
+    const managed = { agent: null }
+    manager.sessions.set('session-a', managed)
+    manager.getOrCreateAgent = async (value: unknown) => {
+      expect(value).toBe(managed)
+      return agent
+    }
+    manager.publishOmpControlState = (value: unknown, state: unknown) => calls.push(value, state)
+
+    await manager.setOmpPlanMode('session-a', true)
+
+    expect(calls).toEqual([true, managed, { plan: { supported: true } }])
+  })
+
   it('returns false and clears metadata when the backend cannot respond', () => {
     const manager = createManager()
     manager.sessions.set('session-a', { agent: {} })

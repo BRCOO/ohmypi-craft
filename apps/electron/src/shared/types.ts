@@ -2,7 +2,7 @@
 // Protocol re-exports (channels, DTOs, events, wire types)
 // =============================================================================
 export * from '@craft-agent/shared/protocol'
-import type { OmpDiagnosticsSummary, OmpFeatureCenterStateDto, OmpLoginProvidersResult, OmpLoginSessionResult, OmpRuntimeStatus, OpenOmpFeatureCenterPathInput, SaveOmpFeatureCenterConfigInput, SaveOmpFeatureCenterConfigResult, SetOmpCommandPathResult } from '@craft-agent/shared/protocol'
+import type { OmpDiagnosticsSummary, OmpFeatureCenterStateDto, OmpLoginProvidersResult, OmpLoginSessionResult, OmpResourceCreateInput, OmpResourceMcpTestResult, OmpResourceOperationResult, OmpResourceRemoveInput, OmpResourceSetEnabledInput, OmpResourceSnapshot, OmpResourceSnapshotInput, OmpResourceTestMcpInput, OmpResourceUpdateInput, OmpRuntimeStatus, OpenOmpFeatureCenterPathInput, SaveOmpFeatureCenterConfigInput, SaveOmpFeatureCenterConfigResult, SetOmpCommandPathResult } from '@craft-agent/shared/protocol'
 
 // =============================================================================
 // Package re-exports (convenience for renderer imports)
@@ -439,6 +439,13 @@ export interface ElectronAPI {
   getOmpFeatureCenterState(workspaceId?: string | null): Promise<OmpFeatureCenterStateDto>
   openOmpFeatureCenterPath(input: OpenOmpFeatureCenterPathInput): Promise<void>
   saveOmpFeatureCenterConfig(input: SaveOmpFeatureCenterConfigInput): Promise<SaveOmpFeatureCenterConfigResult>
+  getOmpResourceSnapshot(input: OmpResourceSnapshotInput): Promise<OmpResourceSnapshot>
+  createOmpResource(input: OmpResourceCreateInput): Promise<OmpResourceOperationResult>
+  updateOmpResource(input: OmpResourceUpdateInput): Promise<OmpResourceOperationResult>
+  setOmpResourceEnabled(input: OmpResourceSetEnabledInput): Promise<OmpResourceOperationResult>
+  removeOmpResource(input: OmpResourceRemoveInput): Promise<OmpResourceOperationResult>
+  testOmpMcpResource(input: OmpResourceTestMcpInput): Promise<OmpResourceMcpTestResult>
+  refreshOmpResources(input: OmpResourceSnapshotInput): Promise<OmpResourceSnapshot>
 
   // Session-specific model (overrides global)
   getSessionModel(sessionId: string, workspaceId: string): Promise<string | null>

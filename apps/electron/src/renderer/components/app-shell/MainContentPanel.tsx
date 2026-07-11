@@ -148,9 +148,9 @@ export function MainContentPanel({
     const count = ids.size
     setSendResourceType(type)
     setSendResourceIds([...ids])
-    setSendResourceLabel(`${count} ${type}${count !== 1 ? 's' : ''}`)
+    setSendResourceLabel(t('resources.selectedCount', { count, type }))
     setSendDialogOpen(true)
-  }, [])
+  }, [t])
 
   const selectedMetas = useMemo(() => {
     const metas: SessionMeta[] = []

@@ -20,6 +20,7 @@ import { join } from 'node:path';
 export interface OmpRuntimeDiagnosticsOptions {
   configuredCommand?: unknown;
   envCommand?: unknown;
+  bundledCommand?: unknown;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
@@ -97,6 +98,7 @@ export async function checkOmpRuntime(
   const resolved = resolveOmpRuntimeCommand({
     configuredCommand: options.configuredCommand,
     envCommand: options.envCommand ?? process.env.OMP_COMMAND,
+    bundledCommand: options.bundledCommand,
   });
   const startedAt = Date.now();
   const base = {

@@ -115,6 +115,9 @@ mac:
     # ripgrep (used by packages/server-core/src/services/search.ts).
     - from: node_modules/@vscode/ripgrep
       to: app/node_modules/@vscode/ripgrep
+    # Native OMP runtime; built from the pinned upstream source before packaging.
+    - from: resources/omp
+      to: omp
     # WhatsApp worker subprocess (self-contained; Baileys bundled in).
     - from: ../../packages/messaging-whatsapp-worker/dist/worker.cjs
       to: messaging-whatsapp-worker/worker.cjs
@@ -122,6 +125,9 @@ mac:
   files:
     - "!**/resources/bin/win32-*/**"
     - "!**/resources/bin/linux-*/**"
+    - "!dist/resources/omp/**/*"
+    - "!**/resources/omp/win32-*/**"
+    - "!**/resources/omp/linux-*/**"
   # Use predictable naming for macOS packages (applies to zip; dmg uses its own config below)
   artifactName: "Oh-My-Pi-${arch}.${ext}"
   # Code signing & notarization (disabled by default for local builds)
@@ -151,6 +157,9 @@ dmg:
 
 win:
   icon: resources/icon.ico
+  # Local unsigned builds use afterPack's bundled rcedit instead of electron-builder's
+  # winCodeSign archive, which needs symlink privileges unavailable on many Windows PCs.
+  signAndEditExecutable: false
   target:
     - target: nsis
       arch:
@@ -170,6 +179,8 @@ win:
     # See: https://github.com/electron-userland/electron-builder/issues/8250
     - "!vendor/bun/**/*"
     - "!**/resources/bin/win32-x64/**"
+    - "!dist/resources/omp/**/*"
+    - "!**/resources/omp/**/*"
   # Copy executables as extraResources to avoid EBUSY file locking (see comment above)
   extraResources:
     - from: node_modules/@anthropic-ai/claude-agent-sdk
@@ -182,12 +193,15 @@ win:
       to: vendor/bun/bun.exe
     - from: resources/bin/win32-x64
       to: app/resources/bin/win32-x64
+    - from: resources/omp
+      to: omp
     # WhatsApp worker subprocess (self-contained; Baileys bundled in).
     - from: ../../packages/messaging-whatsapp-worker/dist/worker.cjs
       to: messaging-whatsapp-worker/worker.cjs
 
 nsis:
   oneClick: true
+  include: build/installer.nsh
   shortcutName: "Oh My Pi"
   uninstallDisplayName: "Oh My Pi"
   installerIcon: resources/installer.ico
@@ -214,6 +228,8 @@ linux:
       to: app/node_modules/@anthropic-ai/claude-agent-sdk-binary
     - from: node_modules/@vscode/ripgrep
       to: app/node_modules/@vscode/ripgrep
+    - from: resources/omp
+      to: omp
     # WhatsApp worker subprocess (self-contained; Baileys bundled in).
     - from: ../../packages/messaging-whatsapp-worker/dist/worker.cjs
       to: messaging-whatsapp-worker/worker.cjs
@@ -221,3 +237,6 @@ linux:
   files:
     - "!**/resources/bin/darwin-*/**"
     - "!**/resources/bin/win32-*/**"
+    - "!dist/resources/omp/**/*"
+    - "!**/resources/omp/darwin-*/**"
+    - "!**/resources/omp/win32-*/**"

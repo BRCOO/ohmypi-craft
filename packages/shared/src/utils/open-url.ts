@@ -23,7 +23,8 @@ export async function openUrl(url: string): Promise<void> {
     // Not in Electron main process — fall back to 'open' package.
   }
 
-  const open = await import('open');
+  const openModuleName = 'open'
+  const open = await import(openModuleName);
   const openFn = open.default || open;
   await openFn(url);
 }

@@ -436,6 +436,12 @@ html[data-font="inter"] {
     box-shadow: var(--shadow-modal-small);
   }
 
+  /* Annotation marker used by block-markers.ts — kept in CSS so the
+     no-nonstandard-shadows lint rule can enforce approved shadows in TS. */
+  .block-annotation-marker {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--info) 22%, transparent);
+  }
+
   /* Smooth corners (iOS-style superellipse)
    * Uses CSS continuous corners when supported, falls back to standard border-radius.
    * The border-radius value should be set on the element using this class.

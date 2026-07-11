@@ -51,7 +51,7 @@ module.exports = {
       'server-builder.ts', // OAuth provider checks (documented)
     ]
 
-    const filename = context.filename || context.getFilename()
+    const filename = (context.filename || context.getFilename()).replace(/\\/g, '/')
     const basename = filename.split('/').pop() || ''
 
     // Allow in specific files

@@ -355,6 +355,8 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
         return sessionManager.setOmpFollowUpMode(sessionId, command.mode)
       case 'setOmpInterruptMode':
         return sessionManager.setOmpInterruptMode(sessionId, command.mode)
+      case 'setOmpPlanMode':
+        return sessionManager.setOmpPlanMode(sessionId, command.enabled)
       case 'refreshOmpRuntime':
         return sessionManager.refreshOmpRuntime(sessionId)
       case 'compactOmpRuntime':

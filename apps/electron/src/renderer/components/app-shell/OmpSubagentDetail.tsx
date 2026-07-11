@@ -3,6 +3,7 @@
  */
 
 import * as React from 'react'
+import { useTranslation } from 'react-i18next'
 import { Bot, Loader2, RefreshCw, X, AlertTriangle, ChevronDown, ChevronUp, Activity } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -18,12 +19,15 @@ export interface OmpSubagentDetailProps {
   onClose: () => void
 }
 
-const STATUS_LABEL: Record<OmpSubagentStateItemDto['status'], string> = {
-  pending: 'Pending',
-  running: 'Running',
-  completed: 'Done',
-  failed: 'Failed',
-  aborted: 'Aborted',
+function subagentStatusLabel(status: OmpSubagentStateItemDto['status'], t: ReturnType<typeof useTranslation>['t']): string {
+  switch (status) {
+    case 'running': return t('omp.subagent.status.running')
+    case 'completed': return t('omp.subagent.status.completed')
+    case 'failed': return t('omp.subagent.status.failed')
+    case 'aborted': return t('omp.subagent.status.aborted')
+    case 'pending':
+    default: return t('omp.subagent.status.pending')
+  }
 }
 
 function statusClass(status: OmpSubagentStateItemDto['status']): string {
@@ -57,6 +61,7 @@ function SubagentListItem({
   selected: boolean
   onClick: () => void
 }) {
+  const { t } = useTranslation()
   const progress = subagent.progress
   return (
     <button
@@ -76,7 +81,7 @@ function SubagentListItem({
             {subagent.description || subagent.agent}
           </span>
           <span className={cn('shrink-0 rounded-full border px-1.5 py-0.5 text-[10px]', statusClass(subagent.status))}>
-            {STATUS_LABEL[subagent.status]}
+            {subagentStatusLabel(subagent.status, t)}
           </span>
         </div>
         <div className="mt-0.5 truncate text-[11px] text-muted-foreground" title={subagent.assignment || subagent.task}>
@@ -84,9 +89,9 @@ function SubagentListItem({
         </div>
         {(progress?.currentTool || progress?.tokens || progress?.requests) && (
           <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
-            {progress.currentTool && <span>tool: {progress.currentTool}</span>}
-            {progress.requests !== undefined && <span>{formatCompactNumber(progress.requests)} req</span>}
-            {progress.tokens !== undefined && <span>{formatCompactNumber(progress.tokens)} tok</span>}
+            {progress.currentTool && <span>{t('omp.subagent.tool', { tool: progress.currentTool })}</span>}
+            {progress.requests !== undefined && <span>{t('omp.subagent.requests', { value: formatCompactNumber(progress.requests) })}</span>}
+            {progress.tokens !== undefined && <span>{t('omp.subagent.tokens', { value: formatCompactNumber(progress.tokens) })}</span>}
           </div>
         )}
       </div>
@@ -95,6 +100,7 @@ function SubagentListItem({
 }
 
 function TranscriptEntry({ entry, index }: { entry: unknown; index: number }) {
+  const { t } = useTranslation()
   const [expanded, setExpanded] = React.useState(false)
   const text = typeof entry === 'string'
     ? entry
@@ -118,7 +124,7 @@ function TranscriptEntry({ entry, index }: { entry: unknown; index: number }) {
               className="mt-1 flex items-center gap-1 text-[10px] text-blue-100/70 hover:text-blue-100"
             >
               {expanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
-              {expanded ? 'Show less' : 'Show more'}
+              {expanded ? t('omp.subagent.showLess') : t('omp.subagent.showMore')}
             </button>
           )}
         </div>
@@ -128,6 +134,7 @@ function TranscriptEntry({ entry, index }: { entry: unknown; index: number }) {
 }
 
 export function OmpSubagentDetail({ sessionId, state, initialSubagentId, onClose }: OmpSubagentDetailProps) {
+  const { t } = useTranslation()
   const subagents = state.subagents ?? []
   const [selectedId, setSelectedId] = React.useState(initialSubagentId)
   const selected = subagents.find((s) => s.id === selectedId) ?? subagents[0]
@@ -135,12 +142,12 @@ export function OmpSubagentDetail({ sessionId, state, initialSubagentId, onClose
   const canRequestTranscript = !!selected
     && (!selected.cursor || selected.cursor.hasMore || selectedCanReceiveMoreTranscript)
   const transcriptButtonLabel = selected?.transcriptLoading
-    ? 'Loading...'
+    ? t('omp.subagent.loading')
     : selected?.cursor && !selected.cursor.hasMore
       ? selectedCanReceiveMoreTranscript
-        ? 'Check updates'
-        : 'Transcript loaded'
-      : 'Load more'
+        ? t('omp.subagent.checkUpdates')
+        : t('omp.subagent.transcriptLoaded')
+      : t('omp.subagent.loadMore')
 
   React.useEffect(() => {
     if (selectedId && !subagents.some((s) => s.id === selectedId)) {
@@ -170,7 +177,7 @@ export function OmpSubagentDetail({ sessionId, state, initialSubagentId, onClose
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="flex h-[80vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-violet-300/15 bg-[#090B18]/95 shadow-[0_20px_60px_rgba(35,35,95,0.32)]">
+      <div className="flex h-[80vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-violet-300/15 bg-[#090B18]/95 shadow-strong">
         <div className="pointer-events-none h-[2px] bg-gradient-to-r from-blue-400 via-violet-400 to-fuchsia-400" />
         <div className="flex items-center justify-between border-b border-violet-300/10 px-4 py-3">
           <div className="flex items-center gap-2">
@@ -178,8 +185,8 @@ export function OmpSubagentDetail({ sessionId, state, initialSubagentId, onClose
               <Bot className="size-4" />
             </span>
             <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-100/80">OMP Subagents</div>
-              <div className="text-[11px] text-muted-foreground">{subagents.length} subagent{subagents.length === 1 ? '' : 's'}</div>
+              <div className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-100/80">{t('omp.subagent.title')}</div>
+              <div className="text-[11px] text-muted-foreground">{t('omp.subagent.count', { count: subagents.length })}</div>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -215,7 +222,7 @@ export function OmpSubagentDetail({ sessionId, state, initialSubagentId, onClose
                   <div className="flex items-center gap-2">
                     <span className="truncate text-sm font-medium text-foreground/90">{selected.description || selected.agent}</span>
                     <span className={cn('shrink-0 rounded-full border px-2 py-0.5 text-[10px]', statusClass(selected.status))}>
-                      {STATUS_LABEL[selected.status]}
+                      {subagentStatusLabel(selected.status, t)}
                     </span>
                   </div>
                   <div className="mt-0.5 text-[11px] text-muted-foreground">{selected.assignment || selected.task}</div>
@@ -226,7 +233,7 @@ export function OmpSubagentDetail({ sessionId, state, initialSubagentId, onClose
                     <div className="space-y-2">
                       {selected.transcriptEntries.length === 0 && !selected.transcriptLoading && !selected.transcriptError && (
                         <div className="rounded-lg border border-dashed border-violet-300/10 px-3 py-4 text-center text-xs text-muted-foreground">
-                          No transcript entries yet. Click Load more to fetch from OMP.
+                          {t('omp.subagent.noTranscript')}
                         </div>
                       )}
 
@@ -248,9 +255,9 @@ export function OmpSubagentDetail({ sessionId, state, initialSubagentId, onClose
                   <div className="mt-3 flex items-center justify-between border-t border-violet-300/10 pt-3">
                     <div className="text-[11px] text-muted-foreground">
                       {selected.cursor
-                        ? `Loaded ${selected.transcriptEntries.length} entries`
+                        ? t('omp.subagent.loadedEntries', { count: selected.transcriptEntries.length })
                         : selected.transcriptEntries.length > 0
-                          ? `${selected.transcriptEntries.length} entries`
+                          ? t('omp.subagent.entriesCount', { count: selected.transcriptEntries.length })
                           : ''}
                     </div>
                     <Button
@@ -268,7 +275,7 @@ export function OmpSubagentDetail({ sessionId, state, initialSubagentId, onClose
               </>
             ) : (
               <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
-                Select a subagent to view its transcript.
+                {t('omp.subagent.selectPrompt')}
               </div>
             )}
           </div>

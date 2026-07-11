@@ -38,6 +38,7 @@ These files are used by electron-builder or the app directly, not synced to user
 | `generate-icons.sh` | Icon generation script |
 | `bridge-mcp-server/` | Bundled MCP server for Codex/Copilot API source bridge |
 | `session-mcp-server/` | Bundled MCP server for session tools |
+| `omp/` | Generated platform-native OMP runtime; copied by the packaging scripts, never committed |
 
 ## Single Source of Truth
 

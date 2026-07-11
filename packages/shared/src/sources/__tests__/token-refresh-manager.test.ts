@@ -504,6 +504,7 @@ describe('TokenRefreshManager', () => {
 
       await manager.ensureFreshToken(source);
 
+      // eslint-disable-next-line craft-shared/no-inline-source-auth-check -- asserting internal state mutation
       expect(source.config.isAuthenticated).toBe(false);
       expect(source.config.connectionStatus).toBe('needs_auth');
       expect(source.config.connectionError).toBe('Token refresh failed');
@@ -535,6 +536,7 @@ describe('TokenRefreshManager', () => {
 
       await manager.ensureFreshToken(source);
 
+      // eslint-disable-next-line craft-shared/no-inline-source-auth-check -- asserting internal state mutation
       expect(source.config.isAuthenticated).toBe(false);
       expect(source.config.connectionStatus).toBe('needs_auth');
       expect(source.config.connectionError).toBe('Refresh error: network down');

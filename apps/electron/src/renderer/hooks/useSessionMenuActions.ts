@@ -30,6 +30,7 @@ import { toast } from 'sonner'
 import { navigate, routes } from '@/lib/navigate'
 import { extractLabelId, toggleLabelInList } from '@craft-agent/shared/labels'
 import { dispatchFocusInputEvent } from '@/components/app-shell/input/focus-input-events'
+import { useAppShellContext } from '@/context/AppShellContext'
 import type { SessionMeta } from '@/atoms/sessions'
 import type {
   OmpBranchOption,
@@ -89,6 +90,7 @@ export function useSessionMenuActions({
   onLabelsChange,
 }: UseSessionMenuActionsOptions): SessionMenuActions {
   const { t } = useTranslation()
+  const { onOpenFile } = useAppShellContext()
   const sessionId = item.id
   const sharedUrl = item.sharedUrl
   const propLabels = item.labels
@@ -309,7 +311,7 @@ export function useSessionMenuActions({
         description: result.savedPath,
         action: result.savedPath ? {
           label: t('common.open'),
-          onClick: () => window.electronAPI.openFile(result.savedPath!),
+          onClick: () => onOpenFile(result.savedPath!),
         } : undefined,
       })
     } else {
@@ -334,7 +336,7 @@ export function useSessionMenuActions({
         description: result.outputPath,
         action: {
           label: t('common.open'),
-          onClick: () => window.electronAPI.openFile(result.outputPath!),
+          onClick: () => onOpenFile(result.outputPath!),
         },
       })
     } else {

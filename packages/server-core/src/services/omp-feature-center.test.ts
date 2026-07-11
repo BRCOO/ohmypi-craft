@@ -4,13 +4,20 @@ import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { load as loadYaml } from 'js-yaml'
 import {
+  createResource,
   getOmpFeatureCenterAllowedPaths,
   getOmpFeatureCenterState,
+  getOmpResourceSnapshot,
+  refreshResources,
+  removeResource,
   resolveOmpFeatureCenterAllowedPath,
   saveOmpFeatureCenterConfig,
+  setResourceEnabled,
+  testMcpResource,
+  updateResource,
   type OmpFeatureCenterOptions,
 } from './omp-feature-center'
-import type { OmpDiagnosticsSummary } from '@craft-agent/shared/protocol'
+import type { OmpDiagnosticsSummary, OmpResourceSnapshot } from '@craft-agent/shared/protocol'
 
 const tempRoots: string[] = []
 
@@ -125,8 +132,13 @@ describe('OMP Feature Center service', () => {
     expect(state.advisor.roster.editable.advisors.map(advisor => advisor.name)).toEqual(['Security'])
     expect(state.advisor.roster.editable.advisors[0]?.instructions).toBe('Focus on security risks.')
     expect(state.nativePlan.modelRole).toBe('project/architect')
-    expect(state.nativePlan.supportStatus).toBe('rpc-unavailable')
-    expect(state.unavailableCommands.map(command => command.command)).toContain('/plan')
+    expect(state.nativePlan.supportStatus).toBe('rpc-command-available')
+    expect(state.nativePlan.rpcCommands).toEqual([
+      'get_plan_mode_state',
+      'set_plan_mode',
+      'plan_review_result',
+    ])
+    expect(state.unavailableCommands.map(command => command.command)).not.toContain('/plan')
     expect(state.lastRefreshedAt).toBe(2000)
   })
 
@@ -311,5 +323,291 @@ describe('OMP Feature Center service', () => {
     expect(result.success).toBe(false)
     expect(result.error).toContain('could not be parsed')
     expect(await readFile(brokenPath, 'utf-8')).toBe('modelRoles: [')
+  })
+})
+
+describe('OMP resource lifecycle', () => {
+  async function makeResourceRoot(): Promise<{ root: string; agentDir: string; projectRootPath: string; options: OmpFeatureCenterOptions }> {
+    const root = await makeTempRoot()
+    const agentDir = join(root, 'home', '.omp', 'agent')
+    const workspaceRootPath = join(root, 'workspace')
+    const projectRootPath = join(workspaceRootPath, 'project')
+    const options: OmpFeatureCenterOptions = {
+      diagnostics: diagnostics(),
+      homeDir: join(root, 'home'),
+      agentDir,
+      workspaceRootPath,
+      projectRootPath,
+      now: () => 5000,
+    }
+    return { root, agentDir, projectRootPath, options }
+  }
+
+  function category(type: 'mcp' | 'skill' | 'agent'): 'mcp' | 'skills' | 'agents' {
+    if (type === 'skill') return 'skills'
+    if (type === 'agent') return 'agents'
+    return 'mcp'
+  }
+
+  function findEntry(snapshot: OmpResourceSnapshot, type: 'mcp' | 'skill' | 'agent', scope: 'user' | 'project', name: string) {
+    return snapshot[category(type)].entries.find((e: OmpResourceSnapshot['mcp']['entries'][number]) => e.type === type && e.scope === scope && e.name === name)
+  }
+
+  it('maps scope and source for discovered resources', async () => {
+    const { agentDir, projectRootPath, options } = await makeResourceRoot()
+    await write(join(agentDir, 'mcp.json'), JSON.stringify({ mcpServers: { userMcp: { command: 'node' } } }))
+    await write(join(projectRootPath, '.omp', 'mcp.json'), JSON.stringify({ mcpServers: { projectMcp: { command: 'bun' } } }))
+    await write(join(agentDir, 'skills', 'user-skill', 'SKILL.md'), '# User Skill\n')
+    await write(join(projectRootPath, '.omp', 'skills', 'project-skill', 'SKILL.md'), '# Project Skill\n')
+    await write(join(agentDir, 'agents', 'user-agent.md'), '# User Agent\n')
+    await write(join(projectRootPath, '.omp', 'agents', 'project-agent.md'), '# Project Agent\n')
+
+    const snapshot = await getOmpResourceSnapshot({}, options)
+
+    const userMcp = findEntry(snapshot, 'mcp', 'user', 'userMcp')
+    expect(userMcp?.source).toBe('user')
+    expect(userMcp?.scope).toBe('user')
+
+    const projectMcp = findEntry(snapshot, 'mcp', 'project', 'projectMcp')
+    expect(projectMcp?.source).toBe('project')
+    expect(projectMcp?.scope).toBe('project')
+
+    const userSkill = findEntry(snapshot, 'skill', 'user', 'user-skill')
+    expect(userSkill?.source).toBe('user')
+
+    const projectSkill = findEntry(snapshot, 'skill', 'project', 'project-skill')
+    expect(projectSkill?.source).toBe('project')
+
+    const userAgent = findEntry(snapshot, 'agent', 'user', 'user-agent')
+    expect(userAgent?.source).toBe('user')
+
+    const projectAgent = findEntry(snapshot, 'agent', 'project', 'project-agent')
+    expect(projectAgent?.source).toBe('project')
+  })
+
+  it('reflects enabled state from disabled lists', async () => {
+    const { agentDir, projectRootPath, options } = await makeResourceRoot()
+    await write(join(agentDir, 'config.yml'), [
+      'disabledMcp:',
+      '  - mcp/userMcp',
+      'disabledSkills:',
+      '  - skill/user-skill',
+      'disabledAgents:',
+      '  - agent/user-agent',
+      '',
+    ].join('\n'))
+    await write(join(projectRootPath, '.omp', 'config.yml'), [
+      'disabledMcp:',
+      '  - mcp/projectMcp',
+      '',
+    ].join('\n'))
+    await write(join(agentDir, 'mcp.json'), JSON.stringify({ mcpServers: { userMcp: { command: 'node' } } }))
+    await write(join(projectRootPath, '.omp', 'mcp.json'), JSON.stringify({ mcpServers: { projectMcp: { command: 'bun' } } }))
+    await write(join(agentDir, 'skills', 'user-skill', 'SKILL.md'), '# User Skill\n')
+    await write(join(projectRootPath, '.omp', 'skills', 'project-skill', 'SKILL.md'), '# Project Skill\n')
+    await write(join(agentDir, 'agents', 'user-agent.md'), '# User Agent\n')
+    await write(join(projectRootPath, '.omp', 'agents', 'project-agent.md'), '# Project Agent\n')
+
+    const snapshot = await getOmpResourceSnapshot({}, options)
+
+    expect(findEntry(snapshot, 'mcp', 'user', 'userMcp')?.enabled).toBe(false)
+    expect(findEntry(snapshot, 'mcp', 'user', 'userMcp')?.effectiveEnabled).toBe(false)
+    expect(findEntry(snapshot, 'mcp', 'project', 'projectMcp')?.enabled).toBe(false)
+    expect(findEntry(snapshot, 'skill', 'user', 'user-skill')?.enabled).toBe(false)
+    expect(findEntry(snapshot, 'agent', 'user', 'user-agent')?.enabled).toBe(false)
+    expect(findEntry(snapshot, 'mcp', 'project', 'projectMcp')?.effectiveEnabled).toBe(false)
+    expect(findEntry(snapshot, 'skill', 'project', 'project-skill')?.enabled).toBe(true)
+    expect(findEntry(snapshot, 'agent', 'project', 'project-agent')?.enabled).toBe(true)
+  })
+
+  it('creates, updates, disables, and removes an MCP server', async () => {
+    const { agentDir, options } = await makeResourceRoot()
+
+    const createResult = await createResource({
+      type: 'mcp',
+      scope: 'user',
+      draft: { name: 'test-server', command: 'node', args: ['server.js'], env: { KEY: 'value' } },
+    }, options)
+    expect(createResult.success).toBe(true)
+    const afterCreate = createResult.snapshot!
+    const entry = findEntry(afterCreate, 'mcp', 'user', 'test-server')
+    expect(entry).toBeDefined()
+    expect(entry?.enabled).toBe(true)
+
+    const mcpJson = JSON.parse(await readFile(join(agentDir, 'mcp.json'), 'utf-8'))
+    expect(mcpJson.mcpServers['test-server']).toEqual({ command: 'node', args: ['server.js'], env: { KEY: 'value' } })
+
+    const updateResult = await updateResource({
+      type: 'mcp',
+      id: entry!.id,
+      scope: 'user',
+      expectedRevision: entry!.revision,
+      patch: { name: 'renamed-server', command: 'bun', args: ['index.ts'] },
+    }, options)
+    expect(updateResult.success).toBe(true)
+    const afterUpdate = updateResult.snapshot!
+    expect(findEntry(afterUpdate, 'mcp', 'user', 'test-server')).toBeUndefined()
+    expect(findEntry(afterUpdate, 'mcp', 'user', 'renamed-server')).toBeDefined()
+    const updatedJson = JSON.parse(await readFile(join(agentDir, 'mcp.json'), 'utf-8'))
+    expect(updatedJson.mcpServers['renamed-server']).toEqual({ command: 'bun', args: ['index.ts'], env: { KEY: 'value' } })
+
+    const renamed = findEntry(afterUpdate, 'mcp', 'user', 'renamed-server')!
+    const disableResult = await setResourceEnabled({
+      type: 'mcp',
+      id: renamed.id,
+      scope: 'user',
+      expectedRevision: renamed.revision,
+      enabled: false,
+    }, options)
+    expect(disableResult.success).toBe(true)
+    expect(findEntry(disableResult.snapshot!, 'mcp', 'user', 'renamed-server')?.enabled).toBe(false)
+
+    const config = loadYaml(await readFile(join(agentDir, 'config.yml'), 'utf-8')) as Record<string, unknown>
+    expect(config.disabledMcp).toContain(renamed.id)
+
+    const removeResult = await removeResource({
+      type: 'mcp',
+      id: renamed.id,
+      scope: 'user',
+      expectedRevision: findEntry(disableResult.snapshot!, 'mcp', 'user', 'renamed-server')!.revision,
+    }, options)
+    expect(removeResult.success).toBe(true)
+    expect(findEntry(removeResult.snapshot!, 'mcp', 'user', 'renamed-server')).toBeUndefined()
+  })
+
+  it('creates, updates, and removes a skill', async () => {
+    const { agentDir, options } = await makeResourceRoot()
+
+    const createResult = await createResource({
+      type: 'skill',
+      scope: 'user',
+      draft: { name: 'my-skill', description: 'Does a thing' },
+    }, options)
+    expect(createResult.success).toBe(true)
+    const entry = findEntry(createResult.snapshot!, 'skill', 'user', 'my-skill')!
+    const content = await readFile(join(agentDir, 'skills', 'my-skill', 'SKILL.md'), 'utf-8')
+    expect(content).toContain('name: my-skill')
+    expect(content).toContain('description: Does a thing')
+
+    const updateResult = await updateResource({
+      type: 'skill',
+      id: entry.id,
+      scope: 'user',
+      expectedRevision: entry.revision,
+      patch: { name: 'renamed-skill', description: 'Updated' },
+    }, options)
+    expect(updateResult.success).toBe(true)
+    expect(findEntry(updateResult.snapshot!, 'skill', 'user', 'my-skill')).toBeUndefined()
+    expect(findEntry(updateResult.snapshot!, 'skill', 'user', 'renamed-skill')).toBeDefined()
+    const updatedContent = await readFile(join(agentDir, 'skills', 'renamed-skill', 'SKILL.md'), 'utf-8')
+    expect(updatedContent).toContain('name: renamed-skill')
+
+    const renamed = findEntry(updateResult.snapshot!, 'skill', 'user', 'renamed-skill')!
+    const removeResult = await removeResource({
+      type: 'skill',
+      id: renamed.id,
+      scope: 'user',
+      expectedRevision: renamed.revision,
+    }, options)
+    expect(removeResult.success).toBe(true)
+    expect(findEntry(removeResult.snapshot!, 'skill', 'user', 'renamed-skill')).toBeUndefined()
+  })
+
+  it('creates, updates, and removes an agent', async () => {
+    const { agentDir, options } = await makeResourceRoot()
+
+    const createResult = await createResource({
+      type: 'agent',
+      scope: 'user',
+      draft: { name: 'my-agent', description: 'Helpful agent' },
+    }, options)
+    expect(createResult.success).toBe(true)
+    const entry = findEntry(createResult.snapshot!, 'agent', 'user', 'my-agent')!
+    const content = await readFile(join(agentDir, 'agents', 'my-agent.md'), 'utf-8')
+    expect(content).toContain('name: my-agent')
+
+    const updateResult = await updateResource({
+      type: 'agent',
+      id: entry.id,
+      scope: 'user',
+      expectedRevision: entry.revision,
+      patch: { name: 'renamed-agent' },
+    }, options)
+    expect(updateResult.success).toBe(true)
+    expect(findEntry(updateResult.snapshot!, 'agent', 'user', 'my-agent')).toBeUndefined()
+    expect(findEntry(updateResult.snapshot!, 'agent', 'user', 'renamed-agent')).toBeDefined()
+
+    const renamed = findEntry(updateResult.snapshot!, 'agent', 'user', 'renamed-agent')!
+    const removeResult = await removeResource({
+      type: 'agent',
+      id: renamed.id,
+      scope: 'user',
+      expectedRevision: renamed.revision,
+    }, options)
+    expect(removeResult.success).toBe(true)
+    expect(findEntry(removeResult.snapshot!, 'agent', 'user', 'renamed-agent')).toBeUndefined()
+  })
+
+  it('detects revision conflicts', async () => {
+    const { agentDir, options } = await makeResourceRoot()
+    await write(join(agentDir, 'agents', 'my-agent.md'), '# My Agent\n')
+
+    const snapshot = await getOmpResourceSnapshot({}, options)
+    const entry = findEntry(snapshot, 'agent', 'user', 'my-agent')!
+
+    await write(join(agentDir, 'agents', 'my-agent.md'), '# Updated externally\n')
+
+    const updateResult = await updateResource({
+      type: 'agent',
+      id: entry.id,
+      scope: 'user',
+      expectedRevision: entry.revision,
+      patch: { description: 'Should fail' },
+    }, options)
+    expect(updateResult.success).toBe(false)
+    expect(updateResult.code).toBe('REVISION_CONFLICT')
+  })
+
+  it('tests a working MCP server', async () => {
+    const { agentDir, options } = await makeResourceRoot()
+    const serverScript = join(agentDir, 'mcp-server.js')
+    await write(serverScript, [
+      'process.stdin.on("data", (data) => {',
+      '  const lines = data.toString().split("\\n").filter(Boolean);',
+      '  for (const line of lines) {',
+      '    const msg = JSON.parse(line);',
+      '    if (msg.method === "initialize") {',
+      '      console.log(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "test", version: "1" } } }));',
+      '    } else if (msg.method === "tools/list") {',
+      '      console.log(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "echo", description: "Echo input", inputSchema: { type: "object" } }] } }));',
+      '    }',
+      '  }',
+      '});',
+    ].join('\n'))
+    await write(join(agentDir, 'mcp.json'), JSON.stringify({ mcpServers: { testMcp: { command: 'node', args: [serverScript] } } }))
+
+    const result = await testMcpResource({ id: 'mcp/testMcp', scope: 'user' }, options)
+    expect(result.success).toBe(true)
+    expect(result.connected).toBe(true)
+    expect(result.tools).toEqual([{ name: 'echo', description: 'Echo input' }])
+  })
+
+  it('reports failure for a non-existent MCP command', async () => {
+    const { agentDir, options } = await makeResourceRoot()
+    await write(join(agentDir, 'mcp.json'), JSON.stringify({ mcpServers: { badMcp: { command: 'this-command-does-not-exist-12345' } } }))
+
+    const result = await testMcpResource({ id: 'mcp/badMcp', scope: 'user' }, options)
+    expect(result.success).toBe(false)
+    expect(result.connected).toBe(false)
+    expect(result.code).toBe('MCP_CONNECT_FAILED')
+  })
+
+  it('refreshResources returns a snapshot', async () => {
+    const { agentDir, options } = await makeResourceRoot()
+    await write(join(agentDir, 'agents', 'agent-one.md'), '# One\n')
+
+    const snapshot = await refreshResources({}, options)
+    expect(snapshot.agents.entries).toHaveLength(1)
+    expect(snapshot.agents.entries[0].name).toBe('agent-one')
   })
 })

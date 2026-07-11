@@ -11,6 +11,8 @@ import {
   parseOmpMessageEndFrame,
   parseOmpMessageStartFrame,
   parseOmpMessageUpdateFrame,
+  parseOmpPlanModeStateUpdate,
+  parseOmpPlanReviewRequest,
   parseOmpPromptResult,
   parseOmpQueueControlState,
   parseOmpReadyFrame,
@@ -30,6 +32,8 @@ import {
   type OmpRpcMessageEndFrame,
   type OmpRpcMessageStartFrame,
   type OmpRpcMessageUpdateFrame,
+  type OmpRpcPlanModeStateUpdateFrame,
+  type OmpRpcPlanReviewRequestFrame,
   type OmpRpcPromptResultFrame,
   type OmpRpcReadyFrame,
   type OmpRpcResponseFrame,
@@ -59,6 +63,8 @@ export interface OmpRpcAdaptedFrame {
   hostToolCancel?: OmpRpcHostToolCancelFrame;
   hostUriRequest?: OmpRpcHostUriRequestFrame;
   hostUriCancel?: OmpRpcHostUriCancelFrame;
+  planModeState?: OmpRpcPlanModeStateUpdateFrame;
+  planReviewRequest?: OmpRpcPlanReviewRequestFrame;
   sessionId?: string;
   unknownFrameType?: string;
 }
@@ -783,6 +789,22 @@ export class OmpRpcEventAdapter {
         return {
           events: [],
           ...(hostUriCancel ? { hostUriCancel } : {}),
+        };
+      }
+
+      case 'plan_mode_state_update': {
+        const planModeState = parseOmpPlanModeStateUpdate(raw);
+        return {
+          events: [],
+          ...(planModeState ? { planModeState } : {}),
+        };
+      }
+
+      case 'plan_review_request': {
+        const planReviewRequest = parseOmpPlanReviewRequest(raw);
+        return {
+          events: [],
+          ...(planReviewRequest ? { planReviewRequest } : {}),
         };
       }
 

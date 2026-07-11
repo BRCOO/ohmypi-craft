@@ -17,8 +17,9 @@
  * strings — that's the job of `scripts/lint-i18n-staged.sh` (pre-commit).
  */
 
-import { readdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { SUPPORTED_LANGUAGE_CODES } from '../packages/shared/src/i18n/languages'
 
 const LOCALES_DIR = resolve(
   import.meta.dir ?? new URL('.', import.meta.url).pathname,
@@ -44,8 +45,8 @@ const enPath = resolve(LOCALES_DIR, 'en.json')
 const en = loadLocale(enPath)
 const enKeys = new Set(Object.keys(en))
 
-const localeFiles = readdirSync(LOCALES_DIR).filter(
-  (f) => f.endsWith('.json') && f !== 'en.json',
+const localeFiles = SUPPORTED_LANGUAGE_CODES.filter((code) => code !== 'en').map(
+  (code) => `${code}.json`,
 )
 
 const errors: string[] = []

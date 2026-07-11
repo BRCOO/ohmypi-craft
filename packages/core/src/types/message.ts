@@ -569,6 +569,7 @@ export type ExtensionUiMethod =
   | 'setTitle'
   | 'set_editor_text'
   | 'open_url'
+  | 'plan_review'
   | string;
 
 export interface ExtensionUiRequest {
@@ -592,13 +593,17 @@ export interface ExtensionUiRequest {
   url?: string;
   launchUrl?: string;
   instructions?: string;
+  planMarkdown?: string;
+  planFilePath?: string;
+  planOptions?: Array<'approve' | 'refine' | 'cancel'>;
   raw: Record<string, unknown>;
 }
 
 export type ExtensionUiResponse =
   | { value: string }
   | { confirmed: boolean }
-  | { cancelled: true; timedOut?: boolean };
+  | { cancelled: true; timedOut?: boolean }
+  | { action: 'approve' | 'refine' | 'cancel'; feedback?: string };
 
 /**
  * Usage data emitted by CraftAgent in 'complete' events

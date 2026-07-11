@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it, mock } from 'bun:test'
 import * as React from 'react'
 import * as ReactDOMServer from 'react-dom/server'
 import { initReactI18next } from 'react-i18next'
-import { setupI18n } from '@craft-agent/shared/i18n'
+import { i18n, setupI18n } from '@craft-agent/shared/i18n'
 import { Sparkles } from 'lucide-react'
 import type {
   LlmConnectionWithStatus,
@@ -15,6 +15,7 @@ import type {
 mock.module('pdfjs-dist/build/pdf.worker.min.mjs?url', () => ({ default: '' }))
 mock.module('pdfjs-dist', () => ({ GlobalWorkerOptions: { workerSrc: '' }, getDocument: () => ({}) }))
 setupI18n([initReactI18next])
+i18n.changeLanguage('en')
 
 let CapabilityCard: typeof import('../OmpFeatureCenterSettingsPage').CapabilityCard
 let AdvisorRosterEditor: typeof import('../OmpFeatureCenterSettingsPage').AdvisorRosterEditor

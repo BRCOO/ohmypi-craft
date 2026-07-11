@@ -61,18 +61,19 @@ Sentry.init({
 // Initialize i18n for main process (menus, dialogs, etc.)
 //
 // The main-process i18n instance has no detection plugin (no localStorage in Node)
-// — it always starts at `fallbackLng: 'en'`. We hydrate it here from the persisted
+// — it now starts at `fallbackLng: 'zh-Hans'`. We hydrate it here from the persisted
 // `uiLanguage` preference, which is maintained by the `i18n:changeLanguage` IPC
 // handler whenever the user changes Appearance → Language. Without this, the
 // renderer would restore its language from localStorage on every restart while
-// the main process silently stayed at English — breaking session title language,
+// the main process silently stayed at Chinese — breaking session title language,
 // the system prompt's "Preferred language" line, and the native menu.
 import { setupI18n, i18n, SUPPORTED_LANGUAGE_CODES, type LanguageCode } from '@craft-agent/shared/i18n'
 import { getPersistedUiLanguage, setPersistedUiLanguage } from '@craft-agent/shared/config'
 setupI18n()
 const persistedUiLanguage = getPersistedUiLanguage()
-if (persistedUiLanguage) {
-  void i18n.changeLanguage(persistedUiLanguage)
+void i18n.changeLanguage(persistedUiLanguage ?? 'zh-Hans')
+if (!persistedUiLanguage) {
+  setPersistedUiLanguage('zh-Hans')
 }
 // Note: deferred startup log lives below where mainLog is available (after log.initialize()).
 

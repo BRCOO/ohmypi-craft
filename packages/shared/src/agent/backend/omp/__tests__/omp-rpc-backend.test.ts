@@ -2223,6 +2223,61 @@ describe('OmpRpcBackend subprocess lifecycle', () => {
     backend.destroy();
   });
 
+  it('negotiates native Plan Mode, applies pushed state, and returns correlated review decisions', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children, { capabilities: { planMode: true } });
+
+    expect(backend.getOmpControlState().plan).toMatchObject({
+      supported: true,
+      state: { enabled: false, phase: 'inactive' },
+    });
+
+    const enable = backend.setOmpPlanMode(true);
+    await waitFor(() => child.frames.some((frame) => frame.type === 'set_plan_mode'));
+    const enableFrame = child.frames.findLast((frame) => frame.type === 'set_plan_mode')!;
+    expect(enableFrame.enabled).toBe(true);
+    child.emitFrame({
+      type: 'response',
+      id: enableFrame.id,
+      command: 'set_plan_mode',
+      success: true,
+      data: { enabled: true, phase: 'planning', planFilePath: 'local://PLAN.md' },
+    });
+    await enable;
+    expect(backend.getOmpControlState().plan.state).toEqual({
+      enabled: true,
+      phase: 'planning',
+      planFilePath: 'local://PLAN.md',
+    });
+
+    child.emitFrame({
+      type: 'plan_mode_state_update',
+      state: { enabled: true, phase: 'awaiting_review', planFilePath: 'local://ship-plan.md' },
+    });
+    await waitFor(() => backend.getOmpControlState().plan.state.phase === 'awaiting_review');
+
+    const review = backend.respondToOmpPlanReview('review-1', {
+      action: 'refine',
+      feedback: 'Please add the release test.',
+    });
+    await waitFor(() => child.frames.some((frame) => frame.type === 'plan_review_result'));
+    const reviewFrame = child.frames.findLast((frame) => frame.type === 'plan_review_result')!;
+    expect(reviewFrame).toMatchObject({
+      requestId: 'review-1',
+      action: 'refine',
+      feedback: 'Please add the release test.',
+    });
+    child.emitFrame({
+      type: 'response',
+      id: reviewFrame.id,
+      command: 'plan_review_result',
+      success: true,
+      data: { requestId: 'review-1', accepted: true },
+    });
+    await review;
+    backend.destroy();
+  });
+
   it('sends OMP native follow-up and abort-and-prompt with image attachments', async () => {
     const { backend, children } = createHarness();
     const child = await startReady(backend, children);

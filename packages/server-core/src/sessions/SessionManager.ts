@@ -791,6 +791,14 @@ interface OmpRuntimeAgent extends OmpControllableAgent {
   abortRetry(): Promise<OmpRuntimeState>
 }
 
+interface OmpPlanAgent extends OmpControllableAgent {
+  setOmpPlanMode(enabled: boolean): Promise<unknown>
+  respondToOmpPlanReview(
+    requestId: string,
+    response: Extract<import('@craft-agent/shared/protocol').ExtensionUiResponse, { action: 'approve' | 'refine' | 'cancel' }>,
+  ): Promise<void> | void
+}
+
 interface OmpTodoAgent extends AgentBackend {
   onTodoStateChange: ((state: OmpTodoState) => void) | null
   getOmpTodoState(): OmpTodoState
@@ -846,6 +854,13 @@ function isOmpRuntimeAgent(agent: AgentInstance | null | undefined): agent is Om
     && typeof candidate?.setAutoCompaction === 'function'
     && typeof candidate?.setAutoRetry === 'function'
     && typeof candidate?.abortRetry === 'function'
+}
+
+function isOmpPlanAgent(agent: AgentInstance | null | undefined): agent is OmpPlanAgent {
+  const candidate = agent as Partial<OmpPlanAgent> | null | undefined
+  return isOmpControllableAgent(agent)
+    && typeof candidate?.setOmpPlanMode === 'function'
+    && typeof candidate?.respondToOmpPlanReview === 'function'
 }
 
 function isOmpTodoAgent(agent: AgentInstance | null | undefined): agent is OmpTodoAgent {
@@ -924,6 +939,11 @@ function conversationTextsMatch(left: string, right: string): boolean {
 }
 
 function toOmpControlStateDto(state: OmpControlState): OmpControlStateDto {
+  const plan = state.plan ?? {
+    supported: false,
+    state: { enabled: false, phase: 'inactive' as const },
+    updatedAt: state.updatedAt,
+  }
   return {
     availableCommands: state.availableCommands.map((command) => ({
       name: command.name,
@@ -953,6 +973,10 @@ function toOmpControlStateDto(state: OmpControlState): OmpControlStateDto {
       },
       retry: { ...state.runtime.retry },
       fallback: state.runtime.fallback ? { ...state.runtime.fallback } : undefined,
+    },
+    plan: {
+      ...plan,
+      state: { ...plan.state },
     },
     updatedAt: state.updatedAt,
   }
@@ -7319,12 +7343,38 @@ export class SessionManager implements ISessionManager {
     response: import('@craft-agent/shared/protocol').ExtensionUiResponse,
   ): boolean {
     const requestKey = this.extensionUiRequestKey(sessionId, requestId)
-    if (!this.pendingExtensionUiRequests.has(requestKey)) {
+    const metadata = this.pendingExtensionUiRequests.get(requestKey)
+    if (!metadata) {
       sessionLog.warn(`Cannot respond to stale extension UI request ${requestId} for session ${sessionId}`)
       return false
     }
 
     const managed = this.sessions.get(sessionId)
+    if (metadata.method === 'plan_review') {
+      if (!('action' in response)) {
+        sessionLog.warn(`Invalid Plan review response for ${requestId}`)
+        return false
+      }
+      const planAgent = isOmpPlanAgent(managed?.agent) ? managed.agent : null
+      if (!managed || !planAgent) {
+        this.pendingExtensionUiRequests.delete(requestKey)
+        sessionLog.warn(`Cannot respond to OMP Plan review - no capable agent for session ${sessionId}`)
+        return false
+      }
+      this.pendingExtensionUiRequests.delete(requestKey)
+      sessionLog.info(`Delivering OMP Plan review response for ${requestId}`)
+      Promise.resolve(planAgent.respondToOmpPlanReview(requestId, response)).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        sessionLog.warn(`Failed to deliver OMP Plan review response for ${requestId}: ${message}`)
+        this.sendEvent({
+          type: 'error',
+          sessionId,
+          error: `Unable to deliver OMP Plan review response: ${message}`,
+        }, managed.workspace.id)
+      })
+      return true
+    }
+
     const responder = managed?.agent?.respondToExtensionUiRequest
     if (managed?.agent && typeof responder === 'function') {
       this.pendingExtensionUiRequests.delete(requestKey)
@@ -7531,6 +7581,20 @@ export class SessionManager implements ISessionManager {
     }
     await managed.agent.setInterruptMode(mode)
     this.publishOmpControlState(managed, managed.agent.getOmpControlState())
+  }
+
+  async setOmpPlanMode(sessionId: string, enabled: boolean): Promise<void> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+    // Plan Mode is an intentional first-turn action. Create the lazy OMP
+    // backend before testing support so a new session does not incorrectly
+    // report the bundled Plan-capable runtime as unavailable.
+    const agent = await this.getOrCreateAgent(managed)
+    if (!isOmpPlanAgent(agent)) {
+      throw new Error('Native OMP Plan Mode is only available for an OMP session with a compatible runtime')
+    }
+    await agent.setOmpPlanMode(enabled)
+    this.publishOmpControlState(managed, agent.getOmpControlState())
   }
 
   async refreshOmpRuntime(sessionId: string): Promise<void> {

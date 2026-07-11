@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Bot, BrainCircuit, Check, ChevronDown, ChevronRight, ClipboardCopy, Cpu, ExternalLink, EyeOff, FolderOpen, ListChecks, Plus, RefreshCw, Save, ServerCog, Sparkles, Trash2 } from 'lucide-react'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
+import { OmpResourceDirectory } from '@/components/app-shell/settings/OmpResourceDirectory'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -18,7 +19,7 @@ import {
 } from '@/lib/omp-feature-center-navigation'
 import { invalidateOmpFeatureCenterState, loadCachedOmpFeatureCenterState, publishOmpFeatureCenterState } from '@/lib/omp-feature-center-state'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
-import type { LlmConnectionWithStatus, OmpFeatureCapabilityDto, OmpFeatureCenterStateDto, OmpFeatureModelRoleDto, OmpFeatureUnavailableCommandDto, SaveOmpFeatureCenterConfigInput } from '../../../shared/types'
+import type { LlmConnectionWithStatus, OmpFeatureCapabilityDto, OmpFeatureCenterStateDto, OmpFeatureModelRoleDto, OmpFeatureUnavailableCommandDto, OmpResourceSnapshot, SaveOmpFeatureCenterConfigInput } from '../../../shared/types'
 
 export const meta: DetailsPageMeta = {
   navigator: 'settings',
@@ -141,8 +142,8 @@ function SourceBadge({ source, overridden }: { source: string; overridden?: bool
   )
 }
 
-function valueOrDash(value: string | undefined, fallback = 'Not set'): string {
-  return value?.trim() ? value : fallback
+function valueOrDash(value: string | undefined, t: ReturnType<typeof useTranslation>['t']): string {
+  return value?.trim() ? value : t('omp.featureCenter.notSet')
 }
 
 function localizedRoleLabel(role: OmpFeatureModelRoleDto, t: ReturnType<typeof useTranslation>['t']): string {
@@ -150,9 +151,9 @@ function localizedRoleLabel(role: OmpFeatureModelRoleDto, t: ReturnType<typeof u
   return t(key, { defaultValue: role.label })
 }
 
-function pathSummary(paths: Array<{ path: string; exists: boolean; parseError?: string }>): string {
+function pathSummary(paths: Array<{ path: string; exists: boolean; parseError?: string }>, t: ReturnType<typeof useTranslation>['t']): string {
   const existing = paths.filter(path => path.exists)
-  if (existing.length === 0) return 'No files found'
+  if (existing.length === 0) return t('omp.featureCenter.pathNoFiles')
   return existing.map(path => path.path).join(', ')
 }
 
@@ -242,12 +243,12 @@ export function buildOmpFeatureCenterSavePayload({
   return payload
 }
 
-async function copyText(text: string, label: string) {
+async function copyText(text: string, label: string, t: ReturnType<typeof useTranslation>['t']) {
   try {
     await navigator.clipboard.writeText(text)
-    toast.success(`${label} copied`)
+    toast.success(t('omp.featureCenter.copied', { label }))
   } catch {
-    toast.error(`Failed to copy ${label.toLowerCase()}`)
+    toast.error(t('omp.featureCenter.copyFailed', { label: label.toLowerCase() }))
   }
 }
 
@@ -301,7 +302,7 @@ function PathActions({
   if (!path) return null
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <MiniActionButton icon={ClipboardCopy} onClick={() => void copyText(path, `${label} path`)}>
+      <MiniActionButton icon={ClipboardCopy} onClick={() => void copyText(path, `${label} path`, t)}>
         {t('omp.featureCenter.pathCopy')}
       </MiniActionButton>
       <MiniActionButton icon={ExternalLink} disabled={exists === false} onClick={() => void openFeatureCenterPath(workspaceId, path, 'open')}>
@@ -375,7 +376,7 @@ export function CapabilityCard({
         {capability.usageHint}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        <MiniActionButton icon={ClipboardCopy} onClick={() => void copyText(copyUsage, `${title} usage`)}>
+        <MiniActionButton icon={ClipboardCopy} onClick={() => void copyText(copyUsage, `${title} usage`, t)}>
           {t('omp.featureCenter.copyUsage')}
         </MiniActionButton>
         {capability.sourcePaths.find(path => path.exists)?.path && (
@@ -384,8 +385,8 @@ export function CapabilityCard({
           </MiniActionButton>
         )}
       </div>
-      <div className="mt-2 truncate text-[11px] text-muted-foreground" title={pathSummary(capability.sourcePaths)}>
-        {pathSummary(capability.sourcePaths)}
+      <div className="mt-2 truncate text-[11px] text-muted-foreground" title={pathSummary(capability.sourcePaths, t)}>
+        {pathSummary(capability.sourcePaths, t)}
       </div>
     </div>
   )
@@ -412,7 +413,7 @@ export function UsageGuideCard({
             type="button"
             className="shrink-0 text-muted-foreground hover:text-foreground"
             title={`${t('common.copy')} ${title}`}
-            onClick={() => void copyText(command, title)}
+            onClick={() => void copyText(command, title, t)}
           >
             <ClipboardCopy className="size-3.5" />
           </button>
@@ -484,7 +485,7 @@ export function AdvisorRosterEditor({
             {t('omp.featureCenter.globalRoster')}: {editablePath}
           </div>
         </div>
-        <PathActions workspaceId={workspaceId} path={editablePath} exists={exists} label="WATCHDOG.yml" />
+        <PathActions workspaceId={workspaceId} path={editablePath} exists={exists} label={t('omp.featureCenter.watchdogFile')} />
       </div>
       {parseError && <ErrorCard message={t('omp.featureCenter.advisorRosterParseError', { message: parseError })} />}
       <div className="space-y-1.5">
@@ -831,7 +832,7 @@ export function RoleRow({
           <SourceBadge source={role.source} overridden={role.projectOverridden} />
         </div>
         <div className="mt-1 truncate text-xs text-muted-foreground">
-          {t('omp.featureCenter.effectiveValue')}: {valueOrDash(role.effectiveValue, t('omp.featureCenter.notSet'))}
+          {t('omp.featureCenter.effectiveValue')}: {valueOrDash(role.effectiveValue, t)}
         </div>
         {role.projectOverridden && (
           <div className="mt-1 text-xs text-violet-700 dark:text-violet-200">
@@ -846,7 +847,7 @@ export function RoleRow({
         onChange={(nextValue) => onChange(role.role, nextValue)}
       />
       <div className="hidden min-w-[120px] text-right text-xs text-muted-foreground sm:block">
-        {t('omp.featureCenter.globalConfig')}: {valueOrDash(role.globalValue, t('omp.featureCenter.notSet'))}
+        {t('omp.featureCenter.globalConfig')}: {valueOrDash(role.globalValue, t)}
       </div>
     </div>
   )
@@ -915,6 +916,27 @@ export default function OmpFeatureCenterSettingsPage() {
   React.useEffect(() => {
     void loadState()
   }, [loadState])
+
+  const [resourceSnapshot, setResourceSnapshot] = React.useState<OmpResourceSnapshot | null>(null)
+
+  const loadResourceSnapshot = React.useCallback(async () => {
+    if (!window.electronAPI?.getOmpResourceSnapshot) return
+    try {
+      const next = await window.electronAPI.getOmpResourceSnapshot({ workspaceId: activeWorkspaceId ?? undefined })
+      setResourceSnapshot(next)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      toast.error(message)
+    }
+  }, [activeWorkspaceId])
+
+  React.useEffect(() => {
+    void loadResourceSnapshot()
+  }, [loadResourceSnapshot])
+
+  const refreshState = React.useCallback(async () => {
+    await Promise.all([loadState(true), loadResourceSnapshot()])
+  }, [loadResourceSnapshot, loadState])
 
   const focusRequestedSection = React.useCallback((section: OmpFeatureCenterSection) => {
     const refMap: Record<OmpFeatureCenterSection, React.RefObject<HTMLDivElement | null>> = {
@@ -1027,7 +1049,7 @@ export default function OmpFeatureCenterSettingsPage() {
         title={t('settings.omp.title')}
         actions={(
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => void loadState(true)} disabled={loading || saving}>
+            <Button variant="outline" size="sm" onClick={() => void refreshState()} disabled={loading || saving}>
               <RefreshCw className={cn('mr-1.5 size-3.5', loading && 'animate-spin')} />
               {t('omp.featureCenter.refresh')}
             </Button>
@@ -1086,8 +1108,8 @@ export default function OmpFeatureCenterSettingsPage() {
                           {t('omp.featureCenter.openOrRevealConfig')}
                         </div>
                         <div className="flex flex-wrap gap-2">
-                          <PathActions workspaceId={activeWorkspaceId} path={state.runtime.globalConfigPath} exists={state.config.global.exists} label="Global config" />
-                          <PathActions workspaceId={activeWorkspaceId} path={state.runtime.projectConfigPath} exists={state.config.project?.exists} label="Project config" />
+                          <PathActions workspaceId={activeWorkspaceId} path={state.runtime.globalConfigPath} exists={state.config.global.exists} label={t('omp.featureCenter.globalConfig')} />
+                          <PathActions workspaceId={activeWorkspaceId} path={state.runtime.projectConfigPath} exists={state.config.project?.exists} label={t('omp.featureCenter.projectConfig')} />
                         </div>
                       </div>
                       {globalParseError && <ErrorCard message={t('omp.featureCenter.globalParseError', { message: globalParseError })} />}
@@ -1178,8 +1200,8 @@ export default function OmpFeatureCenterSettingsPage() {
                         ) : (
                           <div className="text-sm text-muted-foreground">{t('omp.featureCenter.noRoster')}</div>
                         )}
-                        <div className="mt-2 truncate text-xs text-muted-foreground" title={pathSummary(state.advisor.roster.paths)}>
-                          {pathSummary(state.advisor.roster.paths)}
+                        <div className="mt-2 truncate text-xs text-muted-foreground" title={pathSummary(state.advisor.roster.paths, t)}>
+                          {pathSummary(state.advisor.roster.paths, t)}
                         </div>
                         {state.advisor.roster.parseErrors.length > 0 && (
                           <div className="mt-2 rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-200">
@@ -1221,13 +1243,52 @@ export default function OmpFeatureCenterSettingsPage() {
                 <SettingsSection title={t('omp.featureCenter.capabilities')} description={t('omp.featureCenter.capabilitiesDescription')}>
                   <div className="grid gap-3 md:grid-cols-3">
                     <div ref={skillsSectionRef} tabIndex={-1} className="outline-none">
-                      <CapabilityCard workspaceId={activeWorkspaceId} icon={Sparkles} title={t('omp.featureCenter.skills')} capability={state.skills} />
+                      <OmpResourceDirectory
+                        workspaceId={activeWorkspaceId}
+                        type="skill"
+                        title={t('omp.featureCenter.skills')}
+                        icon={Sparkles}
+                        snapshot={resourceSnapshot ?? {
+                          mcp: { entries: [], sourcePaths: [] },
+                          skills: { entries: [], sourcePaths: [] },
+                          agents: { entries: [], sourcePaths: [] },
+                          diagnostics: [],
+                          refreshedAt: 0,
+                        }}
+                        onChange={() => void refreshState()}
+                      />
                     </div>
                     <div ref={mcpSectionRef} tabIndex={-1} className="outline-none">
-                      <CapabilityCard workspaceId={activeWorkspaceId} icon={ServerCog} title={t('omp.featureCenter.mcp')} capability={state.mcp} />
+                      <OmpResourceDirectory
+                        workspaceId={activeWorkspaceId}
+                        type="mcp"
+                        title={t('omp.featureCenter.mcp')}
+                        icon={ServerCog}
+                        snapshot={resourceSnapshot ?? {
+                          mcp: { entries: [], sourcePaths: [] },
+                          skills: { entries: [], sourcePaths: [] },
+                          agents: { entries: [], sourcePaths: [] },
+                          diagnostics: [],
+                          refreshedAt: 0,
+                        }}
+                        onChange={() => void refreshState()}
+                      />
                     </div>
                     <div ref={agentsSectionRef} tabIndex={-1} className="outline-none">
-                      <CapabilityCard workspaceId={activeWorkspaceId} icon={Bot} title={t('omp.featureCenter.agents')} capability={state.agents} />
+                      <OmpResourceDirectory
+                        workspaceId={activeWorkspaceId}
+                        type="agent"
+                        title={t('omp.featureCenter.agents')}
+                        icon={Bot}
+                        snapshot={resourceSnapshot ?? {
+                          mcp: { entries: [], sourcePaths: [] },
+                          skills: { entries: [], sourcePaths: [] },
+                          agents: { entries: [], sourcePaths: [] },
+                          diagnostics: [],
+                          refreshedAt: 0,
+                        }}
+                        onChange={() => void refreshState()}
+                      />
                     </div>
                   </div>
                 </SettingsSection>
@@ -1242,7 +1303,7 @@ export default function OmpFeatureCenterSettingsPage() {
                           </span>
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
-                               <div className="text-sm font-medium">{t('omp.featureCenter.planModel', { model: valueOrDash(state.nativePlan.modelRole, t('omp.featureCenter.notSet')) })}</div>
+                               <div className="text-sm font-medium">{t('omp.featureCenter.planModel', { model: valueOrDash(state.nativePlan.modelRole, t) })}</div>
                               <span className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-200">
                                  {state.nativePlan.toggleAvailable ? t('omp.featureCenter.planRpcAvailable') : t('omp.featureCenter.planRpcHidden')}
                               </span>

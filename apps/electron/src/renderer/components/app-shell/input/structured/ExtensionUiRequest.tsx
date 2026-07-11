@@ -39,6 +39,7 @@ function getDefaultTitleKey(method: string): string {
     case 'input': return 'chat.extensionUi.inputRequired'
     case 'editor': return 'chat.extensionUi.editText'
     case 'open_url': return 'chat.extensionUi.openExternalLink'
+    case 'plan_review': return 'chat.extensionUi.planReview'
     case 'setWidget': return 'chat.extensionUi.extension'
     default: return 'chat.extensionUi.request'
   }
@@ -52,6 +53,7 @@ export function ExtensionUiRequest({
   const { t } = useTranslation()
   const baseId = React.useId()
   const [value, setValue] = React.useState(request.prefill ?? '')
+  const [planFeedback, setPlanFeedback] = React.useState('')
   const onResponseRef = React.useRef(onResponse)
   const responseGateRef = React.useRef<ReturnType<typeof createExtensionUiResponseGate> | null>(null)
   const optionRefs = React.useRef<Array<HTMLButtonElement | null>>([])
@@ -72,6 +74,7 @@ export function ExtensionUiRequest({
   React.useEffect(() => {
     responseGateRef.current?.reset()
     setValue(request.prefill ?? '')
+    setPlanFeedback('')
   }, [request.requestId, request.prefill])
 
   React.useEffect(() => {
@@ -89,7 +92,7 @@ export function ExtensionUiRequest({
 
   const cancelBlockingRequest = React.useCallback(() => {
     if (isBlockingExtensionUiMethod(request.method)) {
-      respond({ cancelled: true })
+      respond(request.method === 'plan_review' ? { action: 'cancel' } : { cancelled: true })
     }
   }, [request.method, respond])
 
@@ -219,6 +222,25 @@ export function ExtensionUiRequest({
           </div>
         )
 
+      case 'plan_review':
+        return (
+          <div className="space-y-3">
+            <div className="rounded-md border border-border/60 bg-background/40 px-3 py-2 text-[11px] text-muted-foreground">
+              {request.planFilePath || t('chat.extensionUi.planPathUnavailable')}
+            </div>
+            <pre className="max-h-72 overflow-auto rounded-md bg-foreground/5 p-3 text-xs leading-5 whitespace-pre-wrap break-words">
+              {request.planMarkdown || t('chat.extensionUi.planUnavailable')}
+            </pre>
+            <Textarea
+              value={planFeedback}
+              onChange={(event) => setPlanFeedback(event.target.value)}
+              placeholder={t('chat.extensionUi.planFeedbackPlaceholder')}
+              className="min-h-20 resize-y text-xs"
+              aria-label={t('chat.extensionUi.requestChanges')}
+            />
+          </div>
+        )
+
       default:
         return (
           <pre className="max-h-36 overflow-auto rounded-md bg-foreground/5 p-3 text-[11px] whitespace-pre-wrap break-all">
@@ -232,6 +254,8 @@ export function ExtensionUiRequest({
     ? <ListChecks className="h-4 w-4 text-info" />
     : request.method === 'open_url'
       ? <ExternalLink className="h-4 w-4 text-info" />
+      : request.method === 'plan_review'
+        ? <ListChecks className="h-4 w-4 text-info" />
       : <MessageSquareText className="h-4 w-4 text-info" />
 
   return (
@@ -286,12 +310,31 @@ export function ExtensionUiRequest({
             </Button>
           </>
         )}
-        {!['confirm', 'input', 'editor', 'open_url'].includes(request.method) && (
+        {request.method === 'plan_review' && (
+          <>
+            <Button size="sm" className="h-7 gap-1.5" autoFocus onClick={() => respond({ action: 'approve' })}>
+              <Check className="h-3.5 w-3.5" /> {t('chat.extensionUi.approvePlan')}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="h-7"
+              disabled={planFeedback.trim().length === 0}
+              onClick={() => respond({ action: 'refine', feedback: planFeedback.trim() })}
+            >
+              {t('chat.extensionUi.requestChanges')}
+            </Button>
+            <Button size="sm" variant="ghost" className="h-7" onClick={() => respond({ action: 'cancel' })}>
+              <X className="h-3.5 w-3.5" /> {t('chat.extensionUi.cancelPlan')}
+            </Button>
+          </>
+        )}
+        {!['confirm', 'input', 'editor', 'open_url', 'plan_review'].includes(request.method) && (
           <Button size="sm" variant="ghost" className="h-7" autoFocus onClick={() => respond({ cancelled: true })}>
             {t('chat.extensionUi.dismiss')}
           </Button>
         )}
-        {isBlockingExtensionUiMethod(request.method) && request.method !== 'confirm' && (
+        {isBlockingExtensionUiMethod(request.method) && !['confirm', 'plan_review'].includes(request.method) && (
           <Button size="sm" variant="ghost" className="h-7 gap-1.5 text-muted-foreground" onClick={() => respond({ cancelled: true })}>
             <X className="h-3.5 w-3.5" /> {t('chat.extensionUi.cancel')}
           </Button>

@@ -3,7 +3,7 @@ export interface ResolvedOmpCommand {
   args: string[];
 }
 
-export type OmpCommandSource = 'config' | 'env' | 'default';
+export type OmpCommandSource = 'config' | 'env' | 'bundled' | 'default';
 
 export interface ResolvedOmpRuntimeCommand extends ResolvedOmpCommand {
   rawCommand: string;
@@ -13,6 +13,7 @@ export interface ResolvedOmpRuntimeCommand extends ResolvedOmpCommand {
 export interface ResolveOmpRuntimeCommandOptions {
   configuredCommand?: unknown;
   envCommand?: unknown;
+  bundledCommand?: unknown;
   defaultCommand?: string;
 }
 
@@ -57,13 +58,32 @@ export function resolveOmpCommand(rawCommand: unknown): ResolvedOmpCommand {
   return parseOmpCommand(cleanCommand(rawCommand) ?? 'omp');
 }
 
+/**
+ * Locate the single-file OMP executable shipped next to the Electron app.
+ * Explicit user configuration and OMP_COMMAND remain higher-priority overrides.
+ */
+export function resolveBundledOmpCommand(hostRuntime: BackendHostRuntimeContext): string | undefined {
+  if (!hostRuntime.isPackaged) return undefined;
+
+  const platformKey = `${process.platform}-${process.arch}`;
+  const executable = process.platform === 'win32' ? 'omp.exe' : 'omp';
+  const candidates = [
+    hostRuntime.resourcesPath ? join(hostRuntime.resourcesPath, 'omp', platformKey, executable) : undefined,
+    join(hostRuntime.appRootPath, 'resources', 'omp', platformKey, executable),
+    join(hostRuntime.appRootPath, 'dist', 'resources', 'omp', platformKey, executable),
+  ].filter((candidate): candidate is string => !!candidate);
+
+  return candidates.find(candidate => existsSync(candidate));
+}
+
 export function resolveOmpRuntimeCommand(
   options: ResolveOmpRuntimeCommandOptions = {},
 ): ResolvedOmpRuntimeCommand {
   const configured = cleanCommand(options.configuredCommand);
   const env = cleanCommand(options.envCommand);
-  const rawCommand = configured ?? env ?? options.defaultCommand ?? 'omp';
-  const source: OmpCommandSource = configured ? 'config' : env ? 'env' : 'default';
+  const bundled = cleanCommand(options.bundledCommand);
+  const rawCommand = configured ?? env ?? bundled ?? options.defaultCommand ?? 'omp';
+  const source: OmpCommandSource = configured ? 'config' : env ? 'env' : bundled ? 'bundled' : 'default';
 
   return {
     ...parseOmpCommand(rawCommand),
@@ -71,3 +91,7 @@ export function resolveOmpRuntimeCommand(
     source,
   };
 }
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+
+import type { BackendHostRuntimeContext } from '../types.ts';

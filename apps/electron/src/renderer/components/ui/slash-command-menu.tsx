@@ -6,7 +6,7 @@ import { Bot, BrainCircuit, Check, Cpu, ListChecks, Minimize2, ServerCog, Sparkl
 import { Icon_Folder } from '@craft-agent/ui'
 import { cn } from '@/lib/utils'
 import { PERMISSION_MODE_CONFIG, PERMISSION_MODE_ORDER, type PermissionMode } from '@craft-agent/shared/agent/modes'
-import type { LoadedSkill, OmpAvailableCommandDto, OmpAvailableCommandSource, OmpFeatureCenterStateDto, OmpFeatureUnavailableCommandDto } from '../../../shared/types'
+import type { LoadedSkill, OmpAvailableCommandDto, OmpAvailableCommandSource, OmpFeatureCenterStateDto, OmpFeatureUnavailableCommandDto, OmpPlanControlStateDto } from '../../../shared/types'
 
 // ============================================================================
 // Types
@@ -389,7 +389,7 @@ export function SlashCommandMenu({
       <CommandPrimitive.List className={MENU_LIST_STYLE}>
         {allFilteredCommands.length === 0 ? (
           <CommandPrimitive.Empty className="py-4 text-center text-sm text-muted-foreground">
-            No commands found
+            {t('composer.slash.noCommands')}
           </CommandPrimitive.Empty>
         ) : filteredGroups ? (
           // Group-based rendering with smart separators
@@ -758,6 +758,8 @@ export interface UseInlineSlashCommandOptions {
   ompFeatureCenterState?: OmpFeatureCenterStateDto | null
   /** Number of synchronized models available on the active OMP connection. */
   ompModelCount?: number
+  /** Native Plan capability negotiated with the active OMP RPC process. */
+  ompPlanState?: OmpPlanControlStateDto
   recentFolders?: string[]
   homeDir?: string
 }
@@ -778,8 +780,13 @@ export function buildOmpCuratedSections(
   state: OmpFeatureCenterStateDto,
   t: TFunction,
   ompModelCount?: number,
+  ompPlanState?: OmpPlanControlStateDto,
 ): SlashSection[] {
-  const planDisabled = !state.nativePlan.toggleAvailable
+  // OMP starts lazily on the first action. Keep Plan actionable when this
+  // desktop's bundled runtime advertises the RPC bridge, so the click itself
+  // can start the process and complete capability negotiation.
+  const planDisabled = !ompPlanState?.supported && !state.nativePlan.toggleAvailable
+  const planEnabled = ompPlanState?.state.enabled === true
   const advisorEnabled = state.advisor.enabled.effectiveValue
   const advisorProjectOverridden = state.advisor.enabled.projectOverridden
 
@@ -791,9 +798,10 @@ export function buildOmpCuratedSections(
         ? t('omp.quickControls.planUnavailableDescription')
         : t('omp.quickControls.planToggleDescription'),
       icon: <ListChecks className={MENU_ICON_SIZE} />,
-      meta: planDisabled ? t('omp.quickControls.rpcUnavailable') : t('omp.quickControls.off'),
+      meta: planDisabled ? t('omp.quickControls.rpcUnavailable') : t(planEnabled ? 'omp.quickControls.on' : 'omp.quickControls.off'),
       disabled: planDisabled,
       disabledReason: planDisabled ? t('omp.quickControls.rpcUnavailable') : undefined,
+      checked: planEnabled,
     },
     {
       id: { type: 'omp-curated', kind: 'advisor' },
@@ -867,6 +875,7 @@ export function useInlineSlashCommand({
   isOmpSession = false,
   ompFeatureCenterState,
   ompModelCount,
+  ompPlanState,
   recentFolders = [],
   homeDir,
 }: UseInlineSlashCommandOptions): UseInlineSlashCommandReturn {
@@ -957,8 +966,8 @@ export function useInlineSlashCommand({
 
   const ompCuratedSections = React.useMemo((): SlashSection[] => {
     if (!isOmpSession || !ompFeatureCenterState) return []
-    return buildOmpCuratedSections(ompFeatureCenterState, t, ompModelCount)
-  }, [isOmpSession, ompFeatureCenterState, ompModelCount, t])
+    return buildOmpCuratedSections(ompFeatureCenterState, t, ompModelCount, ompPlanState)
+  }, [isOmpSession, ompFeatureCenterState, ompModelCount, ompPlanState, t])
 
   // Build sections from commands and folders
   const baseSections = React.useMemo((): SlashSection[] => {

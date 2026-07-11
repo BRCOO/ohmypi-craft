@@ -153,7 +153,22 @@ export interface OmpControlStateDto {
   availableCommands: OmpAvailableCommandDto[]
   queue: OmpQueueControlStateDto
   runtime: OmpRuntimeStateDto
+  plan: OmpPlanControlStateDto
   updatedAt: number
+}
+
+export type OmpPlanModePhaseDto = 'inactive' | 'planning' | 'awaiting_review' | 'executing' | 'paused'
+
+export interface OmpPlanControlStateDto {
+  supported: boolean
+  state: {
+    enabled: boolean
+    phase: OmpPlanModePhaseDto
+    planFilePath?: string
+    planModel?: string
+  }
+  updatedAt: number
+  error?: string
 }
 
 export type OmpTodoStatusDto = 'pending' | 'in_progress' | 'completed' | 'abandoned'
@@ -499,6 +514,7 @@ export type SessionCommand =
   | { type: 'setOmpSteeringMode'; mode: OmpQueueMode }
   | { type: 'setOmpFollowUpMode'; mode: OmpQueueMode }
   | { type: 'setOmpInterruptMode'; mode: OmpInterruptMode }
+  | { type: 'setOmpPlanMode'; enabled: boolean }
   | { type: 'refreshOmpRuntime' }
   | { type: 'compactOmpRuntime' }
   | { type: 'setOmpAutoCompaction'; enabled: boolean }
@@ -687,7 +703,7 @@ export interface TestLlmConnectionResult {
   error?: string
 }
 
-export type OmpCommandSource = 'config' | 'env' | 'default'
+export type OmpCommandSource = 'config' | 'env' | 'bundled' | 'default'
 
 export type OmpRuntimeErrorCode =
   | 'not_found'
@@ -1194,4 +1210,105 @@ export interface DeepLinkNavigation {
   tabParams?: Record<string, string>
   action?: string
   actionParams?: Record<string, string>
+}
+
+// ---------------------------------------------------------------------------
+// OMP resource lifecycle DTOs (MCP, Skills, Agents)
+// ---------------------------------------------------------------------------
+
+export type OmpResourceType = 'mcp' | 'skill' | 'agent'
+export type OmpResourceScope = 'user' | 'project'
+export type OmpResourceSource = 'bundled' | 'user' | 'project'
+
+export interface OmpResourceDiagnostic {
+  code: string
+  message: string
+  path?: string
+}
+
+export interface OmpResourceEntry {
+  id: string
+  type: OmpResourceType
+  name: string
+  source: OmpResourceSource
+  scope: OmpResourceScope
+  enabled: boolean
+  effectiveEnabled: boolean
+  path: string
+  description?: string
+  toolCount?: number
+  diagnostics: OmpResourceDiagnostic[]
+  revision: string
+  lastRefreshedAt: number
+}
+
+export interface OmpResourceCategory {
+  entries: OmpResourceEntry[]
+  sourcePaths: OmpFeatureConfigPathDto[]
+  error?: string
+}
+
+export interface OmpResourceSnapshot {
+  mcp: OmpResourceCategory
+  skills: OmpResourceCategory
+  agents: OmpResourceCategory
+  diagnostics: OmpResourceDiagnostic[]
+  refreshedAt: number
+}
+
+export interface OmpResourceOperationResult {
+  success: boolean
+  snapshot?: OmpResourceSnapshot
+  error?: string
+  code?: string
+}
+
+export interface OmpResourceMcpTestResult extends OmpResourceOperationResult {
+  connected?: boolean
+  tools?: Array<{ name: string; description?: string }>
+  testError?: string
+}
+
+export interface OmpResourceSnapshotInput {
+  workspaceId?: string
+  scope?: OmpResourceScope
+}
+
+export interface OmpResourceCreateInput {
+  workspaceId?: string
+  type: OmpResourceType
+  scope: OmpResourceScope
+  draft: Record<string, unknown>
+}
+
+export interface OmpResourceUpdateInput {
+  workspaceId?: string
+  type: OmpResourceType
+  id: string
+  scope: OmpResourceScope
+  expectedRevision: string
+  patch: Record<string, unknown>
+}
+
+export interface OmpResourceSetEnabledInput {
+  workspaceId?: string
+  type: OmpResourceType
+  id: string
+  scope: OmpResourceScope
+  expectedRevision: string
+  enabled: boolean
+}
+
+export interface OmpResourceRemoveInput {
+  workspaceId?: string
+  type: OmpResourceType
+  id: string
+  scope: OmpResourceScope
+  expectedRevision: string
+}
+
+export interface OmpResourceTestMcpInput {
+  workspaceId?: string
+  id: string
+  scope: OmpResourceScope
 }

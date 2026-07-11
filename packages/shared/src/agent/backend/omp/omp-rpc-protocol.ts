@@ -427,7 +427,43 @@ export interface OmpControlState {
   availableCommands: OmpRpcAvailableSlashCommand[];
   queue: OmpQueueControlState;
   runtime: OmpRuntimeState;
+  plan: OmpPlanControlState;
   updatedAt: number;
+}
+
+export type OmpPlanModePhase = 'inactive' | 'planning' | 'awaiting_review' | 'executing' | 'paused';
+export type OmpPlanReviewAction = 'approve' | 'refine' | 'cancel';
+
+export interface OmpRpcCapabilities {
+  planMode?: true;
+}
+
+export interface OmpRpcPlanModeState {
+  enabled: boolean;
+  phase: OmpPlanModePhase;
+  planFilePath?: string;
+  planModel?: string;
+}
+
+export interface OmpRpcPlanModeStateUpdateFrame {
+  type: 'plan_mode_state_update';
+  state: OmpRpcPlanModeState;
+}
+
+export interface OmpRpcPlanReviewRequestFrame {
+  type: 'plan_review_request';
+  requestId: string;
+  title: string;
+  planFilePath: string;
+  planMarkdown: string;
+  options: OmpPlanReviewAction[];
+}
+
+export interface OmpPlanControlState {
+  supported: boolean;
+  state: OmpRpcPlanModeState;
+  updatedAt: number;
+  error?: string;
 }
 
 export type OmpTodoStatus = 'pending' | 'in_progress' | 'completed' | 'abandoned';
@@ -610,6 +646,9 @@ export type OmpRpcCommand =
   | { type: 'abort' }
   | { type: 'new_session'; parentSession?: string }
   | { type: 'get_state' }
+  | { type: 'get_plan_mode_state' }
+  | { type: 'set_plan_mode'; enabled: boolean; initialPrompt?: string }
+  | { type: 'plan_review_result'; requestId: string; action: OmpPlanReviewAction; feedback?: string }
   | { type: 'set_todos'; phases: OmpTodoPhase[] }
   | { type: 'set_host_tools'; tools: OmpRpcHostToolDefinition[] }
   | { type: 'set_host_uri_schemes'; schemes: OmpRpcHostUriSchemeDefinition[] }
@@ -703,6 +742,9 @@ export const OMP_RPC_COMMAND_DEFINITIONS = {
   new_session: commandDefinition('prompting', 'cancellation_result', { longRunning: true }),
 
   get_state: commandDefinition('state', 'session_state', { sideEffect: false }),
+  get_plan_mode_state: commandDefinition('state', 'plan_mode_state', { sideEffect: false }),
+  set_plan_mode: commandDefinition('state', 'plan_mode_state'),
+  plan_review_result: commandDefinition('state', 'plan_review_result'),
   get_available_commands: commandDefinition('state', 'available_commands', { sideEffect: false }),
   set_todos: commandDefinition('state', 'todo_snapshot'),
   set_host_tools: commandDefinition('state', 'host_tool_names'),
@@ -806,6 +848,7 @@ export interface OmpRpcSessionState {
   queuedMessageCount: number;
   todoPhases: OmpTodoPhase[];
   contextUsage?: OmpContextUsage;
+  capabilities?: OmpRpcCapabilities;
   [key: string]: unknown;
 }
 
@@ -1914,6 +1957,69 @@ export function parseOmpPromptResponseData(value: unknown): OmpRpcPromptResponse
   return { agentInvoked: raw.agentInvoked };
 }
 
+function parseOmpRpcCapabilities(value: unknown): OmpRpcCapabilities | null {
+  const raw = asObject(value);
+  if (!raw) return null;
+  if (raw.planMode !== undefined && raw.planMode !== true) return null;
+  return raw.planMode === true ? { planMode: true } : {};
+}
+
+export function parseOmpPlanModeState(value: unknown): OmpRpcPlanModeState | null {
+  const raw = asObject(value);
+  if (
+    !raw
+    || typeof raw.enabled !== 'boolean'
+    || (raw.phase !== 'inactive'
+      && raw.phase !== 'planning'
+      && raw.phase !== 'awaiting_review'
+      && raw.phase !== 'executing'
+      && raw.phase !== 'paused')
+    || (raw.planFilePath !== undefined && !isString(raw.planFilePath))
+    || (raw.planModel !== undefined && !isString(raw.planModel))
+  ) {
+    return null;
+  }
+  return {
+    enabled: raw.enabled,
+    phase: raw.phase,
+    planFilePath: raw.planFilePath as string | undefined,
+    planModel: raw.planModel as string | undefined,
+  };
+}
+
+export function parseOmpPlanModeStateUpdate(value: unknown): OmpRpcPlanModeStateUpdateFrame | null {
+  const raw = asObject(value);
+  if (raw?.type !== 'plan_mode_state_update') return null;
+  const state = parseOmpPlanModeState(raw.state);
+  return state ? { type: 'plan_mode_state_update', state } : null;
+}
+
+export function parseOmpPlanReviewRequest(value: unknown): OmpRpcPlanReviewRequestFrame | null {
+  const raw = asObject(value);
+  const options = parseStringArray(raw?.options);
+  if (
+    raw?.type !== 'plan_review_request'
+    || !isString(raw.requestId)
+    || raw.requestId.trim().length === 0
+    || !isString(raw.title)
+    || !isString(raw.planFilePath)
+    || !isString(raw.planMarkdown)
+    || !options
+    || options.length === 0
+    || options.some(option => option !== 'approve' && option !== 'refine' && option !== 'cancel')
+  ) {
+    return null;
+  }
+  return {
+    type: 'plan_review_request',
+    requestId: raw.requestId,
+    title: raw.title,
+    planFilePath: raw.planFilePath,
+    planMarkdown: raw.planMarkdown,
+    options: options as OmpPlanReviewAction[],
+  };
+}
+
 export function parseOmpSessionState(value: unknown): OmpRpcSessionState | null {
   const raw = asObject(value);
   const contextUsage = raw?.contextUsage === undefined
@@ -1923,6 +2029,9 @@ export function parseOmpSessionState(value: unknown): OmpRpcSessionState | null 
   const model = raw?.model === undefined
     ? undefined
     : normalizeOmpModelId(raw.model);
+  const capabilities = raw?.capabilities === undefined
+    ? undefined
+    : parseOmpRpcCapabilities(raw.capabilities);
   if (
     !raw
     || !isString(raw.sessionId)
@@ -1938,6 +2047,7 @@ export function parseOmpSessionState(value: unknown): OmpRpcSessionState | null 
     || !isFiniteNumber(raw.queuedMessageCount)
     || !todoPhases
     || (raw.contextUsage !== undefined && !contextUsage)
+    || (raw.capabilities !== undefined && !capabilities)
     || (raw.sessionFile !== undefined && !isString(raw.sessionFile))
     || (raw.sessionName !== undefined && !isString(raw.sessionName))
     || (raw.model !== undefined && !model)
@@ -1962,6 +2072,7 @@ export function parseOmpSessionState(value: unknown): OmpRpcSessionState | null 
     queuedMessageCount: raw.queuedMessageCount,
     todoPhases,
     contextUsage: contextUsage ?? undefined,
+    capabilities: capabilities ?? undefined,
   };
 }
 

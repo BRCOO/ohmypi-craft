@@ -120,6 +120,23 @@ describe('OMP curated slash menu', () => {
     expect(plan?.disabledReason).toContain('RPC unavailable')
   })
 
+  it('keeps Plan Mode actionable before the lazy OMP runtime handshake completes', () => {
+    const state = buildMockState({
+      nativePlan: {
+        ...buildMockState().nativePlan,
+        supportStatus: 'rpc-command-available',
+        toggleAvailable: true,
+        approvalUi: 'extension-ui-if-emitted',
+        rpcCommands: ['get_plan_mode_state', 'set_plan_mode', 'plan_review_result'],
+      },
+    })
+    const sections = buildOmpCuratedSections(state, i18n.t, 4)
+    const plan = getCommand(sections, 'omp-curated:plan')
+
+    expect(plan?.disabled).toBe(false)
+    expect(plan?.meta).toBe('Off')
+  })
+
   it('shows Advisor metadata from the effective value', () => {
     const state = buildMockState({
       advisor: {

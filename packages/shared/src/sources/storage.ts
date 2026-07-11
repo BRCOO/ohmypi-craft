@@ -407,6 +407,7 @@ export function isSourceUsable(source: LoadedSource): boolean {
   if (authType === 'none' || authType === undefined) return true;
 
   // Sources requiring auth must be authenticated
+  // eslint-disable-next-line craft-shared/no-inline-source-auth-check -- canonical helper defining usable auth state
   return source.config.isAuthenticated === true;
 }
 
