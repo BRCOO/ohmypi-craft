@@ -118,3 +118,9 @@ bun test scripts/ci/__tests__
 | Windows 构建极久/超时 | job 超时 180 分钟；可看 `release:win` 报告与 Artifact 是否已写出 |
 | macOS 未签名被 Gatekeeper 拦截 | 预期（无证书）；或配置 Apple Secrets |
 | Release 未创建 | 确认三平台 build 全绿且 `is_release=true`（标签或 dispatch 输入） |
+### Matching OMP runtime
+
+The workflow builds the pinned OMP source with `scripts/ci/omp-plan-mode.patch`
+and installs the corresponding published `pi-natives` leaf package before
+packaging. This is required until the upstream release itself includes the
+native Plan Mode RPC bridge.

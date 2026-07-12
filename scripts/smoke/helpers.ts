@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 
 import { CliRpcClient } from '../../apps/cli/src/client.ts'
@@ -29,6 +30,10 @@ export interface SmokeContext {
   exe: string
   runRoot: string
   configDir: string
+  ompHomeDir: string
+  ompCatalogPath: string
+  ompCatalogBackupPath: string
+  ompCatalogWasPresent: boolean
   workspaceDir: string
   headlessFile: string
   logsDir: string
@@ -95,12 +100,45 @@ export async function waitForHeadlessInfo(filePath: string, timeoutMs: number): 
 export async function createSmokeContext(exe: string): Promise<SmokeContext> {
   const runRoot = join(ROOT_DIR, '.tmp', `smoke-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
   const configDir = join(runRoot, 'config')
+  const ompHomeDir = join(runRoot, 'omp-home')
+  const ompDefaultHome = process.env.USERPROFILE || process.env.HOME || homedir()
+  const ompCatalogPath = join(ompDefaultHome, '.omp', 'agent', 'models.yml')
+  const ompCatalogBackupPath = join(runRoot, 'omp-default-models.backup.yml')
   const workspaceDir = join(runRoot, 'workspace')
   const headlessFile = join(runRoot, 'headless.env')
   const logsDir = join(runRoot, 'logs')
   const screenshotsDir = join(runRoot, 'screenshots')
 
   await mkdir(configDir, { recursive: true })
+  await mkdir(join(ompHomeDir, '.omp', 'agent'), { recursive: true })
+  await writeFile(
+    join(ompHomeDir, '.omp', 'agent', 'models.yml'),
+    [
+      'providers:',
+      '  smoke:',
+      '    baseUrl: http://127.0.0.1:1',
+      '    api: openai-completions',
+      '    apiKey: N/A',
+      '    models:',
+      '      - id: smoke-model',
+      '        name: Smoke Model',
+      '        reasoning: false',
+      '        input: [text]',
+      '        cost:',
+      '          input: 0',
+      '          output: 0',
+      '          cacheRead: 0',
+      '          cacheWrite: 0',
+      '        contextWindow: 128000',
+      '        maxTokens: 8192',
+      '',
+    ].join('\n'),
+    'utf8',
+  )
+  const ompCatalogWasPresent = existsSync(ompCatalogPath)
+  if (ompCatalogWasPresent) await copyFile(ompCatalogPath, ompCatalogBackupPath)
+  await mkdir(dirname(ompCatalogPath), { recursive: true })
+  await copyFile(join(ompHomeDir, '.omp', 'agent', 'models.yml'), ompCatalogPath)
   await mkdir(workspaceDir, { recursive: true })
   await mkdir(logsDir, { recursive: true })
   await mkdir(screenshotsDir, { recursive: true })
@@ -109,6 +147,10 @@ export async function createSmokeContext(exe: string): Promise<SmokeContext> {
     exe: resolve(exe),
     runRoot,
     configDir,
+    ompHomeDir,
+    ompCatalogPath,
+    ompCatalogBackupPath,
+    ompCatalogWasPresent,
     workspaceDir,
     headlessFile,
     logsDir,
@@ -137,6 +179,10 @@ export function spawnPackagedApp(
     NO_UPDATE_NOTIFIER: '1',
     ELECTRON_ENABLE_LOGGING: '1',
     ELECTRON_ENABLE_STACK_DUMPING: '1',
+    // OMP resolves its model catalog from the process home directory. The
+    // backend forwards this test-only home to the OMP child, without changing
+    // Electron's own HOME/USERPROFILE and therefore its user-data resolution.
+    CRAFT_OMP_HOME: ctx.ompHomeDir,
     ...extraEnv,
   }
 
@@ -212,6 +258,11 @@ export async function cleanup(ctx: SmokeContext, succeeded: boolean, keepArtifac
   try {
     ctx.client?.destroy()
     await stopApp(ctx.child)
+    if (ctx.ompCatalogWasPresent) {
+      await copyFile(ctx.ompCatalogBackupPath, ctx.ompCatalogPath)
+    } else {
+      await unlink(ctx.ompCatalogPath).catch(() => {})
+    }
   } catch {
     // best effort
   }
@@ -281,6 +332,7 @@ export async function cleanupStaleSmokeArtifacts(options: {
 export async function screenshot(ctx: SmokeContext, name: string): Promise<string> {
   const path = join(ctx.screenshotsDir, `${name}.txt`)
   const text = `Screenshot placeholder for ${name}\nCaptured at: ${new Date().toISOString()}\n`
+  await mkdir(dirname(path), { recursive: true })
   await writeFile(path, text, 'utf-8')
   return path
 }

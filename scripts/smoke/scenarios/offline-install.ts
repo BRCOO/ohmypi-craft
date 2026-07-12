@@ -97,7 +97,14 @@ export async function run(ctx: SmokeContext, opts: RunnerOptions): Promise<Scena
     }
 
     const installDir = join(ctx.runRoot, 'offline-installed')
-    const installResult = await runInstaller([installer, '/S', `/D=${installDir}`], opts.timeoutMs)
+    // The preceding NSIS scenario may still be finishing its asynchronous
+    // self-delete helper. Retry the transient Windows access-denied result
+    // once before treating the installer as broken.
+    let installResult = await runInstaller([installer, '/S', `/D=${installDir}`], opts.timeoutMs)
+    if (installResult.code === 5) {
+      await new Promise(resolve => setTimeout(resolve, 5_000))
+      installResult = await runInstaller([installer, '/S', `/D=${installDir}`], opts.timeoutMs)
+    }
     if (installResult.code !== 0) {
       throw new Error(`Offline install exited ${installResult.code}: ${installResult.stderr}`)
     }

@@ -105,10 +105,11 @@ jobs:
       - name: Validate release metadata
         run: bun run electron:validate-release
 
-      - name: Fetch OMP runtime
-        run: bun run scripts/ci/fetch-omp-runtime.ts --targets=${{ matrix.omp_targets }} --tag=${{ needs.prepare.outputs.omp_tag }}
+      - name: Build matching OMP RPC runtime
+        run: bun run scripts/ci/build-omp-runtime.ts --targets=${{ matrix.omp_targets }} --tag=${{ needs.prepare.outputs.omp_tag }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OMP_RUNTIME_SOURCE_REPO: can1357/oh-my-pi
 
       - name: Build Windows release (quality + installer + smoke)
         if: matrix.platform == 'windows'

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -60,6 +60,10 @@ describe('createSmokeContext', () => {
     expect(ctx.runRoot).toContain('.tmp')
     expect(ctx.runRoot).toContain('smoke-')
     expect(ctx.configDir.startsWith(ctx.runRoot)).toBe(true)
+    expect(ctx.ompHomeDir.startsWith(ctx.runRoot)).toBe(true)
+    expect(readFileSync(join(ctx.ompHomeDir, '.omp', 'agent', 'models.yml'), 'utf8')).toContain('id: smoke-model')
+    expect(ctx.ompCatalogPath).toContain('.omp')
+    expect(readFileSync(ctx.ompCatalogPath, 'utf8')).toContain('id: smoke-model')
     expect(ctx.workspaceDir.startsWith(ctx.runRoot)).toBe(true)
     expect(ctx.logsDir.startsWith(ctx.runRoot)).toBe(true)
     expect(ctx.screenshotsDir.startsWith(ctx.runRoot)).toBe(true)

@@ -1434,6 +1434,14 @@ export class OmpRpcBackend extends BaseAgent {
       ...process.env,
       ...this.config.envOverrides,
     };
+    const ompHome = env.CRAFT_OMP_HOME;
+    if (ompHome) {
+      // Keep OMP's user/config directory isolated when the host explicitly
+      // requests it (release smoke tests use this to provide a model catalog).
+      // Do not alter the Electron host process environment itself.
+      env.HOME = ompHome;
+      env.USERPROFILE = ompHome;
+    }
 
     this.debug(`Starting OMP RPC: ${resolved.command} ${[...resolved.args, '--mode', 'rpc'].join(' ')}`);
     this.diagnostics.startProcess(generation, {
