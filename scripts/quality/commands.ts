@@ -202,6 +202,13 @@ function staticCheckStep(): QualityStepResult {
   const start = Date.now()
   const checks = runAllStaticChecks()
   const failed = checks.filter((c) => !c.passed)
+  if (failed.length > 0) {
+    console.error(
+      failed
+        .map((check) => `[static check failed] ${check.name}\n${check.error ?? check.output}`)
+        .join('\n'),
+    )
+  }
   const output = checks.map((c) => `${c.name}: ${c.passed ? 'OK' : 'FAIL'}`).join('\n')
   return {
     name,

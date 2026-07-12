@@ -204,6 +204,18 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oh-my-pi-${{ matrix.artifact_key }}-diagnostics-${{ needs.prepare.outputs.short_sha }}
+          path: |
+            quality-reports/**
+            apps/electron/release/build-meta-*.json
+            apps/electron/release/release-win-*.json
+          if-no-files-found: ignore
+          retention-days: 7
+
   release:
     name: github-release
     needs: [prepare, build]

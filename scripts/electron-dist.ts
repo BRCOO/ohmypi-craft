@@ -61,7 +61,7 @@ async function run(cmd: string[], options: { cwd: string; env?: Record<string, s
   }
 }
 
-function builderArgs(platform: PlatformTarget, options: { dev: boolean; arch: Arch }): string[] {
+function builderArgs(platform: PlatformTarget, options: { dev: boolean; arch: Arch; unsignedMac?: boolean }): string[] {
   const args = ['--config', 'electron-builder.yml']
   if (platform !== 'current') {
     args.push(`--${platform}`)
@@ -81,6 +81,11 @@ function builderArgs(platform: PlatformTarget, options: { dev: boolean; arch: Ar
     args.push('--config.npmRebuild=false')
     args.push('--config.nodeGypRebuild=false')
     args.push('--config.buildDependenciesFromSource=false')
+  }
+  if (platform === 'mac' && options.unsignedMac) {
+    // electron-builder otherwise attempts a signing pass on macOS even when
+    // CSC_IDENTITY_AUTO_DISCOVERY is disabled. Explicit null skips signing.
+    args.push('--config.mac.identity=null')
   }
   return args
 }
@@ -311,7 +316,7 @@ async function main(): Promise<void> {
   for (const arch of targetArchs(platform)) {
     stageRuntimeDependencies(platform, arch)
     stageOmpRuntimeForTarget(resolvedPlatform, arch)
-    const args = builderArgs(platform, { dev, arch })
+    const args = builderArgs(platform, { dev, arch, unsignedMac: macTarget && !productionAppleSigning })
     if (productionWindowsSigning) {
       // Override electron-builder.yml default so the cert can edit PE resources.
       args.push('--config.win.signAndEditExecutable=true')
