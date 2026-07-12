@@ -77,7 +77,15 @@ function builderArgs(platform: PlatformTarget, options: { dev: boolean; arch: Ar
   if (platform !== 'current') {
     args.push(`--${platform}`)
   }
-  args.push(options.arch === 'arm64' ? '--arm64' : '--x64')
+  if (platform === 'mac') {
+    // The checked-in mac target list contains both architectures. Passing
+    // explicit target suffixes prevents electron-builder from rebuilding both
+    // apps in one invocation, which would otherwise pair the staged SDK/OMP
+    // runtime for one architecture with the other app bundle.
+    args.push(`dmg:${options.arch}`, `zip:${options.arch}`)
+  } else {
+    args.push(options.arch === 'arm64' ? '--arm64' : '--x64')
+  }
   if (options.dev && targetPlatform(platform) === 'win32') {
     // Dev Windows packaging must run for regular users. electron-builder's
     // winCodeSign helper archive contains macOS symlinks, which fail to extract

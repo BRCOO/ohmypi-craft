@@ -80,6 +80,28 @@ module.exports = async function afterPack(context) {
   const appPath = context.appOutDir;
   const productFilename = context.packager.appInfo.productFilename || context.packager.appInfo.productName || 'Oh My Pi';
   const resourcesDir = path.join(appPath, `${productFilename}.app`, 'Contents', 'Resources');
+  const ompSource = path.join(context.packager.projectDir, 'resources', 'omp');
+  // electron-builder passes Arch.x64 as the numeric enum value (1) in the
+  // hook context, while a few integrations expose the string name.
+  const ompArch = context.arch === 1 || context.arch === 'x64' ? 'darwin-x64' : 'darwin-arm64';
+  const ompBinary = path.join(ompSource, ompArch, 'omp');
+  const ompDestination = path.join(resourcesDir, 'omp', ompArch, 'omp');
+
+  // Keep the runtime in the final bundle even when electron-builder's
+  // platform-specific extraResources merge is affected by a CLI target
+  // override. This also makes the selected architecture explicit per app.
+  if (!fs.existsSync(ompBinary)) {
+    throw new Error(`OMP runtime source missing for ${ompArch}: ${ompBinary}`);
+  }
+  fs.rmSync(path.join(resourcesDir, 'omp'), { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(ompDestination), { recursive: true });
+  fs.copyFileSync(ompBinary, ompDestination);
+  try {
+    fs.chmodSync(ompDestination, 0o755);
+  } catch {
+    // Best-effort on filesystems that do not preserve executable mode bits.
+  }
+  console.log(`afterPack: copied OMP runtime ${ompArch} to ${ompDestination}`);
   const precompiledAssets = path.join(context.packager.projectDir, 'resources', 'Assets.car');
 
   console.log(`afterPack: projectDir=${context.packager.projectDir}`);

@@ -39,7 +39,10 @@ for (const file of localeFiles) {
   const sorted: Record<string, unknown> = {}
   for (const key of sortedKeys) sorted[key] = parsed[key]
 
-  const formatted = JSON.stringify(sorted, null, 2) + newline
+  // Git checkout settings can materialize locale files as CRLF on Windows.
+  // Normalize every generated line (not only the final newline) so the check
+  // compares the same representation that the formatter would write locally.
+  const formatted = JSON.stringify(sorted, null, 2).replace(/\n/g, newline) + newline
 
   if (formatted === original) continue
 
