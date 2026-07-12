@@ -75,6 +75,17 @@ describe('verifyPlatformArtifacts', () => {
     ]) {
       writeFileSync(join(release, name), Buffer.alloc(1_000_001, 2))
     }
+    const appOmp = join(
+      release,
+      'mac-arm64',
+      'Oh My Pi.app',
+      'Contents',
+      'Resources',
+      'omp',
+      'darwin-arm64',
+    )
+    mkdirSync(appOmp, { recursive: true })
+    writeFileSync(join(appOmp, 'omp'), Buffer.alloc(1_000_001, 3))
     const result = await verifyPlatformArtifacts({
       platform: 'macos',
       root,

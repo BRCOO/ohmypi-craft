@@ -116,6 +116,12 @@ function assertOmpRuntime(unpackedRoot: string, platformDir: string, binaryName:
   return ompPath
 }
 
+function assertMacOmpRuntime(resourcesRoot: string, platformDir: string): string {
+  const ompPath = join(resourcesRoot, 'omp', platformDir, 'omp')
+  requireNonEmptyFile(ompPath, `OMP runtime (${platformDir})`, 1_000_000)
+  return ompPath
+}
+
 function assertSdkBinary(unpackedAppNodeModules: string): string {
   const binary = join(
     unpackedAppNodeModules,
@@ -217,7 +223,7 @@ export async function verifyPlatformArtifacts(options: VerifyOptions): Promise<V
       if (!isDirectory(appRoot)) continue
       const resources = join(appRoot, 'Contents', 'Resources')
       const archDir = macDir === 'mac-arm64' ? 'darwin-arm64' : 'darwin-x64'
-      assertOmpRuntime(resources, archDir, 'omp')
+      assertMacOmpRuntime(resources, archDir)
       const sdkRoot = join(resources, 'app', 'node_modules')
       if (isDirectory(sdkRoot)) {
         assertSdkBinary(sdkRoot)
