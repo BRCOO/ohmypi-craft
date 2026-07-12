@@ -38,6 +38,8 @@ quality-reports/
 .codegraph/
 apps/electron/resources/omp/*/omp
 apps/electron/resources/omp/*/omp.exe
+apps/electron/resources/omp/FETCHED_VERSION
+apps/electron/resources/.omp-cache/
 *.tsbuildinfo
 .wrangler
 .mintlify

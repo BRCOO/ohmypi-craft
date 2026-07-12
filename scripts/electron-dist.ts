@@ -1,4 +1,4 @@
-import { existsSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import {
   downloadBun,
@@ -175,6 +175,76 @@ function hasWindowsSigningCredentials(): boolean {
   return existsSync(link)
 }
 
+function hasAppleSigningCredentials(): boolean {
+  if (process.env.CSC_NAME?.trim() || process.env.APPLE_SIGNING_IDENTITY?.trim()) return true
+  const link = process.env.CSC_LINK || process.env.APPLE_CERTIFICATE_BASE64
+  if (!link || !link.trim()) return false
+  if (link.includes('BEGIN') || link.length > 200) return true
+  return existsSync(link)
+}
+
+/**
+ * electron-builder copies the entire resources/omp tree. Keep only the current
+ * platform/arch binary so packages do not ship sibling-arch runtimes and so
+ * integrity checks see exactly one OMP executable.
+ */
+function stageOmpRuntimeForTarget(platform: Platform, arch: Arch): void {
+  const ompRoot = join(ELECTRON_DIR, 'resources', 'omp')
+  const cacheRoot = join(ELECTRON_DIR, 'resources', '.omp-cache')
+  const keepKey = `${platform}-${arch}`
+  const binaryName = platform === 'win32' ? 'omp.exe' : 'omp'
+
+  if (!existsSync(ompRoot) && !existsSync(cacheRoot)) {
+    console.warn(`OMP runtime directory missing at ${ompRoot}; package integrity may fail.`)
+    return
+  }
+
+  // Preserve pin/metadata files while restaging architecture directories.
+  const preservedFiles: Array<{ name: string; data: Buffer }> = []
+
+  // Seed cache from resources/omp so multi-arch loops can restage each target.
+  if (existsSync(ompRoot)) {
+    mkdirSync(cacheRoot, { recursive: true })
+    for (const entry of readdirSync(ompRoot, { withFileTypes: true })) {
+      if (entry.isFile()) {
+        preservedFiles.push({ name: entry.name, data: readFileSync(join(ompRoot, entry.name)) })
+        continue
+      }
+      if (!entry.isDirectory()) continue
+      const srcBin = join(ompRoot, entry.name, entry.name.startsWith('win32') ? 'omp.exe' : 'omp')
+      const altBin = join(ompRoot, entry.name, 'omp.exe')
+      const bin = existsSync(srcBin) ? srcBin : existsSync(altBin) ? altBin : null
+      if (!bin) continue
+      const destDir = join(cacheRoot, entry.name)
+      mkdirSync(destDir, { recursive: true })
+      const destName = entry.name.startsWith('win32') ? 'omp.exe' : 'omp'
+      writeFileSync(join(destDir, destName), readFileSync(bin))
+    }
+  }
+
+  const cached = join(cacheRoot, keepKey, binaryName)
+  if (!existsSync(cached)) {
+    console.warn(`OMP runtime not found for ${keepKey} at ${cached}`)
+    return
+  }
+
+  rmSync(ompRoot, { recursive: true, force: true })
+  mkdirSync(join(ompRoot, keepKey), { recursive: true })
+  const dest = join(ompRoot, keepKey, binaryName)
+  writeFileSync(dest, readFileSync(cached))
+  for (const file of preservedFiles) {
+    writeFileSync(join(ompRoot, file.name), file.data)
+  }
+  if (platform !== 'win32') {
+    try {
+      chmodSync(dest, 0o755)
+    } catch {
+      // Best-effort on hosts that ignore mode bits.
+    }
+  }
+  console.log(`Staged OMP runtime for ${keepKey}`)
+}
+
 async function main(): Promise<void> {
   const { platform, dev, skipBuild } = parseArgs()
   if (!existsSync(ELECTRON_BUILDER_CLI)) {
@@ -182,8 +252,11 @@ async function main(): Promise<void> {
   }
 
   const env: Record<string, string | undefined> = {}
-  const winTarget = targetPlatform(platform) === 'win32'
+  const resolvedPlatform = targetPlatform(platform)
+  const winTarget = resolvedPlatform === 'win32'
+  const macTarget = resolvedPlatform === 'darwin'
   const productionWindowsSigning = !dev && winTarget && hasWindowsSigningCredentials()
+  const productionAppleSigning = !dev && macTarget && hasAppleSigningCredentials()
 
   if (dev) {
     env.CRAFT_DEV_RUNTIME = '1'
@@ -201,6 +274,31 @@ async function main(): Promise<void> {
           'Building an unsigned installer. Production releases must supply signing material.',
       )
     }
+  } else if (macTarget) {
+    if (productionAppleSigning) {
+      // electron-builder consumes CSC_LINK. Accept the documented
+      // APPLE_CERTIFICATE_BASE64 alias as a base64/P12 certificate input too.
+      if (!process.env.CSC_LINK && process.env.APPLE_CERTIFICATE_BASE64?.trim()) {
+        env.CSC_LINK = process.env.APPLE_CERTIFICATE_BASE64
+      }
+      env.CSC_IDENTITY_AUTO_DISCOVERY = 'true'
+      console.log('Apple code signing credentials detected — enabling macOS signing.')
+      if (process.env.APPLE_ID && process.env.APPLE_TEAM_ID && process.env.APPLE_APP_SPECIFIC_PASSWORD) {
+        console.log('Apple notarization credentials detected.')
+      } else {
+        console.log(
+          'Apple notarization credentials incomplete ' +
+            '(APPLE_ID / APPLE_TEAM_ID / APPLE_APP_SPECIFIC_PASSWORD). Building signed but not notarized.',
+        )
+      }
+    } else {
+      // CI / local without Developer ID: produce unsigned DMG/ZIP that still installs for QA.
+      env.CSC_IDENTITY_AUTO_DISCOVERY = 'false'
+      console.log(
+        'Apple code signing credentials not set. Building unsigned macOS packages. ' +
+          'Do not claim notarization without complete Apple secrets.',
+      )
+    }
   }
 
   await ensureBundledUv(platform)
@@ -212,6 +310,7 @@ async function main(): Promise<void> {
 
   for (const arch of targetArchs(platform)) {
     stageRuntimeDependencies(platform, arch)
+    stageOmpRuntimeForTarget(resolvedPlatform, arch)
     const args = builderArgs(platform, { dev, arch })
     if (productionWindowsSigning) {
       // Override electron-builder.yml default so the cert can edit PE resources.

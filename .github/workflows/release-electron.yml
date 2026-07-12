@@ -1,0 +1,298 @@
+name: Release Electron
+
+# Multi-platform production packaging for Oh My Pi.
+# - push to main: build Windows / macOS / Linux artifacts (14-day retention)
+# - push v* tags: same builds + GitHub Release assets
+# - workflow_dispatch: manual rebuild; optional release_tag input creates a Release
+#
+# Operator docs: docs/superpowers/github-actions-multiplatform-release.md
+
+on:
+  push:
+    branches:
+      - main
+      # Keep the current development branch buildable until it is merged into main.
+      - codex/omp-rpc-backend
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Optional tag (e.g. v0.10.5) to create/update a GitHub Release after a successful multi-platform build'
+        required: false
+        type: string
+
+concurrency:
+  group: release-electron-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  BUN_VERSION: '1.3.14'
+
+jobs:
+  prepare:
+    name: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      commit: ${{ steps.meta.outputs.commit }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+      is_release: ${{ steps.meta.outputs.is_release }}
+      tag_name: ${{ steps.meta.outputs.tag_name }}
+      omp_tag: ${{ steps.meta.outputs.omp_tag }}
+      trigger: ${{ steps.meta.outputs.trigger }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Compute release metadata
+        id: meta
+        env:
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: bun run scripts/ci/release-meta.ts
+
+  build:
+    name: build (${{ matrix.platform }})
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            os: windows-latest
+            artifact_key: windows-x64
+            omp_targets: win32-x64
+          - platform: macos
+            os: macos-latest
+            artifact_key: macos
+            omp_targets: darwin-arm64,darwin-x64
+          - platform: linux
+            os: ubuntu-latest
+            artifact_key: linux-x64
+            omp_targets: linux-x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install Linux packaging deps
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate release metadata
+        run: bun run electron:validate-release
+
+      - name: Fetch OMP runtime
+        run: bun run scripts/ci/fetch-omp-runtime.ts --targets=${{ matrix.omp_targets }} --tag=${{ needs.prepare.outputs.omp_tag }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Windows release (quality + installer + smoke)
+        if: matrix.platform == 'windows'
+        shell: bash
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          CSC_NAME: ${{ secrets.CSC_NAME }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          bun run release:win
+          SIGNING=unsigned
+          if [ -n "${WIN_CSC_LINK:-}" ] || [ -n "${CSC_LINK:-}" ] || [ -n "${CSC_NAME:-}" ]; then
+            SIGNING=signed
+          fi
+          # Prefer probe result from the quality report when present.
+          REPORT=$(ls -1t apps/electron/release/release-win-*.json 2>/dev/null | head -n1 || true)
+          if [ -n "$REPORT" ]; then
+            STATUS=$(node -e "const r=require('./'+process.argv[1]); console.log((r.signing&&r.signing.status)||'')" "$REPORT" || true)
+            if [ -n "$STATUS" ]; then SIGNING="$STATUS"; fi
+          fi
+          bun run scripts/ci/verify-platform-artifacts.ts --platform=windows --version=${{ needs.prepare.outputs.version }} --signing="$SIGNING"
+          {
+            echo "## Windows build"
+            echo ""
+            echo "- version: \`${{ needs.prepare.outputs.version }}\`"
+            echo "- commit: \`${{ needs.prepare.outputs.short_sha }}\`"
+            echo "- signing: \`$SIGNING\`"
+            echo "- entry: \`release:win\` (quality:verify + installer + UI/release smoke)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build macOS packages
+        if: matrix.platform == 'macos'
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          CSC_NAME: ${{ secrets.CSC_NAME }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          SIGNING=unsigned
+          if [ -n "${CSC_LINK:-}" ] || [ -n "${CSC_NAME:-}" ] || [ -n "${APPLE_SIGNING_IDENTITY:-}" ] || [ -n "${APPLE_CERTIFICATE_BASE64:-}" ]; then
+            SIGNING=signed
+          fi
+          bun run electron:dist:mac
+          bun run scripts/ci/verify-platform-artifacts.ts --platform=macos --version=${{ needs.prepare.outputs.version }} --signing="$SIGNING"
+          {
+            echo "## macOS build"
+            echo ""
+            echo "- version: \`${{ needs.prepare.outputs.version }}\`"
+            echo "- commit: \`${{ needs.prepare.outputs.short_sha }}\`"
+            echo "- signing: \`$SIGNING\`"
+            if [ "$SIGNING" = "unsigned" ]; then
+              echo "- note: no Apple signing secrets; DMG/ZIP are unsigned and not notarized"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build Linux packages
+        if: matrix.platform == 'linux'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          bun run electron:dist:linux
+          bun run scripts/ci/verify-platform-artifacts.ts --platform=linux --version=${{ needs.prepare.outputs.version }} --signing=unsigned
+          {
+            echo "## Linux build"
+            echo ""
+            echo "- version: \`${{ needs.prepare.outputs.version }}\`"
+            echo "- commit: \`${{ needs.prepare.outputs.short_sha }}\`"
+            echo "- signing: \`unsigned\` (SHA-256 only)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload platform artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oh-my-pi-${{ matrix.artifact_key }}-${{ needs.prepare.outputs.short_sha }}
+          path: |
+            apps/electron/release/Oh-My-Pi*
+            apps/electron/release/*.yml
+            apps/electron/release/*.blockmap
+            apps/electron/release/SHA256SUMS.txt
+            apps/electron/release/build-meta-*.json
+            apps/electron/release/release-win-*.json
+            quality-reports/**
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: github-release
+    needs: [prepare, build]
+    if: needs.prepare.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Verify tag points at this commit
+        env:
+          TAG: ${{ needs.prepare.outputs.tag_name }}
+          EXPECTED: ${{ needs.prepare.outputs.commit }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TAG" ]; then
+            echo "Missing tag_name for release job"
+            exit 1
+          fi
+          # For workflow_dispatch the tag may not exist yet; only enforce when present.
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            TAG_SHA=$(git rev-list -n1 "$TAG")
+            if [ "$TAG_SHA" != "$EXPECTED" ]; then
+              echo "Tag $TAG points at $TAG_SHA but this workflow ran for $EXPECTED"
+              exit 1
+            fi
+          fi
+          echo "Release tag: $TAG @ $EXPECTED"
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-artifacts
+          pattern: oh-my-pi-*
+          merge-multiple: false
+
+      - name: Assemble release assets
+        run: |
+          bun run scripts/ci/assemble-release.ts \
+            --input=downloaded-artifacts \
+            --output=release-upload \
+            --version=${{ needs.prepare.outputs.version }} \
+            --tag=${{ needs.prepare.outputs.tag_name }} \
+            --commit=${{ needs.prepare.outputs.commit }}
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag_name }}
+          COMMIT: ${{ needs.prepare.outputs.commit }}
+        run: |
+          set -euo pipefail
+          # Ensure the tag exists on the remote (workflow_dispatch may supply a tag name).
+          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            git tag "$TAG" "$COMMIT"
+            git push origin "refs/tags/$TAG"
+          fi
+
+          mapfile -t ASSETS < <(find release-upload -maxdepth 1 -type f ! -name 'release-notes.md' -print)
+          if [ "${#ASSETS[@]}" -eq 0 ]; then
+            echo "No release assets found"
+            exit 1
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Updating existing release $TAG"
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+            gh release edit "$TAG" --notes-file release-upload/release-notes.md --target "$COMMIT"
+          else
+            echo "Creating release $TAG"
+            gh release create "$TAG" "${ASSETS[@]}" \
+              --title "$TAG" \
+              --notes-file release-upload/release-notes.md \
+              --target "$COMMIT"
+          fi
+
+          {
+            echo "## GitHub Release"
+            echo ""
+            echo "- tag: \`$TAG\`"
+            echo "- commit: \`${{ needs.prepare.outputs.short_sha }}\`"
+            echo "- assets: see release page"
+            echo "- checksums: \`SHA256SUMS.txt\` (recomputed on release runner)"
+          } >> "$GITHUB_STEP_SUMMARY"

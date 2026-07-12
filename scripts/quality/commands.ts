@@ -61,7 +61,7 @@ function runTestManifest(): QualityStepResult {
   const start = Date.now()
   const result = spawnSync(
     'bun',
-    ['test', 'packages/shared/src/agent/backend/omp', 'scripts/quality/__tests__'],
+    ['test', 'packages/shared/src/agent/backend/omp', 'scripts/quality/__tests__', 'scripts/ci/__tests__'],
     { cwd: ROOT, encoding: 'utf-8', shell: false },
   )
   const durationMs = Date.now() - start

@@ -1,7 +1,7 @@
 # GitHub Actions 三平台云端构建设计
 
-**日期：** 2026-07-12  
-**状态：** 已确认，待实现  
+**日期：** 2026-07-12
+**状态：** 已实现
 **范围：** OMP Craft Electron 桌面应用的 Windows、macOS、Linux 云端构建与发布自动化
 
 ## 1. 背景与目标
@@ -34,13 +34,13 @@
 
 ### 3.1 主分支 push
 
-当代码推送到 `main` 时触发三平台构建。每个平台构建完成后上传独立 Artifact，保留 14 天。Artifact 用于：
+当代码推送到 `main` 时触发三平台构建。当前开发分支 `codex/omp-rpc-backend` 在合并前作为过渡例外也触发同一流程。每个平台构建完成后上传独立 Artifact，保留 14 天。Artifact 用于：
 
 - QA 下载并安装验证；
 - 对比不同提交的包；
 - 在没有版本标签时提供临时验收包。
 
-主分支构建不创建 GitHub Release，也不覆盖任何持久化下载地址。
+主分支和过渡开发分支构建不创建 GitHub Release，也不覆盖任何持久化下载地址。
 
 ### 3.2 版本标签 push
 
@@ -55,7 +55,7 @@
 
 ### 3.3 其他分支与手动运行
 
-普通分支 push 不触发完整三平台生产构建。workflow 保留 `workflow_dispatch`，允许维护者从 GitHub Actions 页面手动选择分支运行，用于发布前验收或排查 CI 环境问题。手动运行默认只上传 Artifact，不自动创建 Release，除非显式提供版本标签输入且通过版本校验。
+普通分支 push 不触发完整三平台生产构建。当前开发分支是过渡例外，合并到 `main` 后应移除该触发器。workflow 保留 `workflow_dispatch`，允许维护者从 GitHub Actions 页面手动选择分支运行，用于发布前验收或排查 CI 环境问题。手动运行默认只上传 Artifact，不自动创建 Release，除非显式提供版本标签输入且通过版本校验。
 
 ## 4. Workflow 结构
 
@@ -253,3 +253,15 @@ permissions:
 5. 在无签名 Secrets 的 CI 环境跑通三平台构建。
 6. 通过仓库 Secrets 接入签名后，单独验证签名分支，不把签名凭据作为默认要求。
 
+## 13. 实现落点（2026-07-12）
+
+| 路径 | 作用 |
+| --- | --- |
+| .github/workflows/release-electron.yml | prepare → build 矩阵 → 可选 GitHub Release |
+| scripts/ci/release-meta.ts | 版本/标签/是否发版/OMP pin 元数据 |
+| scripts/ci/fetch-omp-runtime.ts | 从上游 GitHub Release 拉取嵌入式 OMP |
+| scripts/ci/verify-platform-artifacts.ts | 平台产物存在性、完整性与 SHA-256 |
+| scripts/ci/assemble-release.ts | 汇总 Artifact、重算哈希、写 Release notes |
+| apps/electron/resources/omp/VERSION | OMP 运行时版本钉 |
+| docs/superpowers/github-actions-multiplatform-release.md | 操作说明（下载 Artifact、打标签、Secrets） |
+| scripts/electron-dist.ts | mac 无证书 unsigned；按 arch 暂存单一 OMP |
