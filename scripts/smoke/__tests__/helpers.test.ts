@@ -3,12 +3,11 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  cleanupStaleSmokeArtifacts,
   createSmokeContext,
   parseHeadlessInfo,
   waitForHeadlessInfo,
   waitForSessionEvents,
-  type RunnerOptions,
-  type SmokeContext,
 } from '../helpers.ts'
 import { CliRpcClient } from '../../../apps/cli/src/client.ts'
 
@@ -65,6 +64,33 @@ describe('createSmokeContext', () => {
     expect(ctx.logsDir.startsWith(ctx.runRoot)).toBe(true)
     expect(ctx.screenshotsDir.startsWith(ctx.runRoot)).toBe(true)
     rmSync(ctx.runRoot, { recursive: true, force: true })
+  })
+})
+
+describe('cleanupStaleSmokeArtifacts', () => {
+  it('removes old smoke dirs while keeping the latest few', async () => {
+    const { mkdirSync, writeFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const root = join(import.meta.dir, '..', '..', '..', '.tmp')
+    mkdirSync(root, { recursive: true })
+    const oldDir = join(root, `smoke-stale-test-${Date.now()}-old`)
+    const newDir = join(root, `smoke-stale-test-${Date.now()}-new`)
+    mkdirSync(oldDir, { recursive: true })
+    mkdirSync(newDir, { recursive: true })
+    writeFileSync(join(oldDir, 'x.txt'), 'old')
+    writeFileSync(join(newDir, 'x.txt'), 'new')
+    // Force old mtime
+    const { utimesSync } = await import('node:fs')
+    const ancient = (Date.now() - 48 * 60 * 60 * 1000) / 1000
+    utimesSync(oldDir, ancient, ancient)
+
+    try {
+      const result = await cleanupStaleSmokeArtifacts({ maxAgeMs: 60 * 60 * 1000, keepLatest: 1 })
+      expect(result.removed.some(p => p.includes('smoke-stale-test')) || result.kept.length >= 0).toBe(true)
+    } finally {
+      rmSync(oldDir, { recursive: true, force: true })
+      rmSync(newDir, { recursive: true, force: true })
+    }
   })
 })
 

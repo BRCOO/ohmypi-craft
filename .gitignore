@@ -22,6 +22,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # quality gate reports
 quality-reports/
 
+# smoke / release temporary run directories (must not mark release reports dirty)
+.tmp/
+
 # dotenv environment variable files
 .env
 .env.development.local

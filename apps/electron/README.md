@@ -198,6 +198,9 @@ DevTools opens automatically (configured in `index.ts`). Remove `mainWindow.webC
 
 - `bun run electron:validate-release` checks product metadata, artifact naming, icons, and current Oh My Pi branding.
 - `bun run electron:dist:dev:mac`, `bun run electron:dist:dev:win`, and `bun run electron:dist:dev:linux` build unsigned/dev-runtime packages for release smoke tests.
+- Production Windows signing: set `WIN_CSC_LINK` (or `CSC_LINK`) + `CSC_KEY_PASSWORD` (optional `CSC_NAME`). Without credentials, builds stay unsigned and the quality report records `signing.status: "unsigned"`.
+- Windows NSIS uses the assisted installer flow: users can review the repository Apache-2.0 license, choose a per-user installation directory, create Start Menu/desktop shortcuts, and keep app data when uninstalling.
+- AI settings Electron UI check: `bun run test:ui:ai-settings` (requires `playwright-core` + a packaged exe; use `--strict` to fail when missing).
 
 ## Implemented Features
 

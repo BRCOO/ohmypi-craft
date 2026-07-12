@@ -166,6 +166,15 @@ function stageRuntimeDependencies(platform: PlatformTarget, arch: Arch): void {
   copyRipgrep(config)
 }
 
+function hasWindowsSigningCredentials(): boolean {
+  const link = process.env.WIN_CSC_LINK || process.env.CSC_LINK
+  const name = process.env.CSC_NAME
+  if (name && name.trim()) return true
+  if (!link || !link.trim()) return false
+  if (link.includes('BEGIN') || link.length > 200) return true
+  return existsSync(link)
+}
+
 async function main(): Promise<void> {
   const { platform, dev, skipBuild } = parseArgs()
   if (!existsSync(ELECTRON_BUILDER_CLI)) {
@@ -173,9 +182,25 @@ async function main(): Promise<void> {
   }
 
   const env: Record<string, string | undefined> = {}
+  const winTarget = targetPlatform(platform) === 'win32'
+  const productionWindowsSigning = !dev && winTarget && hasWindowsSigningCredentials()
+
   if (dev) {
     env.CRAFT_DEV_RUNTIME = '1'
     env.CSC_IDENTITY_AUTO_DISCOVERY = 'false'
+  } else if (winTarget) {
+    if (productionWindowsSigning) {
+      // Formal Windows Authenticode signing for release candidates.
+      env.CSC_IDENTITY_AUTO_DISCOVERY = 'true'
+      console.log('Windows code signing credentials detected — enabling Authenticode signing.')
+    } else {
+      // Local / CI without certs: keep unsigned, avoid winCodeSign symlink extraction.
+      env.CSC_IDENTITY_AUTO_DISCOVERY = 'false'
+      console.log(
+        'Windows code signing credentials not set (WIN_CSC_LINK / CSC_LINK / CSC_NAME). ' +
+          'Building an unsigned installer. Production releases must supply signing material.',
+      )
+    }
   }
 
   await ensureBundledUv(platform)
@@ -187,7 +212,12 @@ async function main(): Promise<void> {
 
   for (const arch of targetArchs(platform)) {
     stageRuntimeDependencies(platform, arch)
-    await run([NODE_EXE, ELECTRON_BUILDER_CLI, ...builderArgs(platform, { dev, arch })], {
+    const args = builderArgs(platform, { dev, arch })
+    if (productionWindowsSigning) {
+      // Override electron-builder.yml default so the cert can edit PE resources.
+      args.push('--config.win.signAndEditExecutable=true')
+    }
+    await run([NODE_EXE, ELECTRON_BUILDER_CLI, ...args], {
       cwd: ELECTRON_DIR,
       env,
     })

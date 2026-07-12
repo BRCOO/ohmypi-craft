@@ -35,6 +35,12 @@ export interface QualityArtifact {
   sha256: string
 }
 
+export interface QualitySigningInfo {
+  status: 'signed' | 'unsigned' | 'unknown'
+  detail?: string
+  credentialsPresent: boolean
+}
+
 export interface QualityReport {
   id: string
   createdAt: string
@@ -48,6 +54,8 @@ export interface QualityReport {
     path: string
     capabilities: string[]
   }
+  /** Windows Authenticode status for the installer when available. */
+  signing?: QualitySigningInfo
   steps: QualityStepResult[]
   installer?: QualityArtifact
   embeddedRuntime?: QualityArtifact

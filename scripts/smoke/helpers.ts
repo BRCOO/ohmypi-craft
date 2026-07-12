@@ -216,9 +216,66 @@ export async function cleanup(ctx: SmokeContext, succeeded: boolean, keepArtifac
     // best effort
   }
 
-  if (succeeded && !keepArtifacts) {
+  // Always remove successful run roots so release reports stay clean.
+  // On failure, keep the tree for debugging unless the caller opts out.
+  if (!keepArtifacts && (succeeded || process.env.OMP_SMOKE_ALWAYS_CLEAN === '1')) {
     await rm(ctx.runRoot, { recursive: true, force: true }).catch(() => {})
   }
+}
+
+/**
+ * Remove stale smoke directories under `.tmp/` that were left behind by
+ * killed/timeout runs. Safe: only deletes `smoke-*` / `packaged-e2e-*` / `smoke-artifacts-*`.
+ */
+export async function cleanupStaleSmokeArtifacts(options: {
+  maxAgeMs?: number
+  keepLatest?: number
+} = {}): Promise<{ removed: string[]; kept: string[] }> {
+  const maxAgeMs = options.maxAgeMs ?? 24 * 60 * 60 * 1000
+  const keepLatest = options.keepLatest ?? 3
+  const tmpRoot = join(ROOT_DIR, '.tmp')
+  const removed: string[] = []
+  const kept: string[] = []
+
+  if (!existsSync(tmpRoot)) return { removed, kept }
+
+  const { readdir, stat } = await import('node:fs/promises')
+  const entries = await readdir(tmpRoot, { withFileTypes: true }).catch(() => [])
+  const candidates = entries
+    .filter(e => e.isDirectory())
+    .filter(e => /^(smoke-|packaged-e2e-|smoke-artifacts-)/.test(e.name))
+    .map(e => join(tmpRoot, e.name))
+
+  const withMtime = await Promise.all(
+    candidates.map(async path => {
+      try {
+        const s = await stat(path)
+        return { path, mtimeMs: s.mtimeMs }
+      } catch {
+        return { path, mtimeMs: 0 }
+      }
+    }),
+  )
+  withMtime.sort((a, b) => b.mtimeMs - a.mtimeMs)
+
+  const now = Date.now()
+  for (let i = 0; i < withMtime.length; i += 1) {
+    const entry = withMtime[i]!
+    const isRecentKeep = i < keepLatest
+    const isStale = now - entry.mtimeMs > maxAgeMs
+    if (isRecentKeep && !isStale) {
+      kept.push(entry.path)
+      continue
+    }
+    if (isStale || i >= keepLatest) {
+      await rm(entry.path, { recursive: true, force: true }).catch(() => {})
+      removed.push(entry.path)
+    } else {
+      kept.push(entry.path)
+    }
+  }
+
+  return { removed, kept }
 }
 
 export async function screenshot(ctx: SmokeContext, name: string): Promise<string> {

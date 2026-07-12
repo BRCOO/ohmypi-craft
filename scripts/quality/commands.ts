@@ -12,7 +12,7 @@
  * written to quality-reports/ for every run.
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import {
@@ -21,16 +21,24 @@ import {
   fileArtifact,
   type QualityReport,
   type QualityStepResult,
-  type QualityStepStatus,
   type QualityArtifact,
 } from './report'
 import { runAllStaticChecks } from './static'
 import { validatePackageIntegrity, resolvePackagePaths } from './package'
 import { runtimeInfoFromCapabilityStep, validateRuntimeCapability } from './runtime'
+import { isRecoverableArtifact, processFailed, runProcess } from './run-process'
+import { probeWindowsSignature, type CodeSigningInfo } from './signing'
 
 const ROOT = resolve(import.meta.dir ?? new URL('.', import.meta.url).pathname, '..', '..')
 const ELECTRON_DIR = join(ROOT, 'apps/electron')
 const APP_PACKAGE = join(ELECTRON_DIR, 'package.json')
+
+/** electron-builder + full app compile can exceed 30 minutes on cold machines. */
+const BUILD_INSTALLER_TIMEOUT_MS = Number(process.env.OMP_BUILD_TIMEOUT_MS ?? 45 * 60 * 1000)
+/** Full packaged smoke including install can be long on first run. */
+const RELEASE_SMOKE_TIMEOUT_MS = Number(process.env.OMP_SMOKE_TIMEOUT_MS ?? 30 * 60 * 1000)
+/** Packaged Electron UI smoke needs startup plus route hydration. */
+const RELEASE_UI_TIMEOUT_MS = Number(process.env.OMP_UI_TIMEOUT_MS ?? 10 * 60 * 1000)
 
 function normalizePathSeparators(path: string): string {
   return path.replace(/\\/g, '/')
@@ -53,7 +61,7 @@ function runTestManifest(): QualityStepResult {
   const start = Date.now()
   const result = spawnSync(
     'bun',
-    ['test', 'packages/shared/src/agent/backend/omp'],
+    ['test', 'packages/shared/src/agent/backend/omp', 'scripts/quality/__tests__'],
     { cwd: ROOT, encoding: 'utf-8', shell: false },
   )
   const durationMs = Date.now() - start
@@ -67,21 +75,51 @@ function runTestManifest(): QualityStepResult {
   }
 }
 
-function runReleaseSmoke(): QualityStepResult {
+async function runReleaseSmoke(): Promise<QualityStepResult> {
   const name = 'packaged release smoke'
-  const start = Date.now()
-  const result = spawnSync(
+  const result = await runProcess(
     'bun',
     ['run', 'scripts/smoke/runner.ts', '--run-installation'],
-    { cwd: ROOT, encoding: 'utf-8', shell: false, maxBuffer: 10 * 1024 * 1024 },
+    {
+      cwd: ROOT,
+      timeoutMs: RELEASE_SMOKE_TIMEOUT_MS,
+      captureTailBytes: 64 * 1024,
+    },
   )
-  const failed = result.status !== 0
+  const failed = processFailed(result)
+  const tails = [result.stdoutTail, result.stderrTail].filter(Boolean).join('\n')
   return {
     name,
     status: failed ? 'failed' : 'passed',
-    durationMs: Date.now() - start,
-    output: result.stdout?.trim() || undefined,
-    error: failed ? result.stderr?.trim() || undefined : undefined,
+    durationMs: result.durationMs,
+    output: tails || undefined,
+    error: failed
+      ? result.error || result.stderrTail || `smoke exited with code ${result.status ?? 'null'}`
+      : undefined,
+  }
+}
+
+async function runReleaseUiSmoke(): Promise<QualityStepResult> {
+  const name = 'packaged AI settings UI smoke'
+  const result = await runProcess(
+    'bun',
+    ['run', 'test:ui:ai-settings:strict'],
+    {
+      cwd: ROOT,
+      timeoutMs: RELEASE_UI_TIMEOUT_MS,
+      captureTailBytes: 64 * 1024,
+    },
+  )
+  const failed = processFailed(result)
+  const tails = [result.stdoutTail, result.stderrTail].filter(Boolean).join('\n')
+  return {
+    name,
+    status: failed ? 'failed' : 'passed',
+    durationMs: result.durationMs,
+    output: tails || undefined,
+    error: failed
+      ? result.error || result.stderrTail || `UI smoke exited with code ${result.status ?? 'null'}`
+      : undefined,
   }
 }
 
@@ -93,35 +131,70 @@ async function runtimeCapabilityAsync(): Promise<QualityStepResult> {
   return validateRuntimeCapability({ root: ROOT })
 }
 
-function buildInstaller(): QualityStepResult {
-  const name = 'build installer'
-  const start = Date.now()
-  const result = spawnSync('bun', ['run', 'electron:dist:win'], {
-    cwd: ROOT,
-    encoding: 'utf-8',
-    shell: false,
-  })
-  const failed = result.status !== 0
-  return {
-    name,
-    status: failed ? 'failed' : 'passed',
-    durationMs: Date.now() - start,
-    output: result.stdout?.trim() || undefined,
-    error: failed ? result.stderr?.trim() || undefined : undefined,
-  }
+function findLatestInstallerPath(): string | undefined {
+  const releaseDir = join(ELECTRON_DIR, 'release')
+  if (!existsSync(releaseDir)) return undefined
+  const installers = readdirSync(releaseDir)
+    .filter((name: string) => /^Oh-My-Pi-Setup-.*\.exe$/i.test(name) || name.endsWith('.exe'))
+    .map((name: string) => join(releaseDir, name))
+    .filter((path: string) => {
+      try {
+        return statSync(path).isFile()
+      } catch {
+        return false
+      }
+    })
+  if (installers.length === 0) return undefined
+  installers.sort((a: string, b: string) => statSync(b).mtimeMs - statSync(a).mtimeMs)
+  return installers[0]
 }
 
 function findInstallerArtifact(): QualityArtifact | undefined {
-  const releaseDir = join(ELECTRON_DIR, 'release')
-  if (!existsSync(releaseDir)) return undefined
-  const installers = require('node:fs')
-    .readdirSync(releaseDir)
-    .filter((name: string) => name.endsWith('.exe'))
-    .map((name: string) => join(releaseDir, name))
-    .filter((path: string) => require('node:fs').statSync(path).isFile())
-  if (installers.length === 0) return undefined
-  installers.sort((a: string, b: string) => require('node:fs').statSync(b).mtimeMs - require('node:fs').statSync(a).mtimeMs)
-  return fileArtifact(installers[0])
+  const path = findLatestInstallerPath()
+  return path ? fileArtifact(path) : undefined
+}
+
+async function buildInstaller(): Promise<QualityStepResult> {
+  const name = 'build installer'
+  const processStartedAt = Date.now()
+  const result = await runProcess('bun', ['run', 'electron:dist:win'], {
+    cwd: ROOT,
+    timeoutMs: BUILD_INSTALLER_TIMEOUT_MS,
+    captureTailBytes: 64 * 1024,
+  })
+
+  const failed = processFailed(result)
+  const installerPath = findLatestInstallerPath()
+  const recoverable = failed
+    && installerPath
+    && isRecoverableArtifact({ path: installerPath, minBytes: 1_000_000 }, processStartedAt)
+
+  if (recoverable && installerPath) {
+    const note =
+      `Process reported failure/timeout after the installer was written (${installerPath}). ` +
+      `Treating build as passed (exit=${result.status ?? 'null'}, timedOut=${result.timedOut}, ` +
+      `signal=${result.signal ?? 'none'}). Original error: ${result.error ?? result.stderrTail ?? 'n/a'}`
+    console.warn(`[release:win] ${note}`)
+    return {
+      name,
+      status: 'passed',
+      durationMs: result.durationMs,
+      output: [result.stdoutTail, note].filter(Boolean).join('\n\n'),
+    }
+  }
+
+  const tails = [result.stdoutTail, result.stderrTail].filter(Boolean).join('\n')
+  return {
+    name,
+    status: failed ? 'failed' : 'passed',
+    durationMs: result.durationMs,
+    output: tails || undefined,
+    error: failed
+      ? result.error
+        || result.stderrTail
+        || `build exited with code ${result.status ?? 'null'}${result.timedOut ? ' (timed out)' : ''}`
+      : undefined,
+  }
 }
 
 function staticCheckStep(): QualityStepResult {
@@ -156,7 +229,7 @@ async function runCommand(command: Command): Promise<QualityReport> {
   if (command === 'quality:quick') return finalizeReport(base, steps, command)
 
   if (command === 'release:win') {
-    steps.push(buildInstaller())
+    steps.push(await buildInstaller())
     if (steps.some((step) => step.status === 'failed')) return finalizeReport(base, steps, command)
   }
 
@@ -167,7 +240,12 @@ async function runCommand(command: Command): Promise<QualityReport> {
   if (steps.some((step) => step.status === 'failed')) return finalizeReport(base, steps, command)
 
   if (command === 'release:win') {
-    steps.push(runReleaseSmoke())
+    steps.push(await runReleaseUiSmoke())
+    if (steps.some((step) => step.status === 'failed')) return finalizeReport(base, steps, command)
+  }
+
+  if (command === 'release:win') {
+    steps.push(await runReleaseSmoke())
   }
 
   return finalizeReport(base, steps, command)
@@ -178,12 +256,12 @@ function finalizeReport(
   steps: QualityStepResult[],
   command: Command,
 ): QualityReport {
-
   const failed = steps.filter((s) => s.status === 'failed')
   const status = failed.length === 0 ? 'success' : 'failure'
 
-  const installer = command === 'release:win' && status === 'success'
-    ? findInstallerArtifact()
+  const installerPath = command === 'release:win' ? findLatestInstallerPath() : undefined
+  const installer = command === 'release:win' && status === 'success' && installerPath
+    ? fileArtifact(installerPath)
     : undefined
 
   const runtimePath = resolvePackagePaths({ root: ROOT }).ompRuntimePath
@@ -196,6 +274,11 @@ function finalizeReport(
     runtimeStep,
     normalizePathSeparators(embeddedRuntime?.path ?? relative(ROOT, runtimePath)),
   )
+
+  let signing: CodeSigningInfo | undefined
+  if (command === 'release:win' && installerPath) {
+    signing = probeWindowsSignature(installerPath)
+  }
 
   // A successful release report must never record a synthetic / dependency version.
   // If capability passed without a probed binary version, treat the run as failed.
@@ -216,6 +299,7 @@ function finalizeReport(
       installer: undefined,
       embeddedRuntime: undefined,
       runtime: undefined,
+      signing,
     }
   }
 
@@ -226,6 +310,7 @@ function finalizeReport(
     installer,
     embeddedRuntime,
     runtime: runtimeInfo,
+    signing,
   }
 }
 
@@ -241,6 +326,9 @@ async function main() {
   const reportPath = writeReport(report as QualityReport, installerDir)
   console.log(`Quality report written to ${reportPath}`)
   console.log(`Overall status: ${report.status}`)
+  if (report.signing) {
+    console.log(`  signing: ${report.signing.status}${report.signing.detail ? ` (${report.signing.detail})` : ''}`)
+  }
   for (const step of report.steps) {
     console.log(`  [${step.status}] ${step.name} (${step.durationMs}ms)`)
   }

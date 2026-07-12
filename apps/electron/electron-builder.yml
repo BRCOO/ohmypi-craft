@@ -157,9 +157,15 @@ dmg:
 
 win:
   icon: resources/icon.ico
-  # Local unsigned builds use afterPack's bundled rcedit instead of electron-builder's
-  # winCodeSign archive, which needs symlink privileges unavailable on many Windows PCs.
+  # Default: local unsigned builds. electron-dist.ts enables signing + resource
+  # editing when WIN_CSC_LINK / CSC_LINK / CSC_NAME is present (production CI).
+  # Keeping the default false avoids electron-builder's winCodeSign archive, which
+  # needs symlink privileges unavailable on many Windows developer PCs.
   signAndEditExecutable: false
+  # Optional certificate file/base64 is supplied via env (not committed):
+  #   WIN_CSC_LINK or CSC_LINK  — path to .pfx / base64-encoded cert
+  #   CSC_KEY_PASSWORD          — certificate password
+  #   CSC_NAME                  — optional certificate subject override
   target:
     - target: nsis
       arch:
@@ -200,9 +206,26 @@ win:
       to: messaging-whatsapp-worker/worker.cjs
 
 nsis:
-  oneClick: true
+  # Use the assisted installer flow so users can review the license and
+  # choose an installation directory instead of silently installing.
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
   include: build/installer.nsh
   shortcutName: "Oh My Pi"
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  menuCategory: "Oh My Pi"
+  runAfterFinish: true
+  # Reuse the repository's Apache-2.0 license as the installer agreement.
+  license: ../../LICENSE
+  # Chinese is the default, with an explicit English option in the wizard.
+  language: "2052"
+  installerLanguages:
+    - zh_CN
+    - en_US
+  multiLanguageInstaller: true
+  displayLanguageSelector: true
   uninstallDisplayName: "Oh My Pi"
   installerIcon: resources/installer.ico
   uninstallerIcon: resources/uninstaller.ico
@@ -210,7 +233,8 @@ nsis:
   # Per-user install to %LOCALAPPDATA%\Programs\ (not Program Files).
   # Bun subprocess cannot read/write files in Program Files due to Windows permissions.
   perMachine: false
-  deleteAppDataOnUninstall: true
+  # Keep user settings, workspaces and OMP configuration when the app is removed.
+  deleteAppDataOnUninstall: false
 
 linux:
   icon: resources/icon.png

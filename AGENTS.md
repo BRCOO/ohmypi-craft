@@ -63,6 +63,7 @@ Use CodeGraph before broad grep/find/manual source reading when locating or unde
 - Implemented MCP/Skills/Agents lifecycle backend contract, DTOs, routing channels, and Feature Center settings UI with directory management (install/uninstall/refresh).
 - Implemented end-to-end packaged-app smoke runner with runtime-resolution, session-handshake, plan-mode, feature-discovery, language, and installation scenarios; produces JSON Release QA reports.
 - Implemented release reliability follow-up: resource mutations carry active `workspaceId`; quality reports use probed OMP binary version (not Pi dependency pin); CI i18n-changed lint requires explicit merge baseline (`I18N_BASE_REF` / CI target branch) and never falls back to `HEAD~1`.
+- Implemented 2026-07-12 release hardening patches: streaming `release:win` build with post-timeout artifact recovery; `.tmp/` gitignored + smoke auto-prune; Windows Authenticode when `WIN_CSC_LINK`/`CSC_LINK`/`CSC_NAME` present (unsigned local default, report `signing` field); `OmpAiDiagnosticsPanel` unit + Playwright UI harness; offline-install and upgrade smoke scenarios; Browser/LSP/GitHub/SSH remain honest "diagnostics not wired" until RPC telemetry.
 
 ## Verification expectations
 

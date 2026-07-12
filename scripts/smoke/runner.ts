@@ -1,7 +1,15 @@
 import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { createSmokeContext, defaultPackagedExe, tailLogFile, type RunnerOptions, type ScenarioResult, type SmokeContext } from './helpers.ts'
+import {
+  cleanupStaleSmokeArtifacts,
+  createSmokeContext,
+  defaultPackagedExe,
+  tailLogFile,
+  type RunnerOptions,
+  type ScenarioResult,
+  type SmokeContext,
+} from './helpers.ts'
 
 import * as runtimeResolution from './scenarios/runtime-resolution.ts'
 import * as sessionHandshake from './scenarios/session-handshake.ts'
@@ -9,6 +17,8 @@ import * as planMode from './scenarios/plan-mode.ts'
 import * as featureDiscovery from './scenarios/feature-discovery.ts'
 import * as language from './scenarios/language.ts'
 import * as installation from './scenarios/installation.ts'
+import * as offlineInstall from './scenarios/offline-install.ts'
+import * as upgrade from './scenarios/upgrade.ts'
 
 const ROOT_DIR = join(import.meta.dir, '..', '..')
 const DEFAULT_TIMEOUT_MS = 120_000
@@ -27,6 +37,8 @@ const SCENARIOS: ScenarioModule[] = [
   featureDiscovery,
   language,
   installation,
+  offlineInstall,
+  upgrade,
 ]
 
 function parseArgs(argv: string[]): RunnerOptions {
@@ -194,11 +206,24 @@ async function main(): Promise<void> {
   // A skipped required scenario provides no release evidence. Treat it as a
   // failure so an unsupported Plan runtime or skipped installer check cannot
   // be reported as a successful Release QA run.
-  const incomplete = results.filter(r => r.status !== 'passed')
+  // Optional environments (offline / upgrade) may legitimately skip when
+  // prerequisites are missing; those skips do not fail the suite.
+  const optionalScenarios = new Set(['offline-install', 'upgrade'])
+  const incomplete = results.filter(r => {
+    if (r.status === 'passed') return false
+    if (r.status === 'skipped' && optionalScenarios.has(r.name)) return false
+    return true
+  })
   const overallStatus = incomplete.length === 0 ? 'success' : 'failure'
 
   const artifactsRoot = join(ROOT_DIR, '.tmp')
   await mkdir(artifactsRoot, { recursive: true })
+
+  // Prune leftover smoke trees so git status / release reports stay clean.
+  const prune = await cleanupStaleSmokeArtifacts({ maxAgeMs: 6 * 60 * 60 * 1000, keepLatest: 2 })
+  if (prune.removed.length > 0) {
+    console.log(`Cleaned ${prune.removed.length} stale smoke artifact dir(s) under .tmp/`)
+  }
 
   const { commit, dirty } = await getCommit()
   const report: SmokeReport = {
