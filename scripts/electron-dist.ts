@@ -1,5 +1,16 @@
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'fs'
 import { join } from 'path'
+import { tmpdir } from 'os'
 import {
   downloadBun,
   copyRipgrep,
@@ -163,9 +174,48 @@ function buildConfig(platform: Platform, arch: Arch): BuildConfig {
   }
 }
 
-function stageRuntimeDependencies(platform: PlatformTarget, arch: Arch): void {
+function sdkBinaryPackage(platform: Platform, arch: Arch): string {
+  if (platform === 'darwin') return `claude-agent-sdk-darwin-${arch}`
+  if (platform === 'win32') return `claude-agent-sdk-win32-${arch}`
+  return `claude-agent-sdk-linux-${arch}`
+}
+
+async function ensureSdkBinaryPackage(platform: Platform, arch: Arch): Promise<void> {
+  const packageName = sdkBinaryPackage(platform, arch)
+  const packagePath = join(ROOT_DIR, 'node_modules', '@anthropic-ai', packageName)
+  if (existsSync(packagePath)) return
+
+  const rootPackage = JSON.parse(readFileSync(join(ROOT_DIR, 'package.json'), 'utf8')) as {
+    dependencies?: Record<string, string>
+    devDependencies?: Record<string, string>
+  }
+  const sdkVersion =
+    rootPackage.dependencies?.['@anthropic-ai/claude-agent-sdk'] ??
+    rootPackage.devDependencies?.['@anthropic-ai/claude-agent-sdk']
+  if (!sdkVersion) {
+    throw new Error('Unable to resolve @anthropic-ai/claude-agent-sdk version for cross-arch packaging')
+  }
+
+  const tempDir = mkdtempSync(join(tmpdir(), 'ohmypi-sdk-'))
+  try {
+    console.log(`Cross-arch build: fetching ${packageName}@${sdkVersion} from npm...`)
+    await run(['npm', 'pack', `@anthropic-ai/${packageName}@${sdkVersion}`], { cwd: tempDir })
+    const tarball = readdirSync(tempDir).find((name) => name.endsWith('.tgz'))
+    if (!tarball) throw new Error(`npm pack did not produce a tarball for ${packageName}`)
+    await run(['tar', '-xzf', tarball], { cwd: tempDir })
+    const unpacked = join(tempDir, 'package')
+    if (!existsSync(unpacked)) throw new Error(`npm pack tarball for ${packageName} did not contain package/`)
+    mkdirSync(join(ROOT_DIR, 'node_modules', '@anthropic-ai'), { recursive: true })
+    cpSync(unpacked, packagePath, { recursive: true, force: true })
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+}
+
+async function stageRuntimeDependencies(platform: PlatformTarget, arch: Arch): Promise<void> {
   const resolvedPlatform = targetPlatform(platform)
   const config = buildConfig(resolvedPlatform, arch)
+  await ensureSdkBinaryPackage(resolvedPlatform, arch)
   copySDK(config)
   verifySDKCopy(config)
   copyRipgrep(config)
@@ -314,7 +364,7 @@ async function main(): Promise<void> {
   }
 
   for (const arch of targetArchs(platform)) {
-    stageRuntimeDependencies(platform, arch)
+    await stageRuntimeDependencies(platform, arch)
     stageOmpRuntimeForTarget(resolvedPlatform, arch)
     const args = builderArgs(platform, { dev, arch, unsignedMac: macTarget && !productionAppleSigning })
     if (productionWindowsSigning) {
