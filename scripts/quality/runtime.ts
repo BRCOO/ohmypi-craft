@@ -7,7 +7,7 @@
  * the actual packaged OMP version rather than a Pi package dependency pin.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
@@ -61,6 +61,7 @@ export async function probeOmpBinaryVersion(
     cwd?: string
     timeoutMs?: number
     spawnProcess?: typeof spawn
+    env?: NodeJS.ProcessEnv
   } = {},
 ): Promise<string | undefined> {
   const spawnProcess = options.spawnProcess ?? spawn
@@ -71,7 +72,7 @@ export async function probeOmpBinaryVersion(
     try {
       child = spawnProcess(runtimePath, ['--version'], {
         cwd: options.cwd,
-        env: process.env,
+        env: options.env ?? process.env,
         windowsHide: true,
       }) as ChildProcessWithoutNullStreams
     } catch {
@@ -134,12 +135,39 @@ export async function validateRuntimeCapability(
 
   const runtimePath = paths.ompRuntimePath
   const workspace = mkdtempSync(join(tmpdir(), 'omp-runtime-capability-'))
+  // OMP refuses to start RPC mode when a fresh runner has no model catalog.
+  // Give the probe an isolated, provider-free catalog so release validation
+  // tests the embedded binary/protocol instead of a developer's home config.
+  const home = mkdtempSync(join(tmpdir(), 'omp-runtime-home-'))
+  const modelsDir = join(home, '.omp', 'agent')
+  mkdirSync(modelsDir, { recursive: true })
+  writeFileSync(
+    join(modelsDir, 'models.yml'),
+    [
+      'providers:',
+      '  smoke:',
+      '    baseUrl: http://127.0.0.1:1',
+      '    api: openai-completions',
+      '    auth: none',
+      '    models:',
+      '      - id: smoke-model',
+      '        name: Smoke Model',
+      '',
+    ].join('\n'),
+    'utf8',
+  )
+  const runtimeEnv = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+  }
 
   let child: ChildProcessWithoutNullStreams | undefined
 
   const cleanup = () => {
     try {
       rmSync(workspace, { recursive: true, force: true })
+      rmSync(home, { recursive: true, force: true })
     } catch {
       // Ignore cleanup failures.
     }
@@ -169,6 +197,7 @@ export async function validateRuntimeCapability(
     cwd: workspace,
     timeoutMs: Math.min(options.timeoutMs ?? 60_000, 5_000),
     spawnProcess,
+    env: runtimeEnv,
   })
   if (!ompVersion) {
     return fail(`Failed to probe OMP binary version from ${runtimePath}`)
@@ -177,7 +206,7 @@ export async function validateRuntimeCapability(
   try {
     child = spawnProcess(runtimePath, ['--mode', 'rpc'], {
       cwd: workspace,
-      env: process.env,
+      env: runtimeEnv,
       windowsHide: true,
     }) as ChildProcessWithoutNullStreams
   } catch (error) {
@@ -191,6 +220,7 @@ export async function validateRuntimeCapability(
     let stateRequested = false
     let planModeRequested = false
     let capabilities: string[] = []
+    let stderrTail = ''
 
     const reader = readline.createInterface({ input: child.stdout })
 
@@ -200,8 +230,10 @@ export async function validateRuntimeCapability(
       resolvePromise(fail(`Timed out after ${timeoutMs}ms while verifying OMP runtime capability`))
     }, timeoutMs)
 
-    child.stderr.on('data', () => {
-      // Drain stderr so the child does not block on a full pipe.
+    child.stderr.on('data', (chunk) => {
+      // Drain stderr so the child does not block on a full pipe, while keeping
+      // enough context to explain an early runtime exit in CI diagnostics.
+      stderrTail = (stderrTail + String(chunk)).slice(-2_000)
     })
 
     child.on('error', (error) => {
@@ -214,7 +246,8 @@ export async function validateRuntimeCapability(
       if (settled) return
       settled = true
       const reason = signal ? `signal ${signal}` : `code ${code ?? 0}`
-      resolvePromise(fail(`OMP runtime exited with ${reason} before capability verification completed`))
+      const detail = stderrTail.trim() ? `: ${stderrTail.trim()}` : ''
+      resolvePromise(fail(`OMP runtime exited with ${reason} before capability verification completed${detail}`))
     })
 
     reader.on('line', async (line) => {
