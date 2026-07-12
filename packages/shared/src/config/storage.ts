@@ -171,7 +171,12 @@ function syncConfigDefaults(): void {
  */
 export function loadConfigDefaults(): ConfigDefaults {
   if (!existsSync(CONFIG_DEFAULTS_FILE)) {
-    throw new Error('config-defaults.json not found at ' + CONFIG_DEFAULTS_FILE + '. Ensure ensureConfigDir() was called at startup.');
+    // Server-side tests and standalone workers can load workspace/session
+    // helpers before the desktop startup sync runs. The bundled defaults are
+    // intentionally available as a deterministic fallback for those callers;
+    // do not make behavior depend on a developer's home-directory state.
+    debug('[config] config-defaults.json not found at ' + CONFIG_DEFAULTS_FILE + ' - using fallback defaults');
+    return JSON.parse(JSON.stringify(FALLBACK_CONFIG_DEFAULTS)) as ConfigDefaults;
   }
 
   const defaults = readJsonFileSync<ConfigDefaults>(CONFIG_DEFAULTS_FILE);
