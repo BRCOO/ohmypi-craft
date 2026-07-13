@@ -1,58 +1,30 @@
 # Security Policy
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
-We take security seriously. If you discover a security vulnerability in Craft Agents, please report it responsibly.
+Please do not report security vulnerabilities through public GitHub issues.
 
-### How to Report
+Use GitHub's private vulnerability reporting flow for this repository:
 
-**Please do NOT report security vulnerabilities through public GitHub issues.**
+1. Open the repository's **Security** tab.
+2. Select **Report a vulnerability**.
+3. Include the affected version, reproduction steps, impact, and any suggested fix.
 
-Instead, please send an email to: **security@craft.do**
+If private vulnerability reporting is unavailable, open a minimal issue asking the maintainers to enable a private channel. Do not include exploit details or credentials in that issue.
 
-Include the following information:
-- Description of the vulnerability
-- Steps to reproduce the issue
-- Potential impact
-- Any suggested fixes (optional)
+## Scope
 
-### What to Expect
+This policy covers the Oh My Pi Desktop application, its server and CLI packages, release workflows, and bundled runtime integrations.
 
-- **Acknowledgment**: We will acknowledge receipt within 48 hours
-- **Initial Assessment**: We will provide an initial assessment within 7 days
-- **Resolution Timeline**: We aim to resolve critical issues within 30 days
+Third-party dependencies should be reported to their respective maintainers.
 
-### Scope
+## Supported versions
 
-This policy applies to:
-- The Craft Agents desktop application
-- The `@craft-agent/*` npm packages
-- Official Craft Agents repositories
+Only the latest published release receives security fixes. Keep the application updated and verify downloaded packages against the SHA256SUMS.txt file attached to each release.
 
-### Out of Scope
+## Security best practices
 
-- Third-party dependencies (report to their maintainers)
-- Social engineering attacks
-- Denial of service attacks
-
-## Supported Versions
-
-| Version | Supported          |
-| ------- | ------------------ |
-| Latest  | :white_check_mark: |
-| < Latest | :x:               |
-
-We only provide security updates for the latest version. Please keep your installation up to date.
-
-## Security Best Practices
-
-When using Craft Agents:
-
-1. **Keep credentials secure**: Never commit `.env` files or credentials
-2. **Use environment variables**: Store secrets in environment variables
-3. **Review permissions**: Be cautious with "Execute" permission mode
-4. **Update regularly**: Keep the application updated
-
-## Acknowledgments
-
-We appreciate responsible disclosure and will acknowledge security researchers who report valid vulnerabilities (with their permission).
+- Never commit `.env` files, API keys, tokens, certificates, or credential stores.
+- Prefer the operating system credential store for provider credentials.
+- Review permission prompts before allowing filesystem, network, or shell actions.
+- Do not paste secrets into public issues, logs, screenshots, or release artifacts.

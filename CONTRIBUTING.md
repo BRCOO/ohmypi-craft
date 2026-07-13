@@ -81,7 +81,7 @@ Keep commits readable and focused. Conventional prefixes such as `feat:`, `fix:`
 - `packages/server-core/` — session orchestration and runtime services
 - `packages/ui/` — shared UI primitives
 - `scripts/` — build, release, and smoke-test automation
-- `docs/superpowers/` — architecture decisions and release QA plans
+- `docs/` — public CLI and release documentation
 
 Keep OMP behavior at the backend boundary when possible. Avoid duplicating runtime state in the renderer, and preserve explicit permission and error states instead of silently falling back.
 

@@ -292,6 +292,15 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Updating existing release $TAG"
             gh release upload "$TAG" "${ASSETS[@]}" --clobber
+            # Remove verbose CI diagnostics from older releases. They remain
+            # available in the short-lived Actions artifacts instead.
+            gh release view "$TAG" --json assets --jq '.assets[].name' | while IFS= read -r asset; do
+              case "$asset" in
+                build-meta-*.json|release-win-*.json|smoke-*.json)
+                  gh release delete-asset "$TAG" "$asset" --yes
+                  ;;
+              esac
+            done
             gh release edit "$TAG" --notes-file release-upload/release-notes.md --target "$COMMIT"
           else
             echo "Creating release $TAG"

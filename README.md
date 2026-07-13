@@ -98,7 +98,7 @@ bun test
 bun run electron:dev
 ```
 
-Release and smoke-test documentation lives in [`docs/superpowers/`](docs/superpowers/), including the [multi-platform release guide](docs/superpowers/github-actions-multiplatform-release.md).
+Release and smoke-test documentation lives in [`docs/release.md`](docs/release.md).
 
 ## Repository layout
 
@@ -113,7 +113,7 @@ packages/server-core/       Session orchestration and runtime services
 packages/pi-agent-server/   Pi/OMP runtime bridge
 packages/ui/                Shared UI primitives
 scripts/                    Build, quality, release, and smoke-test tooling
-docs/                       Architecture decisions and release operations
+docs/                       Public CLI and release documentation
 ```
 
 ## Supported release targets

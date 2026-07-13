@@ -1,6 +1,6 @@
 /**
  * Tests for the internal `uiLanguage` preference field that backs main-process
- * i18n hydration. See packages/shared/CLAUDE.md → "Cross-process language persistence".
+ * i18n hydration across the main and renderer processes.
  *
  * `CONFIG_DIR` is captured at module-load from `process.env.CRAFT_CONFIG_DIR`,
  * so each scenario runs in a subprocess with its own tmpdir — the same pattern

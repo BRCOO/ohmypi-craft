@@ -5,7 +5,7 @@ import { resolve } from 'path'
 
 // NOTE: Source map upload to Sentry is intentionally disabled.
 // To re-enable, uncomment the sentryVitePlugin below and add SENTRY_AUTH_TOKEN,
-// SENTRY_ORG, SENTRY_PROJECT to CI secrets. See CLAUDE.md "Sentry Error Tracking" section.
+// SENTRY_ORG, SENTRY_PROJECT to CI secrets.
 // import { sentryVitePlugin } from '@sentry/vite-plugin'
 
 export default defineConfig({
@@ -22,7 +22,7 @@ export default defineConfig({
       },
     }),
     tailwindcss(),
-    // Sentry source map upload — intentionally disabled. See CLAUDE.md for re-enabling instructions.
+    // Sentry source map upload — intentionally disabled.
     // sentryVitePlugin({
     //   org: process.env.SENTRY_ORG,
     //   project: process.env.SENTRY_PROJECT,
@@ -38,7 +38,7 @@ export default defineConfig({
   build: {
     outDir: resolve(__dirname, 'dist/renderer'),
     emptyDirBeforeWrite: true,
-    sourcemap: true,  // Source maps generated for debugging. Not uploaded to Sentry (see CLAUDE.md).
+    sourcemap: true,  // Source maps generated for debugging, not uploaded to Sentry.
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'src/renderer/index.html'),

@@ -10,7 +10,7 @@
  *   them aligned in one place.
  *
  * Animation rules:
- * - GPU-only properties: transform + opacity (per apps/electron/CLAUDE.md).
+ * - GPU-only properties: transform + opacity.
  * - Forward (navigator → detail): navigator parallaxes left to -30%; detail
  *   slides in from 100%. Same snappy spring as the mobile menu sub-page slide.
  * - Back (detail → navigator): symmetric reverse.

@@ -2503,8 +2503,8 @@ export class PiAgent extends BaseAgent {
    * Sends the full LLMQueryRequest over the `llm_query` RPC so the subprocess's
    * model-aware queryLlm() can honor `request.model`, `request.systemPrompt`,
    * and (transitively via buildCallLlmRequest) `request.outputSchema`.
-   * See packages/shared/CLAUDE.md → "queryLlm backend contract" and
-   * packages/pi-agent-server/src/index.ts → handleLlmQuery for the invariant.
+   * Keep this aligned with the queryLlm backend contract and
+   * packages/pi-agent-server/src/index.ts → handleLlmQuery.
    */
   async queryLlm(request: LLMQueryRequest): Promise<LLMQueryResult> {
     this.debug('[PiAgent.queryLlm] Starting');

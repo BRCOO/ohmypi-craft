@@ -48,8 +48,8 @@ function createBedrockConnection(
 
 describe('Bedrock auth env handling', () => {
   it('resolveAuthEnvVars does not enable Claude Bedrock routing for bedrock connections', async () => {
-    // Per packages/shared/CLAUDE.md: "Pi Bedrock uses its own AWS env path
-    // instead." resolveAuthEnvVars is Anthropic-SDK-only and short-circuits
+    // Pi Bedrock uses its own AWS env path instead. resolveAuthEnvVars is
+    // Anthropic-SDK-only and short-circuits
     // for non-Anthropic providers (including bedrock); the Pi backend wires
     // AWS credentials in its own postInit() path. The contract this test
     // protects is that none of the Claude-specific Bedrock routing env vars

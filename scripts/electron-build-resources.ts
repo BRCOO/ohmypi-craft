@@ -5,7 +5,7 @@
  * resources into dist, so packaged Python-backed document tools can run.
  */
 
-import { existsSync, cpSync } from "fs";
+import { existsSync, cpSync, rmSync } from "fs";
 import { join } from "path";
 import { downloadUv, type Arch, type Platform } from "./build/common";
 
@@ -40,6 +40,10 @@ await downloadUv({
 
 if (existsSync(srcDir)) {
   cpSync(srcDir, destDir, { recursive: true, force: true });
+  // Keep developer-only smoke tests and local context files out of the
+  // installed application. The source copies remain available to CI.
+  rmSync(join(destDir, "AGENTS.md"), { force: true });
+  rmSync(join(destDir, "scripts/tests"), { recursive: true, force: true });
   console.log("Copied resources to dist");
 } else {
   console.log("No resources directory found");

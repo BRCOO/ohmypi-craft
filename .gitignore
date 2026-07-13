@@ -60,6 +60,14 @@ __pycache__/
 # Claude Code local settings (user-specific)
 .claude/settings.local.json
 
+# Local agent context and planning notes (never publish)
+AGENTS.md
+**/AGENTS.md
+CLAUDE.md
+**/CLAUDE.md
+docs/agent-batches/
+docs/superpowers/
+
 # Accidental literal tilde directories (Node.js doesn't expand ~)
 ~/
 

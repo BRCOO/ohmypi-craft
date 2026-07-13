@@ -1,6 +1,6 @@
-# craft-cli — CLI Reference
+# Oh My Pi CLI Reference
 
-Terminal client for Craft Agent server. Connects over WebSocket (`ws://` or `wss://`) to a running headless server.
+Terminal client for the Oh My Pi headless server. It connects over WebSocket (`ws://` or `wss://`) to a running server.
 
 ## Prerequisites
 
@@ -12,8 +12,8 @@ Terminal client for Craft Agent server. Connects over WebSocket (`ws://` or `wss
 
 ```bash
 # Clone the repository
-git clone https://github.com/anthropics/craft-agents.git
-cd craft-agents
+git clone https://github.com/BRCOO/ohmypi-craft.git
+cd ohmypi-craft
 
 # Install dependencies
 bun install

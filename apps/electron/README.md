@@ -45,7 +45,7 @@ bun run electron:validate-release
 - The OMP runtime is resolved from the bundled platform asset during packaging and from the configured development environment during local runs.
 - Provider credentials are configured through the app or local environment; never commit them.
 - Remote/headless mode is opt-in and uses the `CRAFT_SERVER_*` environment contract inherited by the server packages.
-- Release packaging is orchestrated from the repository root. See [`docs/superpowers/github-actions-multiplatform-release.md`](../../docs/superpowers/github-actions-multiplatform-release.md).
+- Release packaging is orchestrated from the repository root. See [`docs/release.md`](../../docs/release.md).
 
 ## UI changes
 

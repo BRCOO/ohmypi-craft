@@ -2,7 +2,7 @@
 /**
  * Assemble multi-platform CI artifacts into a GitHub Release payload.
  *
- * - Collects installers / DMG / ZIP / AppImage / yml / blockmap / reports
+ * - Collects installers / DMG / ZIP / AppImage / yml / blockmaps
  * - Regenerates a unified SHA256SUMS.txt (re-hash on disk)
  * - Writes release-notes.md for gh release
  *
@@ -28,7 +28,7 @@ import { createHash } from 'node:crypto'
 import { basename, join, resolve } from 'node:path'
 
 const DISTRIBUTABLE_PATTERN =
-  /\.(exe|dmg|zip|AppImage|yml|blockmap|json|txt)$/i
+  /\.(exe|dmg|zip|AppImage|yml|blockmap)$/i
 
 export interface AssembleOptions {
   inputDir: string
@@ -80,7 +80,8 @@ export function assembleRelease(options: AssembleOptions): AssembledRelease {
   const outputDir = resolve(options.outputDir)
   mkdirSync(outputDir, { recursive: true })
 
-  const sources = walkFiles(inputDir).filter((p) => shouldPublish(basename(p)))
+  const allSources = walkFiles(inputDir)
+  const sources = allSources.filter((p) => shouldPublish(basename(p)))
   if (sources.length === 0) {
     throw new Error(`No publishable artifacts found under ${inputDir}`)
   }
@@ -120,7 +121,7 @@ export function assembleRelease(options: AssembleOptions): AssembledRelease {
   copied.push(checksumsPath)
 
   const signingSummary: string[] = []
-  for (const file of copied) {
+  for (const file of allSources) {
     const name = basename(file)
     if (/build-meta-.*\.json$/i.test(name) || /^release-win-.*\.json$/i.test(name)) {
       try {

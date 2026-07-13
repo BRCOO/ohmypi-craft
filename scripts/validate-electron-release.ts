@@ -85,7 +85,6 @@ function scanForbiddenBranding(): void {
   const scanRoots = [
     join(ELECTRON_DIR, 'electron-builder.yml'),
     join(ELECTRON_DIR, 'package.json'),
-    join(ELECTRON_DIR, 'resources/AGENTS.md'),
     join(ELECTRON_DIR, 'resources/bridge-mcp-server/index.js'),
     join(ELECTRON_DIR, 'resources/config-defaults.json'),
     join(ELECTRON_DIR, 'resources/docs'),

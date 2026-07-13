@@ -1,7 +1,6 @@
 """Smoke tests for pdf_tool hardening behaviors.
 
 Run manually:
-    cd /Users/balintorosz/Documents/GitHub/craft-agents
     python3 -m unittest apps.electron.resources.scripts.tests.test_pdf_tool_smoke
 """
 

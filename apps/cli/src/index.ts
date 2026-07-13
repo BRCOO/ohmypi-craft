@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * craft-cli — Terminal client for Craft Agent server.
+ * craft-cli — Terminal client for Oh My Pi server.
  *
  * Connects over WebSocket (ws:// or wss://) to a running Craft Agent server
  * and provides commands for listing resources, managing sessions, sending

@@ -141,6 +141,7 @@ describe('assembleRelease', () => {
         commit: 'abc123',
       })
       expect(result.files.some((f) => f.endsWith('SHA256SUMS.txt'))).toBe(true)
+      expect(result.files.some((f) => f.endsWith('build-meta-windows.json'))).toBe(false)
       expect(result.signingSummary.some((s) => s.includes('unsigned'))).toBe(true)
     } finally {
       rmSync(input, { recursive: true, force: true })

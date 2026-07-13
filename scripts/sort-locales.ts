@@ -2,8 +2,8 @@
 /**
  * sort-locales.ts — Sort top-level keys alphabetically in every locale JSON.
  *
- * Convention enforced by `packages/shared/CLAUDE.md` § i18n Rules #7 and the
- * `locale-parity.test.ts` test. New keys appended to a file in any order get
+ * Locale keys are kept sorted and validated alongside the parity checks. New
+ * keys appended to a file in any order get
  * normalized in-place. Run via `bun run sort-locales` (or `--check` in CI).
  *
  * Format: 2-space indent, trailing newline, no other transformations.
