@@ -2,7 +2,7 @@
   "name": "craft-agent",
   "version": "0.10.5",
   "license": "Apache-2.0",
-  "description": "Claude Code-like agent for Craft documents",
+  "description": "Oh My Pi Desktop — a visual, local-first desktop shell for Oh My Pi",
   "type": "module",
   "private": true,
   "trustedDependencies": [

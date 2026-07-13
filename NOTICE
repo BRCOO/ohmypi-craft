@@ -1,15 +1,12 @@
-Craft Agents
-Copyright 2026 Craft Docs Ltd.
+Oh My Pi Desktop
 
-This product includes software developed by Craft Docs Ltd.
-https://craft.do
-
----
+This project includes software derived from the Craft Agents open-source
+project, developed by Craft Docs Ltd. The original project and its
+attribution are preserved in the repository history and licensing files.
 
 This project uses the Claude Agent SDK, which is subject to Anthropic's
-Commercial Terms of Service: https://www.anthropic.com/legal/commercial-terms
-
----
+Commercial Terms of Service:
+https://www.anthropic.com/legal/commercial-terms
 
 Third-party dependencies are listed in package.json files and are subject
 to their respective licenses.

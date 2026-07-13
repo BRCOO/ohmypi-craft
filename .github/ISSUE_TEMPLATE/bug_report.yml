@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a bug or unexpected behavior in Craft Agents
+description: Report a bug or unexpected behavior in Oh My Pi Desktop
 labels: ["bug"]
 body:
   - type: markdown
@@ -10,9 +10,9 @@ body:
   - type: input
     id: version
     attributes:
-      label: Craft Agents Version
-      description: "Found in Settings or the title bar (e.g. 0.4.6)"
-      placeholder: "0.4.6"
+      label: Oh My Pi version
+      description: "Found in Settings, the title bar, or the downloaded artifact name"
+      placeholder: "0.10.5 or development build"
     validations:
       required: true
 
@@ -44,13 +44,14 @@ body:
   - type: dropdown
     id: ai_provider
     attributes:
-      label: AI Provider
+      label: AI provider / backend
       description: Which AI provider/connection are you using?
       options:
-        - Anthropic API (direct)
-        - Anthropic API (custom endpoint)
+        - Oh My Pi (OMP RPC)
+        - Anthropic API
         - OpenAI / Codex
-        - Copilot (GitHub)
+        - Google AI Studio
+        - GitHub Copilot
         - Other
     validations:
       required: true
@@ -113,7 +114,7 @@ body:
       description: |
         For **non-UI issues** (crashes, errors, connection problems), please attach relevant logs from a debug session.
 
-        Launch the app with `-- --debug` and reproduce the issue. See the [Troubleshooting section in the README](https://github.com/craft-ai-agents/craft-agents-oss#troubleshooting) for platform-specific commands and log file locations.
+        Launch the app with `-- --debug` and reproduce the issue. Include the relevant platform, OMP runtime, and Electron logs when possible.
       render: shell
 
   - type: textarea

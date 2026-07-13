@@ -1,120 +1,89 @@
-# Contributing to Craft Agents
+# Contributing to Oh My Pi Desktop
 
-Thank you for your interest in contributing to Craft Agents! This document provides guidelines and instructions for contributing.
+Thanks for helping make Oh My Pi a better visual home for agent work. Contributions are welcome across the desktop UI, OMP integration, runtime tooling, documentation, and release engineering.
 
-## Getting Started
+## Before you start
+
+- Read the [Code of Conduct](CODE_OF_CONDUCT.md).
+- For security issues, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
+- Check existing issues and pull requests before starting larger changes.
+- For substantial behavior changes, open an issue first so the design and scope are clear.
+
+## Development setup
 
 ### Prerequisites
 
-- [Bun](https://bun.sh/) runtime
-- Node.js 18+ (for some tooling)
-- macOS, Linux, or Windows
+- [Bun 1.3.14](https://bun.sh/)
+- Node.js 18+
+- Git
+- macOS, Windows, or Linux for the relevant development target
 
-### Development Setup
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/lukilabs/craft-agents-oss.git
-   cd craft-agents-oss
-   ```
-
-2. Install dependencies:
-   ```bash
-   bun install
-   ```
-
-3. Set up environment variables:
-   ```bash
-   cp .env.example .env
-   # Edit .env with your credentials
-   ```
-
-4. Run in development mode:
-   ```bash
-   bun run electron:dev
-   ```
-
-## Development Workflow
-
-### Branch Naming
-
-Use descriptive branch names:
-- `feature/add-new-tool` - New features
-- `fix/resolve-auth-issue` - Bug fixes
-- `refactor/simplify-agent-loop` - Code refactoring
-- `docs/update-readme` - Documentation updates
-
-### Making Changes
-
-1. Create a feature branch from `main`
-2. Make your changes
-3. Run type checking: `bun run typecheck:all`
-4. Commit your changes with clear, descriptive messages
-5. Push to your fork and create a pull request
-
-### Code Style
-
-- We use TypeScript throughout the codebase
-- Follow existing patterns in the codebase
-- Use meaningful variable and function names
-- Add comments for complex logic
-
-### Type Checking
-
-Before submitting a PR, ensure all type checks pass:
+### Clone and run
 
 ```bash
+git clone https://github.com/BRCOO/ohmypi-craft.git
+cd ohmypi-craft
+bun install
+bun run electron:dev
+```
+
+Provider credentials are configured locally. Never commit `.env` files, API keys, OAuth secrets, credentials, or private workspace data.
+
+## Workflow
+
+1. Create a focused branch from the current development branch.
+2. Make the smallest change that solves the problem.
+3. Add or update tests for behavior changes.
+4. Update user-facing documentation when commands or workflows change.
+5. Run the relevant quality gates before opening a pull request.
+
+Use descriptive branch names such as:
+
+- `feat/omp-model-picker`
+- `fix/session-reconnect`
+- `docs/first-run-guide`
+- `test/rpc-frame-parser`
+
+## Quality gates
+
+Run the fastest relevant checks while iterating:
+
+```bash
+bun run quality:quick
+```
+
+Before a substantial pull request or release-related change, run:
+
+```bash
+bun run quality:verify
 bun run typecheck:all
+bun test
 ```
 
-## Pull Request Process
+For Electron UI changes, also include a manual smoke test and screenshots or a short recording in the pull request description when useful.
 
-1. **Title**: Use a clear, descriptive title
-2. **Description**: Explain what the PR does and why
-3. **Testing**: Describe how you tested the changes
-4. **Screenshots**: Include screenshots for UI changes
+## Pull requests
 
-### PR Template
+Please use the pull request template and include:
 
-```markdown
-## Summary
-Brief description of changes
+- what changed and why;
+- the user-visible behavior;
+- tests and commands run;
+- screenshots for visual changes;
+- follow-up work or known limitations.
 
-## Changes
-- Change 1
-- Change 2
+Keep commits readable and focused. Conventional prefixes such as `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, and `chore:` are encouraged.
 
-## Testing
-How you tested these changes
+## Project orientation
 
-## Screenshots (if applicable)
-```
+- `apps/electron/` — desktop shell and renderer
+- `packages/shared/src/agent/backend/omp/` — OMP RPC adapter
+- `packages/server-core/` — session orchestration and runtime services
+- `packages/ui/` — shared UI primitives
+- `scripts/` — build, release, and smoke-test automation
+- `docs/superpowers/` — architecture decisions and release QA plans
 
-## Project Structure
-
-```
-craft-agents/
-├── apps/
-│   ├── electron/    # Desktop GUI (primary interface)
-│   └── tui/         # Terminal CLI (deprecated)
-└── packages/
-    ├── core/        # @craft-agent/core - Shared types
-    ├── shared/      # @craft-agent/shared - Business logic
-    └── ui/          # @craft-agent/ui - React components
-```
-
-## Key Areas
-
-- **Agent Logic**: `packages/shared/src/agent/`
-- **Authentication**: `packages/shared/src/auth/`
-- **MCP Integration**: `packages/shared/src/mcp/`
-- **UI Components**: `packages/ui/src/`
-- **Electron App**: `apps/electron/`
-
-## Questions?
-
-- Open an issue for bugs or feature requests
-- Start a discussion for questions or ideas
+Keep OMP behavior at the backend boundary when possible. Avoid duplicating runtime state in the renderer, and preserve explicit permission and error states instead of silently falling back.
 
 ## License
 
