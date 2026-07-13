@@ -78,8 +78,15 @@ export async function run(ctx: SmokeContext, opts: RunnerOptions): Promise<Scena
 
     const installDir = join(ctx.runRoot, 'installed')
 
-    // Silent NSIS install.
-    const installResult = await runInstaller([installer, '/S', `/D=${installDir}`], opts.timeoutMs)
+    // Silent NSIS install. The packaged UI smoke runs immediately before this
+    // scenario and Windows can briefly keep a file handle open. NSIS reports
+    // that transient access-denied state as exit code 5; match the retry
+    // behavior used by offline-install instead of rejecting a valid installer.
+    let installResult = await runInstaller([installer, '/S', `/D=${installDir}`], opts.timeoutMs)
+    if (installResult.code === 5) {
+      await new Promise(resolve => setTimeout(resolve, 5_000))
+      installResult = await runInstaller([installer, '/S', `/D=${installDir}`], opts.timeoutMs)
+    }
     if (installResult.code !== 0) {
       throw new Error(`Installer exited with code ${installResult.code}. stderr: ${installResult.stderr}`)
     }
