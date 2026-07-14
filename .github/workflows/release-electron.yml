@@ -5,7 +5,7 @@ name: Release Electron
 # - push v* tags: same builds + GitHub Release assets
 # - workflow_dispatch: manual rebuild; optional release_tag input creates a Release
 #
-# Operator docs: docs/superpowers/github-actions-multiplatform-release.md
+# Operator docs: docs/release.md
 
 on:
   push:

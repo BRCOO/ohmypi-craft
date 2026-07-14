@@ -15,7 +15,6 @@ import type {
 mock.module('pdfjs-dist/build/pdf.worker.min.mjs?url', () => ({ default: '' }))
 mock.module('pdfjs-dist', () => ({ GlobalWorkerOptions: { workerSrc: '' }, getDocument: () => ({}) }))
 setupI18n([initReactI18next])
-i18n.changeLanguage('en')
 
 let CapabilityCard: typeof import('../OmpFeatureCenterSettingsPage').CapabilityCard
 let AdvisorRosterEditor: typeof import('../OmpFeatureCenterSettingsPage').AdvisorRosterEditor
@@ -32,6 +31,7 @@ function normalizeReactServerHtml(html: string): string {
 }
 
 beforeAll(async () => {
+  await i18n.changeLanguage('en')
   const mod = await import('../OmpFeatureCenterSettingsPage')
   CapabilityCard = mod.CapabilityCard
   AdvisorRosterEditor = mod.AdvisorRosterEditor

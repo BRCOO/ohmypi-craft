@@ -62,7 +62,7 @@ packages/server-core/       会话编排和运行时服务
 packages/pi-agent-server/   Pi/OMP 运行时桥接
 packages/ui/                共享 UI 组件
 scripts/                    构建、发布和 Smoke Test 工具
-docs/                       架构决策和发布文档
+docs/                       公共 CLI 和发布文档
 ```
 
 ## 贡献与许可证

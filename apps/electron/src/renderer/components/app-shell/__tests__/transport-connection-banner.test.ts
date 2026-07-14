@@ -1,9 +1,14 @@
-import { describe, expect, it } from 'bun:test'
-import { setupI18n } from '@craft-agent/shared/i18n/setupI18n'
+import { beforeAll, describe, expect, it } from 'bun:test'
+import { initReactI18next } from 'react-i18next'
+import { i18n, setupI18n } from '@craft-agent/shared/i18n'
 
 // Bootstrap i18next with bundled English resources before importing the
 // component-under-test so its top-level i18n.t() calls return real strings.
-setupI18n()
+setupI18n([initReactI18next])
+
+beforeAll(async () => {
+  await i18n.changeLanguage('en')
+})
 
 import {
   getTransportBannerCopy,

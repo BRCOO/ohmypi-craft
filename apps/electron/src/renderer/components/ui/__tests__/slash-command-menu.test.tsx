@@ -86,6 +86,7 @@ function getCommand(sections: SlashSection[], key: string): SlashCommand | undef
 }
 
 beforeAll(async () => {
+  await i18n.changeLanguage('en')
   const mod = await import('../slash-command-menu')
   buildOmpCuratedSections = mod.buildOmpCuratedSections
   filterAvailableOmpCommands = mod.filterAvailableOmpCommands

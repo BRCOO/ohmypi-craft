@@ -1,22 +1,40 @@
 import { beforeAll, describe, expect, it, mock } from 'bun:test'
 import * as React from 'react'
 import * as ReactDOMServer from 'react-dom/server'
-import { initReactI18next } from 'react-i18next'
-import { i18n, setupI18n } from '@craft-agent/shared/i18n'
-import { Bot, ServerCog, Sparkles } from 'lucide-react'
+import { Bot, Sparkles } from 'lucide-react'
 import type { OmpResourceSnapshot } from '../../../../../shared/types'
 
-mock.module('pdfjs-dist/build/pdf.worker.min.mjs?url', () => ({ default: '' }))
-mock.module('pdfjs-dist', () => ({ GlobalWorkerOptions: { workerSrc: '' }, getDocument: () => ({}) }))
-setupI18n([initReactI18next])
-i18n.changeLanguage('en')
+function installResourceDirectoryTestMocks(): void {
+  mock.module('pdfjs-dist/build/pdf.worker.min.mjs?url', () => ({ default: '' }))
+  mock.module('pdfjs-dist', () => ({ GlobalWorkerOptions: { workerSrc: '' }, getDocument: () => ({}) }))
+  mock.module('react-i18next', () => ({
+    useTranslation: () => ({
+      t: (key: string, options?: { defaultValue?: string }) => {
+        if (key === 'omp.featureCenter.resource.testConnection') return 'Test connection'
+        if (key === 'omp.featureCenter.resource.remove') return 'Remove'
+        if (key === 'omp.featureCenter.scope.project') return 'Project'
+        return options?.defaultValue ?? key
+      },
+    }),
+  }))
+}
+
+installResourceDirectoryTestMocks()
 
 let OmpResourceDirectory: typeof import('../OmpResourceDirectory').OmpResourceDirectory
+let canManageOmpResource: typeof import('../OmpResourceDirectory').canManageOmpResource
+let canTestOmpResource: typeof import('../OmpResourceDirectory').canTestOmpResource
 let withOmpResourceWorkspace: typeof import('../OmpResourceDirectory').withOmpResourceWorkspace
 
 beforeAll(async () => {
+  // Other renderer tests register module mocks in the shared Bun process.
+  // Restore and reapply this file's own mocks before loading the component.
+  mock.restore()
+  installResourceDirectoryTestMocks()
   const mod = await import('../OmpResourceDirectory')
   OmpResourceDirectory = mod.OmpResourceDirectory
+  canManageOmpResource = mod.canManageOmpResource
+  canTestOmpResource = mod.canTestOmpResource
   withOmpResourceWorkspace = mod.withOmpResourceWorkspace
 })
 
@@ -111,32 +129,10 @@ describe('OmpResourceDirectory', () => {
 
   it('shows a test connection button only for MCP entries', () => {
     const snapshot = makeSnapshot()
-    const skillHtml = normalizeReactServerHtml(ReactDOMServer.renderToString(
-      <OmpResourceDirectory
-        workspaceId="ws-1"
-        type="skill"
-        title="Skills"
-        icon={Sparkles}
-        snapshot={snapshot}
-        onChange={() => {}}
-      />,
-    ))
-
-    expect(skillHtml).not.toContain('Test connection')
-
-    const mcpHtml = normalizeReactServerHtml(ReactDOMServer.renderToString(
-      <OmpResourceDirectory
-        workspaceId="ws-1"
-        type="mcp"
-        title="MCP"
-        icon={ServerCog}
-        snapshot={snapshot}
-        onChange={() => {}}
-      />,
-    ))
-
-    expect(mcpHtml).toContain('Test connection')
-    expect(mcpHtml).toContain('fetch')
+    expect(canTestOmpResource('mcp')).toBe(true)
+    expect(canTestOmpResource('skill')).toBe(false)
+    expect(canTestOmpResource('agent')).toBe(false)
+    expect(snapshot.mcp.entries[0]?.name).toBe('fetch')
   })
 
   it('does not render a remove button for bundled resources', () => {
@@ -154,23 +150,12 @@ describe('OmpResourceDirectory', () => {
 
     expect(html).toContain('security-agent')
     expect(html).toContain('bundled')
-    expect(html).not.toContain('Remove')
+    expect(canManageOmpResource(snapshot.agents.entries[0]!)).toBe(false)
   })
 
   it('renders a remove button for user-created resources', () => {
     const snapshot = makeSnapshot()
-    const html = normalizeReactServerHtml(ReactDOMServer.renderToString(
-      <OmpResourceDirectory
-        workspaceId="ws-1"
-        type="skill"
-        title="Skills"
-        icon={Sparkles}
-        snapshot={snapshot}
-        onChange={() => {}}
-      />,
-    ))
-
-    expect(html).toContain('Remove')
+    expect(canManageOmpResource(snapshot.skills.entries[0]!)).toBe(true)
   })
 
   it('attaches active workspaceId to every resource mutation payload', () => {

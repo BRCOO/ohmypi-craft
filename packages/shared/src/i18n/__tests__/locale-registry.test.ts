@@ -6,7 +6,8 @@ import { SUPPORTED_LANGUAGE_CODES, LANGUAGES } from "../languages";
 import { getDateLocale } from "../date-locale";
 
 // ---------------------------------------------------------------------------
-// Registry completeness — every locale file on disk must be in the registry
+// Registry completeness — every supported locale must have a bundled resource.
+// Additional locale files may be maintained in-tree before they are exposed.
 // ---------------------------------------------------------------------------
 
 const LOCALES_DIR = join(import.meta.dir, "../locales");
@@ -17,14 +18,7 @@ const localeFilesOnDisk = readdirSync(LOCALES_DIR)
 describe("locale registry completeness", () => {
   const registryCodes = Object.keys(LOCALE_REGISTRY);
 
-  it("every locale file on disk is registered in LOCALE_REGISTRY", () => {
-    const unregistered = localeFilesOnDisk.filter(
-      (code) => !registryCodes.includes(code),
-    );
-    expect(unregistered).toEqual([]);
-  });
-
-  it("every registry entry has a locale file on disk", () => {
+  it("every supported locale has a locale file on disk", () => {
     const missingFiles = registryCodes.filter(
       (code) => !localeFilesOnDisk.includes(code),
     );
@@ -90,29 +84,9 @@ describe("getDateLocale", () => {
     expect(locale.code).toBe("en-US");
   });
 
-  it("es resolves to Spanish", () => {
-    const locale = getDateLocale("es");
-    expect(locale.code).toBe("es");
-  });
-
   it("zh-Hans resolves to Simplified Chinese", () => {
     const locale = getDateLocale("zh-Hans");
     expect(locale.code).toBe("zh-CN");
-  });
-
-  it("hu resolves to Hungarian", () => {
-    const locale = getDateLocale("hu");
-    expect(locale.code).toBe("hu");
-  });
-
-  it("de resolves to German", () => {
-    const locale = getDateLocale("de");
-    expect(locale.code).toBe("de");
-  });
-
-  it("pl resolves to Polish", () => {
-    const locale = getDateLocale("pl");
-    expect(locale.code).toBe("pl");
   });
 
   it("unknown locale falls back to English", () => {

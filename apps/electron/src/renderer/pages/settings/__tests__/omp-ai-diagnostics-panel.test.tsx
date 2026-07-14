@@ -8,7 +8,6 @@ import type { OmpResourceSnapshot } from '../../../../shared/types'
 mock.module('pdfjs-dist/build/pdf.worker.min.mjs?url', () => ({ default: '' }))
 mock.module('pdfjs-dist', () => ({ GlobalWorkerOptions: { workerSrc: '' }, getDocument: () => ({}) }))
 setupI18n([initReactI18next])
-i18n.changeLanguage('zh-Hans')
 
 let OmpAiDiagnosticsPanel: typeof import('../OmpAiDiagnosticsPanel').OmpAiDiagnosticsPanel
 let buildOmpFeatureCountTiles: typeof import('../OmpAiDiagnosticsPanel').buildOmpFeatureCountTiles
@@ -38,6 +37,7 @@ function sampleSnapshot(overrides?: Partial<OmpResourceSnapshot>): OmpResourceSn
 }
 
 beforeAll(async () => {
+  await i18n.changeLanguage('zh-Hans')
   const mod = await import('../OmpAiDiagnosticsPanel')
   OmpAiDiagnosticsPanel = mod.OmpAiDiagnosticsPanel
   buildOmpFeatureCountTiles = mod.buildOmpFeatureCountTiles

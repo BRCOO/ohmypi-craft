@@ -31,6 +31,14 @@ export function withOmpResourceWorkspace<T extends Record<string, unknown>>(
   }
 }
 
+export function canTestOmpResource(type: OmpResourceType): boolean {
+  return type === 'mcp'
+}
+
+export function canManageOmpResource(entry: Pick<OmpResourceEntry, 'source'>): boolean {
+  return entry.source !== 'bundled'
+}
+
 function ScopeBadge({ scope }: { scope: string }) {
   const { t } = useTranslation()
   return (
@@ -444,7 +452,7 @@ export function OmpResourceDirectory({
                   )}
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
-                  {type === 'mcp' && (
+                  {canTestOmpResource(type) && (
                     <Button
                       type="button"
                       variant="ghost"
@@ -469,7 +477,7 @@ export function OmpResourceDirectory({
                       defaultValue: `Enable ${entry.name}`,
                     })}
                   />
-                  {entry.source !== 'bundled' && (
+                  {canManageOmpResource(entry) && (
                     <Button
                       type="button"
                       variant="ghost"
@@ -482,7 +490,7 @@ export function OmpResourceDirectory({
                       <Pencil className="size-3.5" />
                     </Button>
                   )}
-                  {entry.source !== 'bundled' && (
+                  {canManageOmpResource(entry) && (
                     <Button
                       type="button"
                       variant="ghost"

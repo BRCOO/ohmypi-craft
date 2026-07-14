@@ -1,9 +1,17 @@
-import { describe, expect, it, jest } from 'bun:test'
+import { beforeAll, describe, expect, it, jest } from 'bun:test'
 import * as React from 'react'
 import * as ReactDOMServer from 'react-dom/server'
+import { initReactI18next } from 'react-i18next'
+import { i18n, setupI18n } from '@craft-agent/shared/i18n'
 import { OmpSubagentBar } from '../OmpSubagentBar'
 import { OmpSubagentDetail } from '../OmpSubagentDetail'
 import type { OmpSubagentStateDto } from '../../../../shared/types'
+
+setupI18n([initReactI18next])
+
+beforeAll(async () => {
+  await i18n.changeLanguage('en')
+})
 
 function makeState(overrides: Partial<OmpSubagentStateDto> = {}): OmpSubagentStateDto {
   return {
