@@ -299,7 +299,7 @@ export const HELP_LINKS: MenuItemUrl[] = [
     type: 'url',
     id: 'helpAndDocs',
     labelKey: 'menu.helpAndDocs',
-    url: 'https://ohmypi.com/docs',
+    url: 'https://github.com/BRCOO/ohmypi-craft/tree/main/docs',
     icon: 'HelpCircle',
   },
 ]

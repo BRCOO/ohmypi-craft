@@ -126,7 +126,7 @@ if (appPackage.description !== 'Oh My Pi desktop app') {
 if (appPackage.author?.name !== 'Oh My Pi' || appPackage.author?.email !== 'support@ohmypi.com') {
   fail(`unexpected Electron package author`, join(ELECTRON_DIR, 'package.json'))
 }
-if (appPackage.homepage !== 'https://ohmypi.com') {
+if (appPackage.homepage !== 'https://github.com/BRCOO/ohmypi-craft') {
   fail(`unexpected Electron package homepage: ${appPackage.homepage ?? '(missing)'}`, join(ELECTRON_DIR, 'package.json'))
 }
 
@@ -134,7 +134,9 @@ const builderFile = join(ELECTRON_DIR, 'electron-builder.yml')
 requireTextIncludes(builderFile, 'appId: com.ohmypi.desktop')
 requireTextIncludes(builderFile, 'productName: Oh My Pi')
 requireTextIncludes(builderFile, 'executableName: Oh My Pi')
-requireTextIncludes(builderFile, 'url: https://ohmypi.com/electron/latest')
+requireTextIncludes(builderFile, 'provider: github')
+requireTextIncludes(builderFile, 'owner: BRCOO')
+requireTextIncludes(builderFile, 'repo: ohmypi-craft')
 requireTextIncludes(builderFile, 'artifactName: "Oh-My-Pi-Setup-${version}-${arch}.${ext}"')
 requireTextIncludes(builderFile, 'artifactName: "Oh-My-Pi-${arch}.dmg"')
 requireTextIncludes(builderFile, 'shortcutName: "Oh My Pi"')

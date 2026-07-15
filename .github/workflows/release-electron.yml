@@ -11,8 +11,6 @@ on:
   push:
     branches:
       - main
-      # Keep the current development branch buildable until it is merged into main.
-      - codex/omp-rpc-backend
     tags:
       - 'v*'
   workflow_dispatch:

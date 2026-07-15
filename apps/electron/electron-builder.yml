@@ -74,10 +74,12 @@ files:
 extraMetadata:
   main: dist/main.cjs
 
-# Auto-update: electron-updater fetches from this URL for update manifests (.yml files)
+# Auto-update: electron-updater resolves public GitHub Release assets.
 publish:
-  provider: generic
-  url: https://ohmypi.com/electron/latest
+  provider: github
+  owner: BRCOO
+  repo: ohmypi-craft
+  releaseType: release
 
 # Disable ASAR to avoid decompression overhead and click delays
 asar: false

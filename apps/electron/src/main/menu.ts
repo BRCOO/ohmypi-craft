@@ -234,7 +234,7 @@ export async function rebuildMenu(): Promise<void> {
       submenu: [
         {
           label: i18n.t("menu.helpAndDocs"),
-          click: () => shell.openExternal('https://ohmypi.com/docs')
+          click: () => shell.openExternal('https://github.com/BRCOO/ohmypi-craft/tree/main/docs')
         },
         {
           label: i18n.t("menu.keyboardShortcuts"),

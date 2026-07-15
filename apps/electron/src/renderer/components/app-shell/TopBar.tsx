@@ -318,7 +318,7 @@ export function TopBar({
               <Icons.ExternalLink className="h-3 w-3 text-muted-foreground" />
             </StyledDropdownMenuItem>
             <StyledDropdownMenuSeparator />
-            <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl('https://ohmypi.com/docs')}>
+            <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl('https://github.com/BRCOO/ohmypi-craft/tree/main/docs')}>
               <Icons.ExternalLink className="h-3.5 w-3.5" />
               <span className="flex-1">{t("menu.allDocumentation")}</span>
             </StyledDropdownMenuItem>

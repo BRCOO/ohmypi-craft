@@ -8,7 +8,7 @@
     "name": "Oh My Pi",
     "email": "support@ohmypi.com"
   },
-  "homepage": "https://ohmypi.com",
+  "homepage": "https://github.com/BRCOO/ohmypi-craft",
   "license": "Apache-2.0",
   "type": "module",
   "engines": {
