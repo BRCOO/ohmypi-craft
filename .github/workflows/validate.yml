@@ -18,6 +18,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The changed-file i18n lint compares against an explicit baseline.
+          # Keep the full history available for push and manual runs as well as PRs.
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -43,3 +47,5 @@ jobs:
 
       - name: Run validation suite
         run: bun run validate:ci
+        env:
+          I18N_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || github.event.repository.default_branch }}
