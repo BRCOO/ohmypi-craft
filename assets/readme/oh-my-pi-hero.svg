@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="390" viewBox="0 0 1200 390" role="img" aria-labelledby="title desc">
+  <title id="title">Oh My Pi Desktop</title>
+  <desc id="desc">A local-first visual workspace connecting durable sessions to the Oh My Pi runtime through a typed RPC bridge.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111936"/>
+      <stop offset="0.55" stop-color="#171536"/>
+      <stop offset="1" stop-color="#09111f"/>
+    </linearGradient>
+    <linearGradient id="orb" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8b7bff"/>
+      <stop offset="1" stop-color="#79d8ff"/>
+    </linearGradient>
+    <linearGradient id="pi" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#c4f4ff"/>
+      <stop offset="1" stop-color="#79d8ff"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="390" rx="28" fill="url(#bg)"/>
+  <path d="M690 72C810 18 1043 44 1151 147C1211 205 1167 311 1027 350C888 389 745 349 697 273C655 207 622 103 690 72Z" fill="#ffffff" fill-opacity=".025"/>
+  <path d="M60 322H1140" stroke="#ffffff" stroke-opacity=".09"/>
+
+  <g id="title-block" transform="translate(64 55)">
+    <text x="0" y="0" fill="#9ba5c6" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" letter-spacing="2.4">LOCAL-FIRST / AGENT WORKSPACE</text>
+    <text x="0" y="68" fill="#f4f7fb" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif" font-size="56" font-weight="760" letter-spacing="-2">Oh My Pi</text>
+    <text x="0" y="116" fill="#79d8ff" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif" font-size="34" font-weight="650" letter-spacing="-1">Desktop</text>
+    <text x="0" y="163" fill="#d7dded" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif" font-size="21">A visual home for sessions, tools,</text>
+    <text x="0" y="192" fill="#d7dded" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif" font-size="21">models, permissions, and long-running work.</text>
+
+    <g transform="translate(0 232)">
+      <rect x="0" y="0" width="126" height="34" rx="17" fill="#ffffff" fill-opacity=".1" stroke="#ffffff" stroke-opacity=".14"/>
+      <text x="63" y="22" fill="#dfe6f5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" text-anchor="middle" letter-spacing="1">SESSIONS</text>
+      <rect x="138" y="0" width="104" height="34" rx="17" fill="#ffffff" fill-opacity=".1" stroke="#ffffff" stroke-opacity=".14"/>
+      <text x="190" y="22" fill="#dfe6f5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" text-anchor="middle" letter-spacing="1">TOOLS</text>
+      <rect x="254" y="0" width="148" height="34" rx="17" fill="#ffffff" fill-opacity=".1" stroke="#ffffff" stroke-opacity=".14"/>
+      <text x="328" y="22" fill="#dfe6f5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" text-anchor="middle" letter-spacing="1">PERMISSIONS</text>
+    </g>
+  </g>
+
+  <g id="project-flow" transform="translate(700 55)">
+    <path d="M55 156C110 65 265 49 362 125C427 176 404 277 313 292C212 309 77 264 55 156Z" fill="none" stroke="url(#orb)" stroke-width="3" stroke-opacity=".82"/>
+    <path d="M76 183C145 250 266 251 336 197" fill="none" stroke="#ffffff" stroke-width="1" stroke-opacity=".18" stroke-dasharray="5 8"/>
+
+    <g transform="translate(0 0)">
+      <rect x="0" y="0" width="186" height="92" rx="18" fill="#f4f7fb" fill-opacity=".97"/>
+      <circle cx="24" cy="24" r="6" fill="#8b7bff"/>
+      <text x="42" y="30" fill="#202943" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" letter-spacing="1">SESSION</text>
+      <text x="24" y="59" fill="#111936" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="18" font-weight="700">Visible work</text>
+      <text x="24" y="80" fill="#5d6680" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">plans · tools · diffs</text>
+    </g>
+
+    <g transform="translate(236 112)">
+      <rect x="0" y="0" width="190" height="96" rx="18" fill="#182345" stroke="#79d8ff" stroke-opacity=".65"/>
+      <path d="M24 27h45M24 39h31M24 51h38" stroke="#79d8ff" stroke-width="4" stroke-linecap="round"/>
+      <text x="24" y="77" fill="#e8f7ff" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" letter-spacing="1">OMP RPC</text>
+    </g>
+
+    <g transform="translate(24 246)">
+      <rect x="0" y="0" width="196" height="72" rx="18" fill="#201d48" stroke="#8b7bff" stroke-opacity=".7"/>
+      <circle cx="25" cy="25" r="10" fill="none" stroke="#c4f4ff" stroke-width="3"/>
+      <path d="M20 25h10M25 20v10" stroke="#c4f4ff" stroke-width="2" stroke-linecap="round"/>
+      <text x="49" y="31" fill="#f0edff" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" letter-spacing="1">RUNTIME</text>
+      <text x="49" y="51" fill="#a8a4d4" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">local process / JSONL</text>
+    </g>
+
+    <circle cx="224" cy="88" r="5" fill="#c4f4ff"/>
+    <circle cx="435" cy="213" r="5" fill="#8b7bff"/>
+    <circle cx="246" cy="254" r="5" fill="#79d8ff"/>
+    <text x="0" y="353" fill="#9ba5c6" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" letter-spacing="1">ELECTRON + REACT  /  TYPED EVENTS  /  LOCAL STATE</text>
+  </g>
+</svg>

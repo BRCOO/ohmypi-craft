@@ -1,70 +1,72 @@
-<div align="center">
-  <img src="apps/electron/resources/source.png" alt="Oh My Pi" width="112" />
-  <h1>Oh My Pi Desktop</h1>
-  <p><strong>A visual, local-first desktop shell for Oh My Pi.</strong></p>
-  <p>Bring terminal-grade agent work into a durable desktop workspace with sessions, tools, models, permissions, and long-running tasks you can see and control.</p>
+<p align="center">
+  <img src="./assets/readme/oh-my-pi-hero.svg" width="100%" alt="Oh My Pi Desktop: a local-first visual workspace connecting durable sessions to the Oh My Pi runtime" />
+</p>
 
-  <p>
-    <a href="https://github.com/BRCOO/ohmypi-craft/actions/workflows/release-electron.yml"><img src="https://github.com/BRCOO/ohmypi-craft/actions/workflows/release-electron.yml/badge.svg" alt="Release builds" /></a>
-    <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-5b8def.svg" alt="Apache 2.0 license" /></a>
-    <a href="https://github.com/BRCOO/ohmypi-craft/stargazers"><img src="https://img.shields.io/github/stars/BRCOO/ohmypi-craft?style=flat&logo=github" alt="GitHub stars" /></a>
-    <a href="https://github.com/BRCOO/ohmypi-craft/issues"><img src="https://img.shields.io/github/issues/BRCOO/ohmypi-craft" alt="GitHub issues" /></a>
-  </p>
+<p align="center">
+  <a href="https://github.com/BRCOO/ohmypi-craft/releases/latest"><img src="https://img.shields.io/github/v/release/BRCOO/ohmypi-craft?label=latest%20release&color=79d8ff" alt="Latest release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-8b7bff.svg" alt="Apache 2.0 license" /></a>
+  <a href="https://github.com/BRCOO/ohmypi-craft/stargazers"><img src="https://img.shields.io/github/stars/BRCOO/ohmypi-craft?style=flat&logo=github" alt="GitHub stars" /></a>
+  <a href="https://github.com/BRCOO/ohmypi-craft/issues"><img src="https://img.shields.io/github/issues/BRCOO/ohmypi-craft" alt="GitHub issues" /></a>
+</p>
 
-  <p>
-    <a href="README.zh-CN.md">中文文档</a> ·
-    <a href="https://ohmypi.com">Website</a> ·
-    <a href="CONTRIBUTING.md">Contributing</a> ·
-    <a href="SECURITY.md">Security</a>
-  </p>
-</div>
+<p align="center">
+  <a href="https://github.com/BRCOO/ohmypi-craft/releases/latest">Download</a> ·
+  <a href="README.zh-CN.md">中文文档</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="SECURITY.md">Security</a>
+</p>
 
 > **Status: active development.** Oh My Pi Desktop is an evolving open-source project. APIs, packaging, and provider integrations may change while the desktop shell reaches release quality.
 
-## Why Oh My Pi Desktop?
+## Download
 
-Oh My Pi is powerful in the terminal. Oh My Pi Desktop gives that workflow a visual home without hiding the parts developers need to trust:
+Grab the latest packages from the [GitHub Releases page](https://github.com/BRCOO/ohmypi-craft/releases/latest):
 
-- **See the work** — stream agent output, tool calls, plans, files, diffs, and diagnostics in one place.
-- **Keep sessions durable** — organize parallel work in a multi-session workspace instead of losing context in terminal tabs.
-- **Stay in control** — choose permission modes, models, providers, sources, skills, and MCP tools explicitly.
-- **Run locally first** — the desktop shell and OMP runtime are designed around local workspaces and inspectable state.
-- **Scale the workflow** — use the Electron desktop app for daily work or the headless server/CLI surfaces for automation and remote execution.
-
-## What is included
-
-| Capability | What it provides |
+| Platform | Package |
 | --- | --- |
-| Multi-session inbox | Durable sessions, status workflow, flags, search, and session actions |
-| OMP RPC backend | A typed bridge from the desktop shell to the Oh My Pi runtime over stdio |
-| Model control | Provider onboarding, model discovery, model selection, and per-session control |
-| Permission modes | Explore, Ask to Edit, and Auto-style workflows with visible state |
-| Sources and tools | MCP servers, REST/API sources, local files, Skills, and Agents management |
-| Visual agent loop | Streaming messages, tool cards, plans, todos, diffs, and extension UI requests |
-| Cross-platform packaging | GitHub Actions release pipeline for macOS, Windows, and Linux artifacts |
+| macOS | Apple Silicon and Intel `.dmg` / `.zip` |
+| Windows | x64 NSIS installer `.exe` |
+| Linux | x64 `.AppImage` |
+
+Current packages are unsigned. On macOS, Gatekeeper may require an explicit confirmation; on Windows, SmartScreen may show a warning. Verify the downloaded file with the attached `SHA256SUMS.txt` before launching it.
+
+## What is Oh My Pi Desktop?
+
+Oh My Pi Desktop is a visual, local-first workspace for [Oh My Pi](https://github.com/can1357/oh-my-pi). It brings terminal-grade agent work into a durable desktop surface where sessions, tools, models, permissions, and long-running tasks stay visible and recoverable.
+
+The desktop shell owns the workspace and presentation layer. The Oh My Pi runtime remains the execution layer, connected through a typed JSONL RPC bridge.
+
+## What you can see and control
+
+- **Durable sessions** — organize parallel work with status, search, flags, and session actions.
+- **The complete agent loop** — inspect streamed messages, tool calls, plans, todos, diffs, and diagnostics.
+- **Explicit permissions** — choose how much autonomy a session has instead of hiding the boundary.
+- **Models and providers** — onboard providers, discover models, and control configuration per session.
+- **Sources and tools** — manage MCP servers, REST/API sources, local files, Skills, and Agents.
+- **Desktop or headless workflows** — use Electron for daily work, or the server/CLI surfaces for automation and remote execution.
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    UI[Oh My Pi Desktop\nElectron + React] --> Sessions[Session orchestration]
-    Sessions --> Backend[OMP RPC backend\nJSONL over stdio]
-    Backend --> Runtime[Oh My Pi runtime]
-    UI --> Sources[MCP · Skills · Sources]
+    UI["Desktop shell<br/>Electron + React"] --> Sessions["Durable sessions"]
+    Sessions --> RPC["OMP RPC backend<br/>JSONL over stdio"]
+    RPC --> Runtime["Oh My Pi runtime"]
+    UI --> Sources["MCP · Skills · Sources"]
     Sources --> Sessions
 ```
 
-The desktop app owns the workspace, session history, permissions, and presentation layer. Oh My Pi remains the agent runtime. The OMP backend translates runtime frames into typed desktop events and keeps session state synchronized.
+The UI keeps session state, permissions, and presentation coherent while the RPC backend translates runtime frames into typed desktop events. This separation keeps the runtime inspectable and the visual layer replaceable.
 
-## Quick start
+## Quick start from source
 
 ### Prerequisites
 
-- [Bun 1.3.14](https://bun.sh/) (the version used by CI)
+- [Bun 1.3.14](https://bun.sh/) — the version used by CI
 - Git
 - Node.js 18+ for auxiliary tooling
 
-### Run from source
+### Run the desktop app
 
 ```bash
 git clone https://github.com/BRCOO/ohmypi-craft.git
@@ -79,7 +81,7 @@ For a production-like local build:
 bun run electron:start
 ```
 
-Provider credentials and integrations are configured from the app. Keep local secrets in `.env` or the OS credential store; never commit them.
+Configure provider credentials and integrations from the app or your local environment. Keep secrets in `.env` or the OS credential store; never commit them.
 
 ## Development commands
 
@@ -93,12 +95,17 @@ bun run quality:verify
 # Type checks and tests
 bun run typecheck:all
 bun test
-
-# Electron development server
-bun run electron:dev
 ```
 
-Release and smoke-test documentation lives in [`docs/release.md`](docs/release.md).
+For the CLI surface, see [`docs/cli.md`](docs/cli.md). Release and smoke-test procedures live in [`docs/release.md`](docs/release.md).
+
+## Supported release targets
+
+- macOS: Apple Silicon and Intel
+- Windows: x64
+- Linux: x64
+
+The release workflow packages a pinned Oh My Pi runtime for each target. Signing and notarization are optional CI capabilities configured through repository secrets.
 
 ## Repository layout
 
@@ -116,19 +123,9 @@ scripts/                    Build, quality, release, and smoke-test tooling
 docs/                       Public CLI and release documentation
 ```
 
-## Supported release targets
-
-The release workflow builds:
-
-- macOS: Apple Silicon and Intel
-- Windows: x64
-- Linux: x64
-
-Unsigned local artifacts are supported for development. Production signing and notarization are optional CI capabilities configured through repository secrets.
-
 ## Privacy and security
 
-Oh My Pi Desktop is built for local-first agent work. Workspace data and credentials are handled by the local application layers; remote server mode is opt-in and protected by an explicit token. Read [`SECURITY.md`](SECURITY.md) before reporting a vulnerability, and do not include API keys, credentials, or private workspace data in issues.
+Oh My Pi Desktop is built for local-first agent work. Workspace data and credentials are handled by local application layers; remote server mode is opt-in and protected by an explicit token. Review [`SECURITY.md`](SECURITY.md) before reporting a vulnerability, and never include API keys, credentials, or private workspace data in issues.
 
 ## Contributing
 
