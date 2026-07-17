@@ -83,8 +83,8 @@ export async function run(ctx: SmokeContext, opts: RunnerOptions): Promise<Scena
     // that transient access-denied state as exit code 5; match the retry
     // behavior used by offline-install instead of rejecting a valid installer.
     let installResult = await runInstaller([installer, '/S', `/D=${installDir}`], opts.timeoutMs)
-    if (installResult.code === 5) {
-      await new Promise(resolve => setTimeout(resolve, 5_000))
+    for (let attempt = 1; installResult.code === 5 && attempt <= 3; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5_000 * attempt))
       installResult = await runInstaller([installer, '/S', `/D=${installDir}`], opts.timeoutMs)
     }
     if (installResult.code !== 0) {
