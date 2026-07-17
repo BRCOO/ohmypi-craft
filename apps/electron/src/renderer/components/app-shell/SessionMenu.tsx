@@ -45,6 +45,8 @@ import { getSessionStatus, hasUnreadMeta, hasMessagesMeta } from '@/utils/sessio
 import { MessagingSessionMenuItem } from '@/components/messaging/MessagingSessionMenuItem'
 import { useSessionMenuActions } from '@/hooks/useSessionMenuActions'
 import { OmpBranchDialog } from './OmpBranchDialog'
+import { OmpCapabilityGate } from './OmpCapabilityGate'
+import { OmpSessionTreeDialog } from './OmpSessionTreeDialog'
 
 export interface SessionMenuProps {
   /** Session data — display state is derived from this */
@@ -160,6 +162,40 @@ export function SessionMenu({
             <FileCode2 className="h-3.5 w-3.5 text-blue-300" />
             <span className="flex-1">{t("sessionMenu.ompExportHtml")}</span>
           </MenuItem>
+          <OmpCapabilityGate
+            sessionId={sessionId}
+            feature="session.tree"
+            command="fork_session"
+            fallback={
+              <span className="flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground">
+                <GitBranch className="h-3.5 w-3.5" />
+                {t('sessionMenu.ompFork', { defaultValue: 'Fork session' })}
+                <span className="text-xs">({t('omp.capabilityUnsupported', { defaultValue: 'unsupported' })})</span>
+              </span>
+            }
+          >
+            <MenuItem onClick={actions.forkOmpSession} disabled={item.isProcessing}>
+              <GitBranch className="h-3.5 w-3.5 text-emerald-300" />
+              <span className="flex-1">{t('sessionMenu.ompFork', { defaultValue: 'Fork session' })}</span>
+            </MenuItem>
+          </OmpCapabilityGate>
+          <OmpCapabilityGate
+            sessionId={sessionId}
+            feature="session.tree"
+            command="get_session_tree"
+            fallback={
+              <span className="flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground">
+                <GitBranch className="h-3.5 w-3.5" />
+                {t('sessionMenu.ompTree', { defaultValue: 'Session tree' })}
+                <span className="text-xs">({t('omp.capabilityUnsupported', { defaultValue: 'unsupported' })})</span>
+              </span>
+            }
+          >
+            <MenuItem onClick={actions.openSessionTreeDialog} disabled={item.isProcessing}>
+              <GitBranch className="h-3.5 w-3.5 text-sky-300" />
+              <span className="flex-1">{t('sessionMenu.ompTree', { defaultValue: 'Session tree' })}</span>
+            </MenuItem>
+          </OmpCapabilityGate>
         </>
       )}
 
@@ -298,6 +334,11 @@ export function SessionMenu({
         options={actions.ompBranchDialog.options}
         onClose={actions.closeOmpBranchDialog}
         onSelect={actions.selectOmpBranchOption}
+      />
+      <OmpSessionTreeDialog
+        state={actions.sessionTreeDialog}
+        onClose={actions.closeSessionTreeDialog}
+        onSwitch={actions.switchOmpSession}
       />
     </>
   )

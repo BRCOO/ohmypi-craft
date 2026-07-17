@@ -29,11 +29,13 @@ const NODE_EXE = process.env.NODE_EXE ?? Bun.which('node') ?? 'node'
 const ELECTRON_BUILDER_CLI = join(ROOT_DIR, 'node_modules/electron-builder/out/cli/cli.js')
 
 type PlatformTarget = 'current' | 'mac' | 'win' | 'linux'
+type WindowsTarget = 'nsis' | 'portable'
 
-function parseArgs(): { platform: PlatformTarget; dev: boolean; skipBuild: boolean } {
+function parseArgs(): { platform: PlatformTarget; dev: boolean; skipBuild: boolean; winTarget: WindowsTarget } {
   let platform: PlatformTarget = 'current'
   let dev = false
   let skipBuild = false
+  let winTarget: WindowsTarget = 'nsis'
 
   for (const arg of process.argv.slice(2)) {
     if (arg === '--dev') {
@@ -46,12 +48,22 @@ function parseArgs(): { platform: PlatformTarget; dev: boolean; skipBuild: boole
         throw new Error(`Unsupported platform "${value}". Use current, mac, win, or linux.`)
       }
       platform = value as PlatformTarget
+    } else if (arg.startsWith('--win-target=')) {
+      const value = arg.slice('--win-target='.length)
+      if (value !== 'nsis' && value !== 'portable') {
+        throw new Error(`Unsupported Windows target "${value}". Use nsis or portable.`)
+      }
+      winTarget = value
     } else {
       throw new Error(`Unknown argument: ${arg}`)
     }
   }
 
-  return { platform, dev, skipBuild }
+  if (winTarget !== 'nsis' && platform !== 'win' && platform !== 'current') {
+    throw new Error('--win-target can only be used for a Windows build.')
+  }
+
+  return { platform, dev, skipBuild, winTarget }
 }
 
 async function run(cmd: string[], options: { cwd: string; env?: Record<string, string | undefined> }): Promise<void> {
@@ -72,10 +84,20 @@ async function run(cmd: string[], options: { cwd: string; env?: Record<string, s
   }
 }
 
-function builderArgs(platform: PlatformTarget, options: { dev: boolean; arch: Arch; unsignedMac?: boolean }): string[] {
+function builderArgs(
+  platform: PlatformTarget,
+  options: { dev: boolean; arch: Arch; unsignedMac?: boolean; winTarget?: WindowsTarget },
+): string[] {
   const args = ['--config', 'electron-builder.yml']
   if (platform !== 'current') {
     args.push(`--${platform}`)
+  }
+  if (targetPlatform(platform) === 'win32' && options.winTarget === 'portable') {
+    // electron-builder accepts a target list after --win. Override the
+    // artifact name so a portable executable never collides with the NSIS
+    // installer, which uses the checked-in default name.
+    if (platform === 'current') args.push('--win')
+    args.push('portable', '--config.win.artifactName=Oh-My-Pi-Portable-${version}-${arch}.${ext}')
   }
   if (platform === 'mac') {
     // The checked-in mac target list contains both architectures. Passing
@@ -309,22 +331,22 @@ function stageOmpRuntimeForTarget(platform: Platform, arch: Arch): void {
 }
 
 async function main(): Promise<void> {
-  const { platform, dev, skipBuild } = parseArgs()
+  const { platform, dev, skipBuild, winTarget } = parseArgs()
   if (!existsSync(ELECTRON_BUILDER_CLI)) {
     throw new Error(`electron-builder CLI not found at ${ELECTRON_BUILDER_CLI}. Run bun install first.`)
   }
 
   const env: Record<string, string | undefined> = {}
   const resolvedPlatform = targetPlatform(platform)
-  const winTarget = resolvedPlatform === 'win32'
+  const windowsBuild = resolvedPlatform === 'win32'
   const macTarget = resolvedPlatform === 'darwin'
-  const productionWindowsSigning = !dev && winTarget && hasWindowsSigningCredentials()
+  const productionWindowsSigning = !dev && windowsBuild && hasWindowsSigningCredentials()
   const productionAppleSigning = !dev && macTarget && hasAppleSigningCredentials()
 
   if (dev) {
     env.CRAFT_DEV_RUNTIME = '1'
     env.CSC_IDENTITY_AUTO_DISCOVERY = 'false'
-  } else if (winTarget) {
+  } else if (windowsBuild) {
     if (productionWindowsSigning) {
       // Formal Windows Authenticode signing for release candidates.
       env.CSC_IDENTITY_AUTO_DISCOVERY = 'true'
@@ -374,10 +396,20 @@ async function main(): Promise<void> {
   for (const arch of targetArchs(platform)) {
     await stageRuntimeDependencies(platform, arch)
     stageOmpRuntimeForTarget(resolvedPlatform, arch)
-    const args = builderArgs(platform, { dev, arch, unsignedMac: macTarget && !productionAppleSigning })
+    const args = builderArgs(platform, {
+      dev,
+      arch,
+      winTarget: winTarget === 'portable' && resolvedPlatform === 'win32' ? 'portable' : undefined,
+      unsignedMac: macTarget && !productionAppleSigning,
+    })
     if (productionWindowsSigning) {
       // Override electron-builder.yml default so the cert can edit PE resources.
       args.push('--config.win.signAndEditExecutable=true')
+    } else if (windowsBuild) {
+      // Portable and installer artifacts are intentionally unsigned when no
+      // certificate is configured. Skipping PE resource editing also avoids
+      // downloading the winCodeSign helper during local/CI builds.
+      args.push('--config.win.signAndEditExecutable=false')
     }
     await run([NODE_EXE, ELECTRON_BUILDER_CLI, ...args], {
       cwd: ELECTRON_DIR,

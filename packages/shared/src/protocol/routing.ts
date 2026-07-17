@@ -213,6 +213,9 @@ export const LOCAL_ONLY_CHANNELS = new Set<string>([
   RPC_CHANNELS.settings.GET_SERVER_CONFIG,
   RPC_CHANNELS.settings.SET_SERVER_CONFIG,
   RPC_CHANNELS.settings.GET_SERVER_STATUS,
+
+  // audio — speech-to-text requires local microphone access
+  RPC_CHANNELS.audio.TRANSCRIBE,
 ])
 
 // ---------------------------------------------------------------------------
@@ -339,6 +342,7 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.omp.CLEAR_COMMAND_PATH,
   RPC_CHANNELS.omp.GET_LOGIN_PROVIDERS,
   RPC_CHANNELS.omp.LOGIN_PROVIDER,
+  RPC_CHANNELS.omp.LOGOUT_PROVIDER,
   RPC_CHANNELS.omp.GET_DIAGNOSTICS_SUMMARY,
   RPC_CHANNELS.omp.GET_FEATURE_CENTER_STATE,
   RPC_CHANNELS.omp.SAVE_FEATURE_CENTER_CONFIG,

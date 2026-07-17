@@ -1,4 +1,4 @@
-import type { ModelDefinition } from '../../../config/models.ts';
+import type { ModelDefinition, ModelThinkingLevel } from '../../../config/models.ts';
 
 export const DEFAULT_OMP_CONTEXT_WINDOW = 128_000;
 
@@ -14,6 +14,29 @@ function contextWindow(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : DEFAULT_OMP_CONTEXT_WINDOW;
+}
+
+function supportedThinkingLevels(rawModel: Record<string, unknown>): ModelThinkingLevel[] | undefined {
+  const thinking = isRecord(rawModel.thinking) ? rawModel.thinking : null;
+  const rawEfforts = Array.isArray(thinking?.efforts) ? thinking.efforts : null;
+  if (!rawEfforts) return undefined;
+
+  const levelByOmpEffort: Record<string, ModelThinkingLevel> = {
+    minimal: 'minimal',
+    low: 'low',
+    medium: 'medium',
+    high: 'high',
+    xhigh: 'xhigh',
+  };
+  const supported = new Set<ModelThinkingLevel>(['off']);
+  for (const effort of rawEfforts) {
+    if (typeof effort !== 'string') continue;
+    const level = levelByOmpEffort[effort];
+    if (level) supported.add(level);
+  }
+
+  const ordered: ModelThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+  return ordered.filter((level) => supported.has(level));
 }
 
 export function normalizeOmpModels(rawModels: unknown): ModelDefinition[] {
@@ -36,6 +59,7 @@ export function normalizeOmpModels(rawModels: unknown): ModelDefinition[] {
     const baseName = nonEmptyString(rawModel.name) ?? rawId;
     const input = Array.isArray(rawModel.input) ? rawModel.input : [];
 
+    const thinkingLevels = supportedThinkingLevels(rawModel);
     models.push({
       id,
       name: `${baseName} · ${provider}`,
@@ -44,6 +68,7 @@ export function normalizeOmpModels(rawModels: unknown): ModelDefinition[] {
       provider: 'omp',
       contextWindow: contextWindow(rawModel.contextWindow),
       supportsThinking: rawModel.reasoning === true || rawModel.thinking != null,
+      ...(thinkingLevels ? { supportedThinkingLevels: thinkingLevels } : {}),
       supportsImages: input.includes('image'),
     });
   }

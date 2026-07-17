@@ -416,12 +416,18 @@ export default function WorkspaceSettingsPage() {
                 title={t("settings.workspace.renameWorkspace")}
                 value={wsNameEditing}
                 onValueChange={setWsNameEditing}
-                onSubmit={() => {
+                onSubmit={async () => {
                   const newName = wsNameEditing.trim()
                   if (newName && newName !== wsName) {
-                    setWsName(newName)
-                    updateWorkspaceSetting('name', newName)
-                    onRefreshWorkspaces?.()
+                    // Do not commit the optimistic label locally until the
+                    // backend confirms the write.  Previously a rejected
+                    // rename left this page showing a name that was not
+                    // persisted and only corrected itself after a reload.
+                    const saved = await updateWorkspaceSetting('name', newName)
+                    if (saved) {
+                      setWsName(newName)
+                      onRefreshWorkspaces?.()
+                    }
                   }
                   setRenameDialogOpen(false)
                 }}

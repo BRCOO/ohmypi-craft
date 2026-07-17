@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { HeaderMenu } from '@/components/ui/HeaderMenu'
@@ -67,20 +68,44 @@ export default function InputSettingsPage() {
   }, [])
 
   const handleAutoCapitalisationChange = useCallback(async (enabled: boolean) => {
+    const previous = autoCapitalisation
     setAutoCapitalisation(enabled)
-    await window.electronAPI.setAutoCapitalisation(enabled)
-  }, [])
+    try {
+      await window.electronAPI.setAutoCapitalisation(enabled)
+    } catch (error) {
+      setAutoCapitalisation(previous)
+      toast.error(t('toast.failedToSaveSetting', { setting: t('settings.input.autoCapitalisation') }), {
+        description: error instanceof Error ? error.message : undefined,
+      })
+    }
+  }, [autoCapitalisation, t])
 
   const handleSpellCheckChange = useCallback(async (enabled: boolean) => {
+    const previous = spellCheck
     setSpellCheck(enabled)
-    await window.electronAPI.setSpellCheck(enabled)
-  }, [])
+    try {
+      await window.electronAPI.setSpellCheck(enabled)
+    } catch (error) {
+      setSpellCheck(previous)
+      toast.error(t('toast.failedToSaveSetting', { setting: t('settings.input.spellCheck') }), {
+        description: error instanceof Error ? error.message : undefined,
+      })
+    }
+  }, [spellCheck, t])
 
-  const handleSendMessageKeyChange = useCallback((value: string) => {
+  const handleSendMessageKeyChange = useCallback(async (value: string) => {
     const key = value as 'enter' | 'cmd-enter'
+    const previous = sendMessageKey
     setSendMessageKey(key)
-    window.electronAPI.setSendMessageKey(key)
-  }, [])
+    try {
+      await window.electronAPI.setSendMessageKey(key)
+    } catch (error) {
+      setSendMessageKey(previous)
+      toast.error(t('toast.failedToSaveSetting', { setting: t('settings.input.sendMessageWith') }), {
+        description: error instanceof Error ? error.message : undefined,
+      })
+    }
+  }, [sendMessageKey, t])
 
   return (
     <div className="h-full flex flex-col">

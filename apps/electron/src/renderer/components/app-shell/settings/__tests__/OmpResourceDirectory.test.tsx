@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it, mock } from 'bun:test'
 import * as React from 'react'
 import * as ReactDOMServer from 'react-dom/server'
-import { Bot, Sparkles } from 'lucide-react'
+import { Bot, ServerCog, Sparkles } from 'lucide-react'
 import type { OmpResourceSnapshot } from '../../../../../shared/types'
 
 function installResourceDirectoryTestMocks(): void {
@@ -16,6 +16,38 @@ function installResourceDirectoryTestMocks(): void {
         return options?.defaultValue ?? key
       },
     }),
+  }))
+  mock.module('jotai', () => ({
+    useAtomValue: () => 'test-session',
+    atom: () => {},
+    useSetAtom: () => {},
+    useAtom: () => [{}, () => {}],
+  }))
+  mock.module('@/atoms/sessions', () => ({
+    activeSessionIdAtom: {},
+  }))
+  mock.module('@/hooks/useOmpCapabilities', () => ({
+    useOmpCapabilities: () => ({
+      manifest: null,
+      loading: false,
+      error: null,
+      refresh: async () => {},
+      isCommandSupported: () => true,
+      isFeatureSupported: (feature: string) => feature !== 'disable_all',
+      getFeatureReason: () => undefined,
+    }),
+  }))
+  mock.module('@/hooks/useOmpSessionCommand', () => ({
+    useOmpSessionCommand: () => ({
+      loading: false,
+      error: null,
+      execute: async () => {},
+    }),
+  }))
+  mock.module('@craft-agent/ui', () => ({
+    Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    TooltipTrigger: ({ children }: { children: React.ReactNode; asChild?: boolean }) => <>{children}</>,
+    TooltipContent: () => null,
   }))
 }
 
@@ -211,5 +243,103 @@ describe('OmpResourceDirectory', () => {
       null,
     )
     expect(payload.workspaceId).toBeUndefined()
+  })
+
+  it('shows MCP action buttons when mcp.oauth is supported', () => {
+    const snapshot = makeSnapshot()
+    const html = normalizeReactServerHtml(ReactDOMServer.renderToString(
+      <OmpResourceDirectory
+        workspaceId="ws-1"
+        type="mcp"
+        title="MCP"
+        icon={ServerCog}
+        snapshot={snapshot}
+        onChange={() => {}}
+      />,
+    ))
+
+    expect(html).toContain('fetch')
+    // Reauthorize icon class
+    expect(html).toContain('lucide-key-round')
+    // Remove authorization icon class
+    expect(html).toContain('lucide-log-out')
+    // Reconnect icon class
+    expect(html).toContain('lucide-rotate-ccw')
+    // Notifications toggle icon class
+    expect(html).toContain('lucide-bell-ring')
+  })
+
+  it('does not show MCP action buttons when mcp.oauth is not supported', () => {
+    mock.restore()
+    installResourceDirectoryTestMocks()
+    // Override capability mock to return unsupported
+    mock.module('@/hooks/useOmpCapabilities', () => ({
+      useOmpCapabilities: () => ({
+        manifest: null,
+        loading: false,
+        error: null,
+        refresh: async () => {},
+        isCommandSupported: () => true,
+        isFeatureSupported: () => false,
+        getFeatureReason: () => 'Not supported by this version of OMP',
+      }),
+    }))
+
+    const snapshot = makeSnapshot()
+    const html = normalizeReactServerHtml(ReactDOMServer.renderToString(
+      <OmpResourceDirectory
+        workspaceId="ws-1"
+        type="mcp"
+        title="MCP"
+        icon={ServerCog}
+        snapshot={snapshot}
+        onChange={() => {}}
+      />,
+    ))
+
+    expect(html).toContain('fetch')
+    // Action icons should not appear when unsupported
+    expect(html).not.toContain('BellRing')
+  })
+
+  it('does not show MCP action buttons for non-MCP resource types', () => {
+    const snapshot = makeSnapshot()
+    const html = normalizeReactServerHtml(ReactDOMServer.renderToString(
+      <OmpResourceDirectory
+        workspaceId="ws-1"
+        type="skill"
+        title="Skills"
+        icon={Sparkles}
+        snapshot={snapshot}
+        onChange={() => {}}
+      />,
+    ))
+
+    expect(html).toContain('commit-helper')
+    // MCP-specific icons should not appear for skill type
+    expect(html).not.toContain('KeyRound')
+    expect(html).not.toContain('LogOut')
+    expect(html).not.toContain('RotateCcw')
+    expect(html).not.toContain('BellRing')
+  })
+
+  it('does not show MCP action buttons for agent resource type', () => {
+    const snapshot = makeSnapshot()
+    const html = normalizeReactServerHtml(ReactDOMServer.renderToString(
+      <OmpResourceDirectory
+        workspaceId="ws-1"
+        type="agent"
+        title="Agents"
+        icon={Bot}
+        snapshot={snapshot}
+        onChange={() => {}}
+      />,
+    ))
+
+    expect(html).toContain('security-agent')
+    expect(html).not.toContain('KeyRound')
+    expect(html).not.toContain('LogOut')
+    expect(html).not.toContain('RotateCcw')
+    expect(html).not.toContain('BellRing')
   })
 })

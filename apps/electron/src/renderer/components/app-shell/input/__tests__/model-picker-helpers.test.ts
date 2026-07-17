@@ -8,7 +8,9 @@
 import { describe, test, expect } from 'bun:test'
 import type { LlmConnection } from '@craft-agent/shared/config/llm-connections'
 import {
+  clampThinkingLevelToModel,
   formatTokenCount,
+  getThinkingLevelsForModel,
   groupConnectionsByProvider,
   stripPiPrefixForDisplay,
 } from '../model-picker-helpers'
@@ -71,6 +73,63 @@ describe('formatTokenCount', () => {
     expect(formatTokenCount(1_000_000)).toBe('1.0M')
     expect(formatTokenCount(1_500_000)).toBe('1.5M')
     expect(formatTokenCount(12_345_678)).toBe('12.3M')
+  })
+})
+
+// -----------------------------------------------------------------------------
+// Thinking levels
+// -----------------------------------------------------------------------------
+
+describe('model-specific thinking levels', () => {
+  test('shows only Kimi Coding K2.7 efforts for a persisted OMP catalog', () => {
+    const levels = getThinkingLevelsForModel(
+      undefined,
+      'omp',
+      'kimi-code/kimi-for-coding',
+    )
+    expect(levels.map(level => level.id)).toEqual(['off', 'minimal', 'low', 'medium', 'high'])
+  })
+
+  test('uses the model-advertised levels before provider fallbacks', () => {
+    const levels = getThinkingLevelsForModel({
+      id: 'pi/example',
+      name: 'Example',
+      shortName: 'Example',
+      description: 'Example model',
+      provider: 'pi',
+      contextWindow: 1,
+      supportsThinking: true,
+      supportedThinkingLevels: ['low', 'high'],
+    }, 'pi', 'pi/example')
+    expect(levels.map(level => level.id)).toEqual(['low', 'high'])
+  })
+
+  test('does not invent OMP/Pi minimal effort for an unadvertised provider', () => {
+    const levels = getThinkingLevelsForModel(undefined, 'anthropic', 'future-model')
+    expect(levels.map(level => level.id)).toEqual(['off', 'low', 'medium', 'high', 'xhigh', 'max'])
+  })
+
+  test('hides the selector for models that explicitly do not support reasoning', () => {
+    const levels = getThinkingLevelsForModel({
+      id: 'pi/plain-chat',
+      name: 'Plain chat',
+      shortName: 'Plain',
+      description: 'No reasoning',
+      provider: 'pi',
+      contextWindow: 1,
+      supportsThinking: false,
+    }, 'pi', 'pi/plain-chat')
+    expect(levels).toEqual([])
+  })
+
+  test('clamps an incompatible persisted effort down to the model ceiling', () => {
+    const k27Levels = getThinkingLevelsForModel(
+      undefined,
+      'omp',
+      'kimi-code/kimi-for-coding',
+    )
+    expect(clampThinkingLevelToModel('max', k27Levels)).toBe('high')
+    expect(clampThinkingLevelToModel('xhigh', k27Levels)).toBe('high')
   })
 })
 

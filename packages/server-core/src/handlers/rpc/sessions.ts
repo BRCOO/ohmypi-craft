@@ -357,6 +357,20 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
         return sessionManager.setOmpInterruptMode(sessionId, command.mode)
       case 'setOmpPlanMode':
         return sessionManager.setOmpPlanMode(sessionId, command.enabled)
+      case 'setOmpGoal':
+        return sessionManager.setOmpGoal(sessionId, command.objective, command.tokenBudget, command.replace)
+      case 'pauseOmpGoal':
+        return sessionManager.pauseOmpGoal(sessionId)
+      case 'resumeOmpGoal':
+        return sessionManager.resumeOmpGoal(sessionId)
+      case 'dropOmpGoal':
+        return sessionManager.dropOmpGoal(sessionId)
+      case 'setOmpGoalBudget':
+        return sessionManager.setOmpGoalBudget(sessionId, command.tokenBudget)
+      case 'guidedGoalTurn':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'guided_goal_turn', messages: command.messages })
+      case 'setOmpLoop':
+        return sessionManager.setOmpLoop(sessionId, command.enabled, command.prompt, command.limit)
       case 'refreshOmpRuntime':
         return sessionManager.refreshOmpRuntime(sessionId)
       case 'compactOmpRuntime':
@@ -423,6 +437,10 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
           log.info(`[OMP LOGIN] Opening browser for ${command.providerId}: ${targetUrl}`)
           openExternalForClient(ctx.clientId, targetUrl, '[OMP LOGIN]')
         })
+      case 'logoutOmpProvider':
+        return sessionManager.logoutOmpProvider(sessionId, command.providerId)
+      case 'getOmpCapabilities':
+        return sessionManager.getOmpCapabilities(sessionId)
       // Connection selection (locked after first message)
       case 'setConnection':
         log.info(`IPC: setConnection received for session ${sessionId}, connection: ${command.connectionSlug}`)
@@ -442,6 +460,130 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
         return sessionManager.removeMessageAnnotation(sessionId, command.messageId, command.annotationId)
       case 'updateAnnotation':
         return sessionManager.updateMessageAnnotation(sessionId, command.messageId, command.annotationId, command.patch)
+      // P1: MCP OAuth / Smithery
+      case 'getMcpState':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'get_mcp_state' })
+      case 'mcpReauth':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'mcp_reauth', serverName: command.serverName })
+      case 'mcpUnauth':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'mcp_unauth', serverName: command.serverName })
+      case 'mcpReconnect':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'mcp_reconnect', serverName: command.serverName })
+      case 'getMcpNotifications':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'get_mcp_notifications' })
+      case 'setMcpNotifications':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'set_mcp_notifications', enabled: command.enabled })
+      case 'smitheryLogin':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'smithery_login' })
+      case 'smitheryLogout':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'smithery_logout' })
+
+      // P1: Collab
+      case 'getCollabState':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'get_collab_state' })
+      case 'startCollab':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'start_collab', readOnly: command.readOnly })
+      case 'joinCollab':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'join_collab', invite: command.invite, readOnly: command.readOnly })
+      case 'leaveCollab':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'leave_collab' })
+      case 'stopCollab':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'stop_collab' })
+      case 'setCollabPresence':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'set_collab_presence', displayName: command.displayName, status: command.status })
+
+      // P2: Session tree / extensions / marketplace / agents
+      case 'getSessionTree':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'get_session_tree' })
+      case 'forkSession':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'fork_session', entryId: command.entryId, name: command.name })
+      case 'switchSession':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'switch_session', sessionPath: command.ompSessionPath })
+      case 'getExtensions':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'get_extensions' })
+      case 'setExtensionEnabled':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'set_extension_enabled', id: command.id, enabled: command.enabled })
+      case 'reloadExtensions':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'reload_extensions' })
+      case 'uninstallExtension':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'uninstall_extension', id: command.id })
+      case 'searchMarketplace':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'search_marketplace', query: command.query, page: command.page })
+      case 'getMarketplaceItem':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'get_marketplace_item', id: command.id })
+      case 'installMarketplaceItem':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'install_marketplace_item', id: command.id, version: command.version })
+      case 'updateMarketplaceItem':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'update_marketplace_item', id: command.id, version: command.version })
+      case 'uninstallMarketplaceItem':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'uninstall_marketplace_item', id: command.id })
+      case 'getAgentDefinitions':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'get_agent_definitions' })
+      case 'setAgentEnabled':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'set_agent_enabled', id: command.id, enabled: command.enabled })
+      case 'setAgentModelOverride':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'set_agent_model_override', id: command.id, model: command.model })
+      case 'createAgent':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'create_agent', spec: command.spec })
+      case 'updateAgent':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'update_agent', id: command.id, patch: command.patch })
+      case 'reloadAgents':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'reload_agents' })
+
+      // P3: BTW / TAN / OMFG / Debug / STT
+      case 'askSideQuestion':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'ask_side_question', message: command.message })
+      case 'startTangentialAgent':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'start_tangential_agent', task: command.task, options: command.options })
+      case 'getTangentialAgents':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'get_tangential_agents' })
+      case 'cancelTangentialAgent':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'cancel_tangential_agent', id: command.id })
+      case 'proposeTtsrRule':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'propose_ttsr_rule', description: command.description })
+      case 'confirmTtsrRule':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'confirm_ttsr_rule', ruleId: command.ruleId })
+      case 'listTtsrRules':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'list_ttsr_rules' })
+      case 'deleteTtsrRule':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'delete_ttsr_rule', ruleId: command.ruleId })
+      case 'getDebugTools':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'get_debug_tools' })
+      case 'runDebugTool':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'run_debug_tool', toolId: command.toolId, args: command.args })
+      case 'transcribeAudio':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'transcribe_audio', audioData: command.audioData, mimeType: command.mimeType, maxDurationSeconds: command.maxDurationSeconds })
+
+      // P4: Retry / queue / temporary model / settings
+      case 'retryLastTurn':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'retry_last_turn' })
+      case 'getRetryState':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'get_retry_state' })
+      case 'getQueueState':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'get_queue_state' })
+      case 'dequeueMessage':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'dequeue_message', messageId: command.messageId })
+      case 'reorderQueue':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'reorder_queue', messageIds: command.messageIds })
+      case 'setTemporaryModel':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'set_temporary_model', provider: command.provider, modelId: command.modelId })
+      case 'clearTemporaryModel':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'clear_temporary_model' })
+      case 'getSettingsSchema':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'get_settings_schema' })
+      case 'getSettings':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'get_settings', scope: command.scope })
+      case 'setSettings':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'set_settings', scope: command.scope, patch: command.patch, expectedRevision: command.expectedRevision })
+      case 'openExternalEditor':
+        return sessionManager.sendRawOmpCommand(sessionId, { type: 'open_external_editor', draft: command.draft })
+
+      // P4: Prompt history
+      case 'getPromptHistory':
+        return sessionManager.getPromptHistory(sessionId)
+      case 'setPromptHistory':
+        return sessionManager.setPromptHistory(sessionId, command.prompts, command.enabled)
+
       default: {
         const _exhaustive: never = command
         throw new Error(`Unknown session command: ${JSON.stringify(command)}`)

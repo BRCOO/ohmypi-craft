@@ -257,11 +257,15 @@ function PlatformRow({ platform, workspaceId }: { platform: Platform; workspaceI
 
   React.useEffect(() => {
     let cancelled = false
-    window.electronAPI.getMessagingConfig().then((cfg) => {
-      if (cancelled) return
-      const next = cfg?.runtime?.[platform]
-      setRuntime((next ?? defaultRuntime(platform)) as MessagingPlatformRuntimeInfo)
-    })
+    window.electronAPI.getMessagingConfig()
+      .then((cfg) => {
+        if (cancelled) return
+        const next = cfg?.runtime?.[platform]
+        setRuntime((next ?? defaultRuntime(platform)) as MessagingPlatformRuntimeInfo)
+      })
+      .catch((error) => {
+        if (!cancelled) console.warn('[MessagingSettings] Failed to load messaging config:', error)
+      })
     const off = window.electronAPI.onMessagingPlatformStatus((wsId, p, status) => {
       if (wsId !== workspaceId || p !== platform) return
       setRuntime(status)

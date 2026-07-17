@@ -331,7 +331,44 @@ export type OmpRuntimeEvent =
       finalError?: string;
     }
   | { type: 'retry_fallback_applied'; from: string; to: string; role: string }
-  | { type: 'retry_fallback_succeeded'; model: string; role: string };
+  | { type: 'retry_fallback_succeeded'; model: string; role: string }
+
+  // P1: MCP OAuth / Smithery / notifications
+  | { type: 'mcp_server_state_update'; state: OmpMcpState }
+  | { type: 'mcp_oauth_start'; start: OmpMcpOAuthStart }
+  | { type: 'mcp_oauth_complete'; serverName: string; success: boolean; error?: string }
+  | { type: 'mcp_notification'; notification: OmpMcpNotification }
+  | { type: 'mcp_reconnect_progress'; serverName: string; phase: string; message?: string }
+  | { type: 'smithery_state_update'; state: OmpSmitheryState }
+
+  // P1: Collab
+  | { type: 'collab_state_update'; state: OmpCollabState }
+  | { type: 'collab_participant_joined'; participant: OmpCollabParticipant }
+  | { type: 'collab_participant_left'; participantId: string }
+  | { type: 'collab_message'; message: OmpCollabMessage }
+  | { type: 'collab_connection_update'; connection: OmpCollabConnection; error?: string }
+
+  // P2: Session tree / extensions / marketplace / agents
+  | { type: 'session_tree_update'; tree: OmpSessionTreeState }
+  | { type: 'extensions_update'; extensions: OmpExtensionState[] }
+  | { type: 'extension_state_update'; extension: OmpExtensionState }
+  | { type: 'marketplace_task_update'; taskId: string; phase: 'started' | 'progress' | 'completed' | 'failed' | 'cancelled'; message?: string; progress?: number; error?: string }
+  | { type: 'agent_definitions_update'; agents: OmpAgentDefinitionState[] }
+  | { type: 'agent_state_update'; agent: OmpAgentDefinitionState }
+
+  // P3: BTW / TAN / OMFG / Debug / STT
+  | { type: 'side_question_result'; result: OmpSideQuestionResult }
+  | { type: 'tangential_agent_update'; agent: OmpTangentialAgent }
+  | { type: 'ttsr_rules_update'; rules: OmpTtsrRule[] }
+  | { type: 'debug_result'; result: OmpDebugResult }
+  | { type: 'transcription_result'; result: OmpTranscriptionResult; error?: string }
+
+  // P4: Retry / queue / temporary model / settings
+  | { type: 'retry_state_update'; state: OmpRetryState }
+  | { type: 'queue_state_update'; state: OmpQueueState }
+  | { type: 'model_state_update'; state: OmpModelState }
+  | { type: 'settings_schema_update'; schema: OmpSettingsSchema }
+  | { type: 'settings_update'; state: OmpSettingsState };
 
 export type OmpCompactionPhase = 'idle' | 'running' | 'succeeded' | 'failed' | 'aborted' | 'skipped';
 export type OmpRetryPhase = 'idle' | 'waiting' | 'succeeded' | 'failed' | 'cancelled';
@@ -428,6 +465,8 @@ export interface OmpControlState {
   queue: OmpQueueControlState;
   runtime: OmpRuntimeState;
   plan: OmpPlanControlState;
+  goal: OmpGoalControlState;
+  loop: OmpLoopControlState;
   updatedAt: number;
 }
 
@@ -436,6 +475,62 @@ export type OmpPlanReviewAction = 'approve' | 'refine' | 'cancel';
 
 export interface OmpRpcCapabilities {
   planMode?: true;
+  goalMode?: true;
+  loopMode?: true;
+  runtimeResources?: true;
+}
+
+export interface OmpRpcRuntimeResourceItem {
+  name: string;
+  description?: string;
+  path?: string;
+  source?: 'bundled' | 'user' | 'project' | 'native' | 'runtime';
+  provider?: string;
+  status?: 'connected' | 'connecting' | 'disconnected';
+  toolCount?: number;
+}
+
+export interface OmpRpcRuntimeResources {
+  skills: OmpRpcRuntimeResourceItem[];
+  mcp: OmpRpcRuntimeResourceItem[];
+  agents: OmpRpcRuntimeResourceItem[];
+}
+
+export type OmpGoalStatus = 'active' | 'paused' | 'budget-limited' | 'complete' | 'dropped';
+
+export interface OmpRpcGoal {
+  id: string;
+  objective: string;
+  status: OmpGoalStatus;
+  tokenBudget?: number;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface OmpRpcGoalModeState {
+  enabled: boolean;
+  paused: boolean;
+  goal?: OmpRpcGoal;
+}
+
+export interface OmpRpcGoalModeStateUpdateFrame {
+  type: 'goal_mode_state_update';
+  state: OmpRpcGoalModeState;
+}
+
+export interface OmpRpcLoopModeState {
+  enabled: boolean;
+  prompt?: string;
+  limit?: string;
+  remaining?: number;
+  status: 'disabled' | 'waiting_for_prompt' | 'running';
+}
+
+export interface OmpRpcLoopModeStateUpdateFrame {
+  type: 'loop_mode_state_update';
+  state: OmpRpcLoopModeState;
 }
 
 export interface OmpRpcPlanModeState {
@@ -462,6 +557,20 @@ export interface OmpRpcPlanReviewRequestFrame {
 export interface OmpPlanControlState {
   supported: boolean;
   state: OmpRpcPlanModeState;
+  updatedAt: number;
+  error?: string;
+}
+
+export interface OmpGoalControlState {
+  supported: boolean;
+  state: OmpRpcGoalModeState;
+  updatedAt: number;
+  error?: string;
+}
+
+export interface OmpLoopControlState {
+  supported: boolean;
+  state: OmpRpcLoopModeState;
   updatedAt: number;
   error?: string;
 }
@@ -633,6 +742,371 @@ export type OmpTodoEvent =
     }
   | { type: 'todo_auto_clear' };
 
+
+// =============================================================================
+// P0: Capability manifest and unified error envelope
+// =============================================================================
+
+export type OmpFeatureId =
+  | 'mcp.oauth'
+  | 'mcp.notifications'
+  | 'smithery.auth'
+  | 'auth.provider.logout'
+  | 'collab.live'
+  | 'session.tree'
+  | 'extensions.control'
+  | 'marketplace.browse'
+  | 'agents.control'
+  | 'tools.btw'
+  | 'tools.tan'
+  | 'tools.omfg'
+  | 'tools.debug'
+  | 'audio.stt'
+  | 'goal.guided'
+  | 'model.temporary'
+  | 'retry.exact'
+  | 'queue.dequeue'
+  | 'prompt.history'
+  | 'editor.external'
+  | 'copy.picker'
+  | 'settings.schema';
+
+export interface OmpCapabilityFeatureInfo {
+  supported: boolean;
+  reason?: string;
+  minProtocolVersion?: string;
+}
+
+export interface OmpCapabilityManifest {
+  protocolVersion: string;
+  runtimeVersion?: string;
+  commands: string[];
+  events: string[];
+  features: Partial<Record<OmpFeatureId, OmpCapabilityFeatureInfo>>;
+}
+
+export interface OmpRpcError {
+  code: string;
+  message: string;
+  retryable?: boolean;
+  capability?: OmpFeatureId;
+  details?: Record<string, unknown>;
+}
+
+// =============================================================================
+// P1: MCP OAuth / Smithery / provider auth
+// =============================================================================
+
+export type OmpMcpServerAuthStatus = 'none' | 'authenticated' | 'expired' | 'error';
+
+export interface OmpMcpServerState {
+  name: string;
+  enabled: boolean;
+  connected: boolean;
+  authStatus: OmpMcpServerAuthStatus;
+  toolCount?: number;
+  error?: string;
+}
+
+export interface OmpMcpState {
+  servers: OmpMcpServerState[];
+  notificationsEnabled: boolean;
+  updatedAt: number;
+}
+
+export interface OmpMcpOAuthStart {
+  serverName: string;
+  oauthUrl: string;
+  stateId: string;
+  expiresAt: number;
+}
+
+export interface OmpMcpNotification {
+  id: string;
+  serverName: string;
+  level: 'info' | 'warning' | 'error';
+  message: string;
+  timestamp: number;
+}
+
+export type OmpSmitheryAuthStatus = 'none' | 'authenticating' | 'authenticated' | 'expired' | 'error';
+
+export interface OmpSmitheryState {
+  status: OmpSmitheryAuthStatus;
+  username?: string;
+  error?: string;
+}
+
+export interface OmpOAuthProviderState {
+  id: string;
+  name: string;
+  authenticated: boolean;
+}
+
+// =============================================================================
+// P1: Collab
+// =============================================================================
+
+export type OmpCollabRole = 'host' | 'guest' | 'readonly';
+export type OmpCollabConnection = 'off' | 'connecting' | 'connected' | 'reconnecting' | 'error';
+
+export interface OmpCollabParticipant {
+  id: string;
+  displayName?: string;
+  role: OmpCollabRole;
+  status?: string;
+  joinedAt?: number;
+}
+
+export interface OmpCollabState {
+  connection: OmpCollabConnection;
+  role?: OmpCollabRole;
+  roomId?: string;
+  inviteUrl?: string;
+  webUrl?: string;
+  participants: OmpCollabParticipant[];
+  error?: string;
+  updatedAt: number;
+}
+
+export interface OmpCollabMessage {
+  id: string;
+  participantId: string;
+  content: string;
+  timestamp: number;
+}
+
+// =============================================================================
+// P2: Session tree / extensions / marketplace / agents
+// =============================================================================
+
+export interface OmpSessionLineage {
+  ompSessionPath: string;
+  parentOmpSessionPath?: string;
+  branchEntryId?: string;
+  rootOmpSessionPath?: string;
+  depth: number;
+}
+
+export interface OmpSessionTreeNode {
+  ompSessionPath: string;
+  sessionName?: string;
+  parentOmpSessionPath?: string;
+  branchEntryId?: string;
+  depth: number;
+  isCurrent: boolean;
+  children: OmpSessionTreeNode[];
+}
+
+export interface OmpSessionTreeState {
+  root: OmpSessionTreeNode;
+  currentOmpSessionPath: string;
+}
+
+export interface OmpExtensionCapability {
+  commands?: string[];
+  skills?: string[];
+  mcps?: string[];
+  agents?: string[];
+}
+
+export type OmpExtensionSource = 'builtin' | 'user' | 'project' | 'marketplace';
+export type OmpExtensionStatus = 'enabled' | 'disabled' | 'error' | 'reload_required';
+
+export interface OmpExtensionState {
+  id: string;
+  name: string;
+  version: string;
+  source: OmpExtensionSource;
+  status: OmpExtensionStatus;
+  error?: string;
+  provides: OmpExtensionCapability;
+  restartRequired: boolean;
+}
+
+export interface OmpMarketplaceItem {
+  id: string;
+  name: string;
+  description?: string;
+  version: string;
+  author?: string;
+  installed: boolean;
+  updateAvailable: boolean;
+  permissions: string[];
+}
+
+export interface OmpMarketplaceSearchResult {
+  items: OmpMarketplaceItem[];
+  total: number;
+  page: number;
+}
+
+export type OmpAgentSource = 'bundled' | 'user' | 'project';
+
+export interface OmpAgentDefinitionState {
+  id: string;
+  identifier: string;
+  name: string;
+  source: OmpAgentSource;
+  enabled: boolean;
+  whenToUse?: string;
+  systemPrompt?: string;
+  modelOverride?: string | string[];
+  error?: string;
+}
+
+export interface OmpAgentCreateSpec {
+  identifier: string;
+  name?: string;
+  whenToUse?: string;
+  systemPrompt?: string;
+  modelOverride?: string | string[];
+  source: OmpAgentSource;
+}
+
+export type OmpAgentPatch = Partial<Omit<OmpAgentCreateSpec, 'identifier' | 'source'>>;
+
+// =============================================================================
+// P3: BTW / TAN / OMFG / Debug / STT
+// =============================================================================
+
+export interface OmpSideQuestionResult {
+  answer: string;
+  suggestions?: string[];
+  canPromote?: boolean;
+}
+
+export interface OmpTangentialAgentOptions {
+  notifyOnly?: boolean;
+  insertContext?: boolean;
+  tokenBudget?: number;
+  timeBudgetSeconds?: number;
+}
+
+export type OmpTangentialAgentStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface OmpTangentialAgent {
+  id: string;
+  task: string;
+  status: OmpTangentialAgentStatus;
+  summary?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface OmpTtsrRulePreview {
+  ruleId: string;
+  matchCondition: string;
+  injectedText: string;
+  scope: string;
+  priority: number;
+}
+
+export interface OmpTtsrRule extends OmpTtsrRulePreview {
+  confirmedAt: number;
+}
+
+export interface OmpDebugToolParameter {
+  name: string;
+  type: 'string' | 'number' | 'boolean' | 'enum';
+  description?: string;
+  required?: boolean;
+  options?: string[];
+}
+
+export interface OmpDebugToolDefinition {
+  id: string;
+  name: string;
+  description: string;
+  parameters: OmpDebugToolParameter[];
+  dangerous?: boolean;
+}
+
+export interface OmpDebugResult {
+  toolId: string;
+  success: boolean;
+  output: Record<string, unknown>;
+  error?: string;
+  sanitized: boolean;
+}
+
+export interface OmpTranscriptionResult {
+  text: string;
+  confidence?: number;
+  language?: string;
+}
+
+// =============================================================================
+// P4: Retry / queue / temporary model / settings
+// =============================================================================
+
+export type OmpModelSelectionSource = 'default' | 'session' | 'temporary';
+
+export interface OmpModelState {
+  model: string;
+  source: OmpModelSelectionSource;
+  expiresAtSessionEnd?: boolean;
+}
+
+export interface OmpQueueItem {
+  messageId: string;
+  mode: 'steer' | 'followUp' | 'abortAndPrompt' | 'prompt';
+  preview: string;
+  createdAt: number;
+}
+
+export interface OmpQueueState {
+  messages: OmpQueueItem[];
+  revision: number;
+  updatedAt: number;
+}
+
+export interface OmpRetryState {
+  phase: 'idle' | 'waiting' | 'succeeded' | 'failed' | 'cancelled';
+  lastFailedTurnId?: string;
+  attempt?: number;
+  maxAttempts?: number;
+  error?: string;
+}
+
+export type OmpSettingsValueType = 'string' | 'number' | 'boolean' | 'enum' | 'array' | 'object';
+export type OmpSettingsScope = 'global' | 'project' | 'effective';
+export type OmpSettingsAppliesTo = 'runtime' | 'desktop-equivalent' | 'tui-only' | 'advanced-raw';
+
+export interface OmpSettingsSchemaEntry {
+  path: string;
+  type: OmpSettingsValueType;
+  label: string;
+  description?: string;
+  tab?: string;
+  group?: string;
+  options?: Array<{ value: unknown; label: string }>;
+  default?: unknown;
+  effectiveValue?: unknown;
+  sensitive: boolean;
+  restartRequired: boolean;
+  appliesTo: OmpSettingsAppliesTo;
+}
+
+export interface OmpSettingsSchema {
+  entries: OmpSettingsSchemaEntry[];
+  revision: number;
+}
+
+export interface OmpSettingsState {
+  scope: OmpSettingsScope;
+  values: Record<string, unknown>;
+  revision: number;
+}
+
+export interface OmpSettingsSetResult {
+  success: boolean;
+  revision: number;
+  restartRequired: boolean;
+  conflict?: boolean;
+  error?: string;
+}
+
 export type OmpRpcCommand =
   | {
       type: 'prompt';
@@ -648,7 +1122,18 @@ export type OmpRpcCommand =
   | { type: 'get_state' }
   | { type: 'get_plan_mode_state' }
   | { type: 'set_plan_mode'; enabled: boolean; initialPrompt?: string }
+  | { type: 'reopen_plan_review' }
   | { type: 'plan_review_result'; requestId: string; action: OmpPlanReviewAction; feedback?: string }
+  | { type: 'get_goal_state' }
+  | { type: 'set_goal'; objective: string; tokenBudget?: number }
+  | { type: 'replace_goal'; objective: string; tokenBudget?: number }
+  | { type: 'pause_goal' }
+  | { type: 'resume_goal' }
+  | { type: 'drop_goal' }
+  | { type: 'set_goal_budget'; tokenBudget?: number }
+  | { type: 'guided_goal_turn'; messages: Array<{ role: 'user' | 'assistant'; content: string }> }
+  | { type: 'get_loop_state' }
+  | { type: 'set_loop'; enabled: boolean; prompt?: string; limit?: string }
   | { type: 'set_todos'; phases: OmpTodoPhase[] }
   | { type: 'set_host_tools'; tools: OmpRpcHostToolDefinition[] }
   | { type: 'set_host_uri_schemes'; schemes: OmpRpcHostUriSchemeDefinition[] }
@@ -656,6 +1141,8 @@ export type OmpRpcCommand =
   | { type: 'get_subagents' }
   | { type: 'get_subagent_messages'; subagentId?: string; sessionFile?: string; fromByte?: number }
   | { type: 'get_available_commands' }
+  | { type: 'get_capabilities' }
+  | { type: 'get_runtime_resources' }
   | { type: 'cycle_model' }
   | { type: 'get_available_models' }
   | { type: 'cycle_thinking_level' }
@@ -681,6 +1168,71 @@ export type OmpRpcCommand =
   | { type: 'set_interrupt_mode'; mode: OmpInterruptMode }
   | { type: 'get_login_providers' }
   | { type: 'login'; providerId: string }
+  | { type: 'logout'; providerId: string }
+
+  // P1: MCP OAuth / Smithery / notifications
+  | { type: 'get_mcp_state' }
+  | { type: 'mcp_reauth'; serverName: string }
+  | { type: 'mcp_unauth'; serverName: string }
+  | { type: 'mcp_reconnect'; serverName: string }
+  | { type: 'get_mcp_notifications' }
+  | { type: 'set_mcp_notifications'; enabled: boolean }
+  | { type: 'smithery_login' }
+  | { type: 'smithery_logout' }
+
+  // P1: Collab
+  | { type: 'get_collab_state' }
+  | { type: 'start_collab'; readOnly?: boolean }
+  | { type: 'join_collab'; invite: string; readOnly?: boolean }
+  | { type: 'leave_collab' }
+  | { type: 'stop_collab' }
+  | { type: 'set_collab_presence'; displayName?: string; status?: string }
+
+  // P2: Session tree / extensions / marketplace / agents
+  | { type: 'get_session_tree' }
+  | { type: 'fork_session'; entryId: string; name?: string }
+  | { type: 'get_extensions' }
+  | { type: 'set_extension_enabled'; id: string; enabled: boolean }
+  | { type: 'reload_extensions' }
+  | { type: 'uninstall_extension'; id: string }
+  | { type: 'search_marketplace'; query: string; page?: number }
+  | { type: 'get_marketplace_item'; id: string }
+  | { type: 'install_marketplace_item'; id: string; version?: string }
+  | { type: 'update_marketplace_item'; id: string; version?: string }
+  | { type: 'uninstall_marketplace_item'; id: string }
+  | { type: 'get_agent_definitions' }
+  | { type: 'set_agent_enabled'; id: string; enabled: boolean }
+  | { type: 'set_agent_model_override'; id: string; model?: string }
+  | { type: 'create_agent'; spec: OmpAgentCreateSpec }
+  | { type: 'update_agent'; id: string; patch: OmpAgentPatch }
+  | { type: 'reload_agents' }
+
+  // P3: BTW / TAN / OMFG / Debug / STT
+  | { type: 'ask_side_question'; message: string }
+  | { type: 'start_tangential_agent'; task: string; options?: OmpTangentialAgentOptions }
+  | { type: 'get_tangential_agents' }
+  | { type: 'cancel_tangential_agent'; id: string }
+  | { type: 'propose_ttsr_rule'; description: string }
+  | { type: 'confirm_ttsr_rule'; ruleId: string }
+  | { type: 'list_ttsr_rules' }
+  | { type: 'delete_ttsr_rule'; ruleId: string }
+  | { type: 'get_debug_tools' }
+  | { type: 'run_debug_tool'; toolId: string; args?: Record<string, unknown> }
+  | { type: 'transcribe_audio'; audioData: string; mimeType: string; maxDurationSeconds?: number }
+
+  // P4: Retry / queue / temporary model / settings
+  | { type: 'retry_last_turn' }
+  | { type: 'get_retry_state' }
+  | { type: 'get_queue_state' }
+  | { type: 'dequeue_message'; messageId: string }
+  | { type: 'reorder_queue'; messageIds: string[] }
+  | { type: 'set_temporary_model'; provider: string; modelId: string }
+  | { type: 'clear_temporary_model' }
+  | { type: 'get_settings_schema' }
+  | { type: 'get_settings'; scope?: 'global' | 'project' | 'effective' }
+  | { type: 'set_settings'; scope: 'global' | 'project'; patch: Record<string, unknown>; expectedRevision?: number }
+  | { type: 'open_external_editor'; draft: string }
+
   | { type: 'permission_response'; requestId: string; decision: 'approved' | 'denied' };
 
 export type OmpRpcStandardCommand = Exclude<OmpRpcCommand, { type: 'permission_response' }>;
@@ -697,7 +1249,17 @@ export type OmpRpcCommandCategory =
   | 'bash'
   | 'session'
   | 'messages'
-  | 'login';
+  | 'login'
+  | 'auth'
+  | 'mcp'
+  | 'collab'
+  | 'extensions'
+  | 'marketplace'
+  | 'agents'
+  | 'tree'
+  | 'debug'
+  | 'audio'
+  | 'settings';
 
 export interface OmpRpcCommandDefinition {
   category: OmpRpcCommandCategory;
@@ -744,8 +1306,20 @@ export const OMP_RPC_COMMAND_DEFINITIONS = {
   get_state: commandDefinition('state', 'session_state', { sideEffect: false }),
   get_plan_mode_state: commandDefinition('state', 'plan_mode_state', { sideEffect: false }),
   set_plan_mode: commandDefinition('state', 'plan_mode_state'),
+  reopen_plan_review: commandDefinition('state', 'plan_mode_state'),
   plan_review_result: commandDefinition('state', 'plan_review_result'),
+  get_goal_state: commandDefinition('state', 'goal_mode_state', { sideEffect: false }),
+  set_goal: commandDefinition('state', 'goal_mode_state'),
+  replace_goal: commandDefinition('state', 'goal_mode_state'),
+  pause_goal: commandDefinition('state', 'goal_mode_state'),
+  resume_goal: commandDefinition('state', 'goal_mode_state'),
+  drop_goal: commandDefinition('state', 'goal_mode_state'),
+  set_goal_budget: commandDefinition('state', 'goal_mode_state'),
+  guided_goal_turn: commandDefinition('state', 'guided_goal_turn', { longRunning: true }),
+  get_loop_state: commandDefinition('state', 'loop_mode_state', { sideEffect: false }),
+  set_loop: commandDefinition('state', 'loop_mode_state'),
   get_available_commands: commandDefinition('state', 'available_commands', { sideEffect: false }),
+  get_runtime_resources: commandDefinition('state', 'runtime_resources', { sideEffect: false }),
   set_todos: commandDefinition('state', 'todo_snapshot'),
   set_host_tools: commandDefinition('state', 'host_tool_names'),
   set_host_uri_schemes: commandDefinition('state', 'host_uri_schemes'),
@@ -789,6 +1363,73 @@ export const OMP_RPC_COMMAND_DEFINITIONS = {
 
   get_login_providers: commandDefinition('login', 'login_providers', { sideEffect: false }),
   login: commandDefinition('login', 'login_result', { longRunning: true }),
+  logout: commandDefinition('auth', 'logout_result'),
+
+  // P0
+  get_capabilities: commandDefinition('state', 'capability_manifest', { sideEffect: false }),
+
+  // P1: MCP / Smithery
+  get_mcp_state: commandDefinition('mcp', 'mcp_state', { sideEffect: false }),
+  mcp_reauth: commandDefinition('mcp', 'mcp_oauth_start', { longRunning: true }),
+  mcp_unauth: commandDefinition('mcp', 'mcp_state'),
+  mcp_reconnect: commandDefinition('mcp', 'mcp_state', { longRunning: true }),
+  get_mcp_notifications: commandDefinition('mcp', 'mcp_notifications', { sideEffect: false }),
+  set_mcp_notifications: commandDefinition('mcp', 'mcp_notifications'),
+  smithery_login: commandDefinition('auth', 'smithery_state', { longRunning: true }),
+  smithery_logout: commandDefinition('auth', 'smithery_state'),
+
+  // P1: Collab
+  get_collab_state: commandDefinition('collab', 'collab_state', { sideEffect: false }),
+  start_collab: commandDefinition('collab', 'collab_state', { longRunning: true }),
+  join_collab: commandDefinition('collab', 'collab_state', { longRunning: true }),
+  leave_collab: commandDefinition('collab', 'collab_state'),
+  stop_collab: commandDefinition('collab', 'collab_state'),
+  set_collab_presence: commandDefinition('collab', 'collab_state'),
+
+  // P2: Session tree / extensions / marketplace / agents
+  get_session_tree: commandDefinition('tree', 'session_tree', { sideEffect: false }),
+  fork_session: commandDefinition('tree', 'session_tree', { longRunning: true }),
+  get_extensions: commandDefinition('extensions', 'extensions', { sideEffect: false }),
+  set_extension_enabled: commandDefinition('extensions', 'extension_state'),
+  reload_extensions: commandDefinition('extensions', 'extensions', { longRunning: true }),
+  uninstall_extension: commandDefinition('extensions', 'extension_state'),
+  search_marketplace: commandDefinition('marketplace', 'marketplace_search', { sideEffect: false }),
+  get_marketplace_item: commandDefinition('marketplace', 'marketplace_item', { sideEffect: false }),
+  install_marketplace_item: commandDefinition('marketplace', 'marketplace_task', { longRunning: true }),
+  update_marketplace_item: commandDefinition('marketplace', 'marketplace_task', { longRunning: true }),
+  uninstall_marketplace_item: commandDefinition('marketplace', 'marketplace_task'),
+  get_agent_definitions: commandDefinition('agents', 'agent_definitions', { sideEffect: false }),
+  set_agent_enabled: commandDefinition('agents', 'agent_state'),
+  set_agent_model_override: commandDefinition('agents', 'agent_state'),
+  create_agent: commandDefinition('agents', 'agent_state'),
+  update_agent: commandDefinition('agents', 'agent_state'),
+  reload_agents: commandDefinition('agents', 'agent_definitions', { longRunning: true }),
+
+  // P3: BTW / TAN / OMFG / Debug / STT
+  ask_side_question: commandDefinition('state', 'side_question_result'),
+  start_tangential_agent: commandDefinition('state', 'tangential_agent', { longRunning: true }),
+  get_tangential_agents: commandDefinition('state', 'tangential_agents', { sideEffect: false }),
+  cancel_tangential_agent: commandDefinition('state', 'tangential_agent'),
+  propose_ttsr_rule: commandDefinition('state', 'ttsr_rule_preview'),
+  confirm_ttsr_rule: commandDefinition('state', 'ttsr_rule'),
+  list_ttsr_rules: commandDefinition('state', 'ttsr_rules', { sideEffect: false }),
+  delete_ttsr_rule: commandDefinition('state', 'ttsr_rules'),
+  get_debug_tools: commandDefinition('debug', 'debug_tools', { sideEffect: false }),
+  run_debug_tool: commandDefinition('debug', 'debug_result', { longRunning: true }),
+  transcribe_audio: commandDefinition('audio', 'transcription', { longRunning: true }),
+
+  // P4: Retry / queue / temporary model / settings
+  retry_last_turn: commandDefinition('retry', 'retry_state', { longRunning: true }),
+  get_retry_state: commandDefinition('retry', 'retry_state', { sideEffect: false }),
+  get_queue_state: commandDefinition('queue', 'queue_state', { sideEffect: false }),
+  dequeue_message: commandDefinition('queue', 'queue_state'),
+  reorder_queue: commandDefinition('queue', 'queue_state'),
+  set_temporary_model: commandDefinition('model', 'model_state'),
+  clear_temporary_model: commandDefinition('model', 'model_state'),
+  get_settings_schema: commandDefinition('settings', 'settings_schema', { sideEffect: false }),
+  get_settings: commandDefinition('settings', 'settings', { sideEffect: false }),
+  set_settings: commandDefinition('settings', 'settings_set_result'),
+  open_external_editor: commandDefinition('settings', 'external_editor_result'),
 } satisfies Record<OmpRpcCommandType, OmpRpcCommandDefinition>;
 
 export function getOmpRpcCommandDefinition(command: string): OmpRpcCommandDefinition | undefined {
@@ -857,9 +1498,9 @@ export function craftThinkingLevelToOmp(level: ThinkingLevel): OmpThinkingLevel 
 }
 
 export function ompThinkingLevelToCraft(level: unknown): ThinkingLevel | undefined {
-  if (level === 'minimal') return 'low';
   if (
     level === 'off'
+    || level === 'minimal'
     || level === 'low'
     || level === 'medium'
     || level === 'high'
@@ -1961,7 +2602,63 @@ function parseOmpRpcCapabilities(value: unknown): OmpRpcCapabilities | null {
   const raw = asObject(value);
   if (!raw) return null;
   if (raw.planMode !== undefined && raw.planMode !== true) return null;
-  return raw.planMode === true ? { planMode: true } : {};
+  if (raw.goalMode !== undefined && raw.goalMode !== true) return null;
+  if (raw.loopMode !== undefined && raw.loopMode !== true) return null;
+  if (raw.runtimeResources !== undefined && raw.runtimeResources !== true) return null;
+  return {
+    ...(raw.planMode === true ? { planMode: true } : {}),
+    ...(raw.goalMode === true ? { goalMode: true } : {}),
+    ...(raw.loopMode === true ? { loopMode: true } : {}),
+    ...(raw.runtimeResources === true ? { runtimeResources: true } : {}),
+  };
+}
+
+function parseOmpRuntimeResourceItem(value: unknown): OmpRpcRuntimeResourceItem | null {
+  const raw = asObject(value);
+  if (
+    !raw
+    || !isNonEmptyString(raw.name)
+    || (raw.description !== undefined && !isString(raw.description))
+    || (raw.path !== undefined && !isString(raw.path))
+    || (raw.provider !== undefined && !isString(raw.provider))
+    || (raw.toolCount !== undefined && !isFiniteNumber(raw.toolCount))
+    || (raw.source !== undefined
+      && raw.source !== 'bundled'
+      && raw.source !== 'user'
+      && raw.source !== 'project'
+      && raw.source !== 'native'
+      && raw.source !== 'runtime')
+    || (raw.status !== undefined
+      && raw.status !== 'connected'
+      && raw.status !== 'connecting'
+      && raw.status !== 'disconnected')
+  ) {
+    return null;
+  }
+  return {
+    name: raw.name.trim(),
+    description: raw.description as string | undefined,
+    path: raw.path as string | undefined,
+    source: raw.source as OmpRpcRuntimeResourceItem['source'],
+    provider: raw.provider as string | undefined,
+    status: raw.status as OmpRpcRuntimeResourceItem['status'],
+    toolCount: raw.toolCount as number | undefined,
+  };
+}
+
+export function parseOmpRuntimeResources(value: unknown): OmpRpcRuntimeResources | null {
+  const raw = asObject(value);
+  if (!raw || !Array.isArray(raw.skills) || !Array.isArray(raw.mcp) || !Array.isArray(raw.agents)) return null;
+  const parseItems = (items: unknown[]) => items.map(parseOmpRuntimeResourceItem);
+  const skills = parseItems(raw.skills);
+  const mcp = parseItems(raw.mcp);
+  const agents = parseItems(raw.agents);
+  if (skills.some(item => !item) || mcp.some(item => !item) || agents.some(item => !item)) return null;
+  return {
+    skills: skills as OmpRpcRuntimeResourceItem[],
+    mcp: mcp as OmpRpcRuntimeResourceItem[],
+    agents: agents as OmpRpcRuntimeResourceItem[],
+  };
 }
 
 export function parseOmpPlanModeState(value: unknown): OmpRpcPlanModeState | null {
@@ -2018,6 +2715,73 @@ export function parseOmpPlanReviewRequest(value: unknown): OmpRpcPlanReviewReque
     planMarkdown: raw.planMarkdown,
     options: options as OmpPlanReviewAction[],
   };
+}
+
+function isOmpGoalStatus(value: unknown): value is OmpGoalStatus {
+  return value === 'active'
+    || value === 'paused'
+    || value === 'budget-limited'
+    || value === 'complete'
+    || value === 'dropped';
+}
+
+export function parseOmpGoalModeState(value: unknown): OmpRpcGoalModeState | null {
+  const raw = asObject(value);
+  const goalRaw = raw?.goal === undefined ? undefined : asObject(raw.goal);
+  const goal = goalRaw && isString(goalRaw.id) && isString(goalRaw.objective)
+    && isOmpGoalStatus(goalRaw.status) && isFiniteNumber(goalRaw.tokensUsed)
+    && isFiniteNumber(goalRaw.timeUsedSeconds) && isFiniteNumber(goalRaw.createdAt)
+    && isFiniteNumber(goalRaw.updatedAt)
+    && (goalRaw.tokenBudget === undefined || isFiniteNumber(goalRaw.tokenBudget))
+    ? {
+        id: goalRaw.id,
+        objective: goalRaw.objective,
+        status: goalRaw.status,
+        tokenBudget: goalRaw.tokenBudget as number | undefined,
+        tokensUsed: goalRaw.tokensUsed,
+        timeUsedSeconds: goalRaw.timeUsedSeconds,
+        createdAt: goalRaw.createdAt,
+        updatedAt: goalRaw.updatedAt,
+      }
+    : undefined;
+  if (!raw || typeof raw.enabled !== 'boolean' || typeof raw.paused !== 'boolean') return null;
+  if (raw.goal !== undefined && !goal) return null;
+  return { enabled: raw.enabled, paused: raw.paused, goal };
+}
+
+export function parseOmpGoalModeStateUpdate(value: unknown): OmpRpcGoalModeStateUpdateFrame | null {
+  const raw = asObject(value);
+  if (raw?.type !== 'goal_mode_state_update') return null;
+  const state = parseOmpGoalModeState(raw.state);
+  return state ? { type: 'goal_mode_state_update', state } : null;
+}
+
+export function parseOmpLoopModeState(value: unknown): OmpRpcLoopModeState | null {
+  const raw = asObject(value);
+  if (
+    !raw
+    || typeof raw.enabled !== 'boolean'
+    || (raw.status !== 'disabled' && raw.status !== 'waiting_for_prompt' && raw.status !== 'running')
+    || (raw.prompt !== undefined && !isString(raw.prompt))
+    || (raw.limit !== undefined && !isString(raw.limit))
+    || (raw.remaining !== undefined && !isFiniteNumber(raw.remaining))
+  ) {
+    return null;
+  }
+  return {
+    enabled: raw.enabled,
+    status: raw.status,
+    prompt: raw.prompt as string | undefined,
+    limit: raw.limit as string | undefined,
+    remaining: raw.remaining as number | undefined,
+  };
+}
+
+export function parseOmpLoopModeStateUpdate(value: unknown): OmpRpcLoopModeStateUpdateFrame | null {
+  const raw = asObject(value);
+  if (raw?.type !== 'loop_mode_state_update') return null;
+  const state = parseOmpLoopModeState(raw.state);
+  return state ? { type: 'loop_mode_state_update', state } : null;
 }
 
 export function parseOmpSessionState(value: unknown): OmpRpcSessionState | null {
@@ -2109,4 +2873,372 @@ export function parseOmpLoginResult(value: unknown): OmpRpcLoginResult | null {
   const raw = asObject(value);
   if (!raw || !isString(raw.providerId) || raw.providerId.trim().length === 0) return null;
   return { providerId: raw.providerId };
+}
+
+// =============================================================================
+// P0-P4: Runtime parsers for new types
+// =============================================================================
+
+function isOmpFeatureId(value: unknown): value is OmpFeatureId {
+  return isString(value) && [
+    'mcp.oauth',
+    'mcp.notifications',
+    'smithery.auth',
+    'auth.provider.logout',
+    'collab.live',
+    'session.tree',
+    'extensions.control',
+    'marketplace.browse',
+    'agents.control',
+    'tools.btw',
+    'tools.tan',
+    'tools.omfg',
+    'tools.debug',
+    'audio.stt',
+    'goal.guided',
+    'model.temporary',
+    'retry.exact',
+    'queue.dequeue',
+    'prompt.history',
+    'editor.external',
+    'copy.picker',
+    'settings.schema',
+  ].includes(value as OmpFeatureId);
+}
+
+function parseOmpCapabilityFeatureInfo(value: unknown): OmpCapabilityFeatureInfo | null {
+  const raw = asObject(value);
+  if (!raw || typeof raw.supported !== 'boolean') return null;
+  return {
+    supported: raw.supported,
+    reason: optionalString(raw.reason),
+    minProtocolVersion: optionalString(raw.minProtocolVersion),
+  };
+}
+
+export function parseOmpCapabilityManifest(value: unknown): OmpCapabilityManifest | null {
+  const raw = asObject(value);
+  if (!raw || !isString(raw.protocolVersion)) return null;
+
+  const commands = parseStringArray(raw.commands);
+  const events = parseStringArray(raw.events);
+  if (!commands || !events) return null;
+
+  const features: Partial<Record<OmpFeatureId, OmpCapabilityFeatureInfo>> = {};
+  const rawFeatures = asObject(raw.features);
+  if (rawFeatures) {
+    for (const [key, val] of Object.entries(rawFeatures)) {
+      if (!isOmpFeatureId(key)) continue;
+      const parsed = parseOmpCapabilityFeatureInfo(val);
+      if (parsed) features[key] = parsed;
+    }
+  }
+
+  return {
+    protocolVersion: raw.protocolVersion,
+    runtimeVersion: optionalString(raw.runtimeVersion),
+    commands,
+    events,
+    features,
+  };
+}
+
+export function parseOmpRpcError(value: unknown): OmpRpcError | null {
+  const raw = asObject(value);
+  if (!raw || !isString(raw.code) || !isString(raw.message)) return null;
+  return {
+    code: raw.code,
+    message: raw.message,
+    retryable: typeof raw.retryable === 'boolean' ? raw.retryable : undefined,
+    capability: isOmpFeatureId(raw.capability) ? raw.capability : undefined,
+    details: asObject(raw.details) ?? undefined,
+  };
+}
+
+function isOmpMcpServerAuthStatus(value: unknown): value is OmpMcpServerAuthStatus {
+  return value === 'none' || value === 'authenticated' || value === 'expired' || value === 'error';
+}
+
+function parseOmpMcpServerState(value: unknown): OmpMcpServerState | null {
+  const raw = asObject(value);
+  if (!raw || !isString(raw.name) || typeof raw.enabled !== 'boolean' || typeof raw.connected !== 'boolean' || !isOmpMcpServerAuthStatus(raw.authStatus)) {
+    return null;
+  }
+  return {
+    name: raw.name,
+    enabled: raw.enabled,
+    connected: raw.connected,
+    authStatus: raw.authStatus,
+    toolCount: isFiniteNumber(raw.toolCount) ? raw.toolCount : undefined,
+    error: optionalString(raw.error),
+  };
+}
+
+export function parseOmpMcpState(value: unknown): OmpMcpState | null {
+  const raw = asObject(value);
+  if (!raw || !Array.isArray(raw.servers) || typeof raw.notificationsEnabled !== 'boolean') return null;
+  return {
+    servers: raw.servers.map(parseOmpMcpServerState).filter((s): s is OmpMcpServerState => s !== null),
+    notificationsEnabled: raw.notificationsEnabled,
+    updatedAt: isFiniteNumber(raw.updatedAt) ? raw.updatedAt : Date.now(),
+  };
+}
+
+function isOmpCollabRole(value: unknown): value is OmpCollabRole {
+  return value === 'host' || value === 'guest' || value === 'readonly';
+}
+
+function isOmpCollabConnection(value: unknown): value is OmpCollabConnection {
+  return value === 'off' || value === 'connecting' || value === 'connected' || value === 'reconnecting' || value === 'error';
+}
+
+function parseOmpCollabParticipant(value: unknown): OmpCollabParticipant | null {
+  const raw = asObject(value);
+  if (!raw || !isString(raw.id) || !isOmpCollabRole(raw.role)) return null;
+  return {
+    id: raw.id,
+    displayName: optionalString(raw.displayName),
+    role: raw.role,
+    status: optionalString(raw.status),
+    joinedAt: isFiniteNumber(raw.joinedAt) ? raw.joinedAt : undefined,
+  };
+}
+
+export function parseOmpCollabState(value: unknown): OmpCollabState | null {
+  const raw = asObject(value);
+  if (!raw || !isOmpCollabConnection(raw.connection)) return null;
+  const participants = Array.isArray(raw.participants)
+    ? raw.participants.map(parseOmpCollabParticipant).filter((p): p is OmpCollabParticipant => p !== null)
+    : [];
+  return {
+    connection: raw.connection,
+    role: isOmpCollabRole(raw.role) ? raw.role : undefined,
+    roomId: optionalString(raw.roomId),
+    inviteUrl: optionalString(raw.inviteUrl),
+    webUrl: optionalString(raw.webUrl),
+    participants,
+    error: optionalString(raw.error),
+    updatedAt: isFiniteNumber(raw.updatedAt) ? raw.updatedAt : Date.now(),
+  };
+}
+
+function parseOmpSessionTreeNode(value: unknown, currentPath?: string): OmpSessionTreeNode | null {
+  const raw = asObject(value);
+  if (!raw || !isString(raw.ompSessionPath)) return null;
+  const children = Array.isArray(raw.children)
+    ? raw.children.map((c) => parseOmpSessionTreeNode(c, currentPath)).filter((n): n is OmpSessionTreeNode => n !== null)
+    : [];
+  return {
+    ompSessionPath: raw.ompSessionPath,
+    sessionName: optionalString(raw.sessionName),
+    parentOmpSessionPath: optionalString(raw.parentOmpSessionPath),
+    branchEntryId: optionalString(raw.branchEntryId),
+    depth: isFiniteNumber(raw.depth) ? raw.depth : 0,
+    isCurrent: typeof raw.isCurrent === 'boolean' ? raw.isCurrent : raw.ompSessionPath === currentPath,
+    children,
+  };
+}
+
+export function parseOmpSessionTreeState(value: unknown): OmpSessionTreeState | null {
+  const raw = asObject(value);
+  if (!raw) return null;
+  const root = parseOmpSessionTreeNode(raw.root, isString(raw.currentOmpSessionPath) ? raw.currentOmpSessionPath : undefined);
+  if (!root) return null;
+  return {
+    root,
+    currentOmpSessionPath: isString(raw.currentOmpSessionPath) ? raw.currentOmpSessionPath : root.ompSessionPath,
+  };
+}
+
+function isOmpExtensionSource(value: unknown): value is OmpExtensionSource {
+  return value === 'builtin' || value === 'user' || value === 'project' || value === 'marketplace';
+}
+
+function isOmpExtensionStatus(value: unknown): value is OmpExtensionStatus {
+  return value === 'enabled' || value === 'disabled' || value === 'error' || value === 'reload_required';
+}
+
+function parseOmpExtensionCapability(value: unknown): OmpExtensionCapability {
+  const raw = asObject(value);
+  if (!raw) return {};
+  return {
+    commands: parseStringArray(raw.commands),
+    skills: parseStringArray(raw.skills),
+    mcps: parseStringArray(raw.mcps),
+    agents: parseStringArray(raw.agents),
+  };
+}
+
+export function parseOmpExtensionState(value: unknown): OmpExtensionState | null {
+  const raw = asObject(value);
+  if (!raw || !isString(raw.id) || !isString(raw.name) || !isString(raw.version) || !isOmpExtensionSource(raw.source) || !isOmpExtensionStatus(raw.status)) {
+    return null;
+  }
+  return {
+    id: raw.id,
+    name: raw.name,
+    version: raw.version,
+    source: raw.source,
+    status: raw.status,
+    error: optionalString(raw.error),
+    provides: parseOmpExtensionCapability(raw.provides),
+    restartRequired: typeof raw.restartRequired === 'boolean' ? raw.restartRequired : false,
+  };
+}
+
+export function parseOmpMarketplaceItem(value: unknown): OmpMarketplaceItem | null {
+  const raw = asObject(value);
+  if (!raw || !isString(raw.id) || !isString(raw.name) || !isString(raw.version)) return null;
+  return {
+    id: raw.id,
+    name: raw.name,
+    description: optionalString(raw.description),
+    version: raw.version,
+    author: optionalString(raw.author),
+    installed: typeof raw.installed === 'boolean' ? raw.installed : false,
+    updateAvailable: typeof raw.updateAvailable === 'boolean' ? raw.updateAvailable : false,
+    permissions: parseStringArray(raw.permissions) ?? [],
+  };
+}
+
+export function parseOmpMarketplaceSearchResult(value: unknown): OmpMarketplaceSearchResult | null {
+  const raw = asObject(value);
+  if (!raw || !Array.isArray(raw.items)) return null;
+  return {
+    items: raw.items.map(parseOmpMarketplaceItem).filter((i): i is OmpMarketplaceItem => i !== null),
+    total: isFiniteNumber(raw.total) ? raw.total : 0,
+    page: isFiniteNumber(raw.page) ? raw.page : 1,
+  };
+}
+
+function isOmpAgentSource(value: unknown): value is OmpAgentSource {
+  return value === 'bundled' || value === 'user' || value === 'project';
+}
+
+export function parseOmpAgentDefinitionState(value: unknown): OmpAgentDefinitionState | null {
+  const raw = asObject(value);
+  if (!raw || !isString(raw.id) || !isString(raw.identifier) || !isString(raw.name) || !isOmpAgentSource(raw.source) || typeof raw.enabled !== 'boolean') {
+    return null;
+  }
+  return {
+    id: raw.id,
+    identifier: raw.identifier,
+    name: raw.name,
+    source: raw.source,
+    enabled: raw.enabled,
+    whenToUse: optionalString(raw.whenToUse),
+    systemPrompt: optionalString(raw.systemPrompt),
+    modelOverride: parseModelOverride(raw.modelOverride),
+    error: optionalString(raw.error),
+  };
+}
+
+export function parseOmpQueueState(value: unknown): OmpQueueState | null {
+  const raw = asObject(value);
+  if (!raw || !Array.isArray(raw.messages) || !isFiniteNumber(raw.revision)) return null;
+  const messages: OmpQueueItem[] = [];
+  for (const item of raw.messages) {
+    const message = asObject(item);
+    if (!message || !isString(message.messageId) || !isString(message.preview) || !isFiniteNumber(message.createdAt)) continue;
+    const mode = message.mode;
+    if (mode !== 'steer' && mode !== 'followUp' && mode !== 'abortAndPrompt' && mode !== 'prompt') continue;
+    messages.push({
+      messageId: message.messageId,
+      mode,
+      preview: message.preview,
+      createdAt: message.createdAt,
+    });
+  }
+  return {
+    messages,
+    revision: raw.revision,
+    updatedAt: isFiniteNumber(raw.updatedAt) ? raw.updatedAt : Date.now(),
+  };
+}
+
+export function parseOmpRetryState(value: unknown): OmpRetryState | null {
+  const raw = asObject(value);
+  if (!raw) return null;
+  const phase = raw.phase;
+  if (phase !== 'idle' && phase !== 'waiting' && phase !== 'succeeded' && phase !== 'failed' && phase !== 'cancelled') {
+    return null;
+  }
+  return {
+    phase,
+    lastFailedTurnId: optionalString(raw.lastFailedTurnId),
+    attempt: isFiniteNumber(raw.attempt) ? raw.attempt : undefined,
+    maxAttempts: isFiniteNumber(raw.maxAttempts) ? raw.maxAttempts : undefined,
+    error: optionalString(raw.error),
+  };
+}
+
+function isOmpSettingsValueType(value: unknown): value is OmpSettingsValueType {
+  return value === 'string' || value === 'number' || value === 'boolean' || value === 'enum' || value === 'array' || value === 'object';
+}
+
+function isOmpSettingsAppliesTo(value: unknown): value is OmpSettingsAppliesTo {
+  return value === 'runtime' || value === 'desktop-equivalent' || value === 'tui-only' || value === 'advanced-raw';
+}
+
+function parseOmpSettingsSchemaEntry(value: unknown): OmpSettingsSchemaEntry | null {
+  const raw = asObject(value);
+  if (!raw || !isString(raw.path) || !isOmpSettingsValueType(raw.type) || !isString(raw.label) || !isOmpSettingsAppliesTo(raw.appliesTo)) {
+    return null;
+  }
+  return {
+    path: raw.path,
+    type: raw.type,
+    label: raw.label,
+    description: optionalString(raw.description),
+    tab: optionalString(raw.tab),
+    group: optionalString(raw.group),
+    options: Array.isArray(raw.options) ? raw.options : undefined,
+    default: raw.default,
+    effectiveValue: raw.effectiveValue,
+    sensitive: typeof raw.sensitive === 'boolean' ? raw.sensitive : false,
+    restartRequired: typeof raw.restartRequired === 'boolean' ? raw.restartRequired : false,
+    appliesTo: raw.appliesTo,
+  };
+}
+
+export function parseOmpSettingsSchema(value: unknown): OmpSettingsSchema | null {
+  const raw = asObject(value);
+  if (!raw || !Array.isArray(raw.entries) || !isFiniteNumber(raw.revision)) return null;
+  return {
+    entries: raw.entries.map(parseOmpSettingsSchemaEntry).filter((e): e is OmpSettingsSchemaEntry => e !== null),
+    revision: raw.revision,
+  };
+}
+
+export function parseOmpSettingsSetResult(value: unknown): OmpSettingsSetResult | null {
+  const raw = asObject(value);
+  if (!raw || typeof raw.success !== 'boolean' || !isFiniteNumber(raw.revision)) return null;
+  return {
+    success: raw.success,
+    revision: raw.revision,
+    restartRequired: typeof raw.restartRequired === 'boolean' ? raw.restartRequired : false,
+    conflict: typeof raw.conflict === 'boolean' ? raw.conflict : undefined,
+  };
+}
+
+export function parseOmpTranscriptionResult(value: unknown): OmpTranscriptionResult | null {
+  const raw = asObject(value);
+  if (!raw || !isString(raw.text)) return null;
+  return {
+    text: raw.text,
+    confidence: isFiniteNumber(raw.confidence) ? raw.confidence : undefined,
+    language: optionalString(raw.language),
+  };
+}
+
+export function parseOmpDebugResult(value: unknown): OmpDebugResult | null {
+  const raw = asObject(value);
+  if (!raw || !isString(raw.toolId) || typeof raw.success !== 'boolean') return null;
+  return {
+    toolId: raw.toolId,
+    success: raw.success,
+    output: asObject(raw.output) ?? {},
+    error: optionalString(raw.error),
+    sanitized: typeof raw.sanitized === 'boolean' ? raw.sanitized : true,
+  };
 }

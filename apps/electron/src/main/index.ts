@@ -164,7 +164,10 @@ if (isDebugMode) {
   process.env.CRAFT_UV = bundledUvExists ? uvBinary : (fallbackUv ?? uvBinary)
 
   // Bun runtime (packaged builds should prefer bundled runtime over PATH)
-  const bunBinary = join(resourcesBase, 'vendor', 'bun', process.platform === 'win32' ? 'bun.exe' : 'bun')
+  // electron-builder stages Bun once at process.resourcesPath/vendor/bun.
+  // Keep the app payload free of a second 100+ MB copy under resources/app.
+  const bunBase = app.isPackaged ? process.resourcesPath : resourcesBase
+  const bunBinary = join(bunBase, 'vendor', 'bun', process.platform === 'win32' ? 'bun.exe' : 'bun')
   if (existsSync(bunBinary)) {
     process.env.CRAFT_BUN = bunBinary
   }

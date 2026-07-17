@@ -13,20 +13,48 @@
  * NEVER import this file from renderer components or from files that the renderer imports.
  */
 
-import { getProviders, getModels } from '@earendil-works/pi-ai';
+import { getProviders, getModels, getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import type { KnownProvider, Model, Api } from '@earendil-works/pi-ai';
-import type { ModelDefinition } from './models.ts';
+import type { ModelDefinition, ModelThinkingLevel } from './models.ts';
 
 // ============================================
 // PI MODEL DISCOVERY
 // ============================================
 
 /**
+ * Convert Pi's provider/model-specific effort names into the levels shown by
+ * Craft. Pi's `minimal` effort is preserved as a first-class level. Craft has
+ * no Pi equivalent for `max`, so it is deliberately omitted instead of being presented as a
+ * selectable level that Pi would silently clamp to `xhigh`.
+ */
+export function getPiSupportedThinkingLevels(m: Model<Api>): ModelThinkingLevel[] | undefined {
+  if (!m.reasoning) return undefined;
+
+  const levelByPiEffort: Record<string, ModelThinkingLevel> = {
+    off: 'off',
+    minimal: 'minimal',
+    low: 'low',
+    medium: 'medium',
+    high: 'high',
+    xhigh: 'xhigh',
+  };
+  const supported = new Set<ModelThinkingLevel>();
+  for (const level of getSupportedThinkingLevels(m)) {
+    const craftLevel = levelByPiEffort[level];
+    if (craftLevel) supported.add(craftLevel);
+  }
+
+  const ordered: ModelThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+  return ordered.filter(level => supported.has(level));
+}
+
+/**
  * Convert a Pi SDK Model to our ModelDefinition format.
  */
-function piModelToDefinition(m: Model<Api>): ModelDefinition {
+export function piModelToDefinition(m: Model<Api>): ModelDefinition {
   const lastPart = m.name.split(/[\s-]/).pop() ?? m.name;
   const shortName = m.name.length > 20 ? lastPart : m.name;
+  const supportedThinkingLevels = getPiSupportedThinkingLevels(m);
 
   return {
     id: `pi/${m.id}`,
@@ -36,6 +64,8 @@ function piModelToDefinition(m: Model<Api>): ModelDefinition {
     provider: 'pi',
     contextWindow: m.contextWindow,
     supportsThinking: m.reasoning,
+    supportsImages: m.input.includes('image'),
+    ...(supportedThinkingLevels ? { supportedThinkingLevels } : {}),
   };
 }
 

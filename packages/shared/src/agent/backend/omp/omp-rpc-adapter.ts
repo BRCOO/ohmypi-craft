@@ -4,6 +4,7 @@ import {
   parseOmpAvailableCommandsUpdate,
   parseOmpConfigUpdateFrame,
   parseOmpExtensionErrorFrame,
+  parseOmpGoalModeStateUpdate,
   parseOmpHostToolCall,
   parseOmpHostToolCancel,
   parseOmpHostUriCancel,
@@ -13,6 +14,7 @@ import {
   parseOmpMessageUpdateFrame,
   parseOmpPlanModeStateUpdate,
   parseOmpPlanReviewRequest,
+  parseOmpLoopModeStateUpdate,
   parseOmpPromptResult,
   parseOmpQueueControlState,
   parseOmpReadyFrame,
@@ -29,6 +31,8 @@ import {
   type OmpRpcHostToolCancelFrame,
   type OmpRpcHostUriCancelFrame,
   type OmpRpcHostUriRequestFrame,
+  type OmpRpcGoalModeStateUpdateFrame,
+  type OmpRpcLoopModeStateUpdateFrame,
   type OmpRpcMessageEndFrame,
   type OmpRpcMessageStartFrame,
   type OmpRpcMessageUpdateFrame,
@@ -65,6 +69,8 @@ export interface OmpRpcAdaptedFrame {
   hostUriCancel?: OmpRpcHostUriCancelFrame;
   planModeState?: OmpRpcPlanModeStateUpdateFrame;
   planReviewRequest?: OmpRpcPlanReviewRequestFrame;
+  goalModeState?: OmpRpcGoalModeStateUpdateFrame;
+  loopModeState?: OmpRpcLoopModeStateUpdateFrame;
   sessionId?: string;
   unknownFrameType?: string;
 }
@@ -805,6 +811,35 @@ export class OmpRpcEventAdapter {
         return {
           events: [],
           ...(planReviewRequest ? { planReviewRequest } : {}),
+        };
+      }
+
+      case 'goal_mode_state_update': {
+        const state = parseOmpGoalModeStateUpdate(raw);
+        const goal = state?.state.goal;
+        return {
+          events: [{
+            type: 'status',
+            message: goal
+              ? `OMP Goal ${state?.state.enabled ? 'active' : state?.state.paused ? 'paused' : goal.status}: ${goal.objective}`
+              : 'OMP Goal cleared',
+          }],
+          ...(state ? { goalModeState: state } : {}),
+        };
+      }
+
+      case 'loop_mode_state_update': {
+        const state = parseOmpLoopModeStateUpdate(raw);
+        return {
+          events: [{
+            type: 'status',
+            message: state?.state.enabled
+              ? state.state.prompt
+                ? `OMP Loop active${state.state.remaining !== undefined ? ` (${state.state.remaining} remaining)` : ''}`
+                : 'OMP Loop enabled; waiting for a prompt'
+              : 'OMP Loop disabled',
+          }],
+          ...(state ? { loopModeState: state } : {}),
         };
       }
 

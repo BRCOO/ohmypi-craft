@@ -340,5 +340,8 @@ function reduceRuntimeEvent(
         },
         updatedAt: now,
       };
+
+    default:
+      return state;
   }
 }

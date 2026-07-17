@@ -72,6 +72,29 @@ describe('OmpFeatureCenterSettingsPage components', () => {
     expect(html).toContain('Reveal source')
   })
 
+  it('renders runtime-only bundled resources without a fake file action', () => {
+    const capability: OmpFeatureCapabilityDto = {
+      count: 1,
+      sourcePaths: [],
+      items: [{
+        name: 'explore',
+        level: 'bundled',
+        description: 'Explore the repository',
+        provider: 'omp',
+        runtimeLoaded: true,
+      }],
+      usageHint: '/agent <name>',
+    }
+
+    const html = normalizeReactServerHtml(ReactDOMServer.renderToString(
+      <CapabilityCard icon={Sparkles} title="Agents" capability={capability} />,
+    ))
+
+    expect(html).toContain('explore')
+    expect(html).toContain('bundled')
+    expect(html).not.toContain('Reveal source')
+  })
+
   it('renders project override warning on model role rows', () => {
     const role: OmpFeatureModelRoleDto = {
       role: 'plan',

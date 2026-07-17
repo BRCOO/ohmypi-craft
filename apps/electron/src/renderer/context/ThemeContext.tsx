@@ -31,7 +31,7 @@ interface ThemeContextType {
   /** Workspace-specific color theme override (null = inherit from app default) */
   workspaceColorTheme: string | null
   /** Set workspace-specific color theme override (null = inherit) */
-  setWorkspaceColorTheme: (theme: string | null) => void
+  setWorkspaceColorTheme: (theme: string | null) => Promise<void>
 
   // Derived/computed
   resolvedMode: 'light' | 'dark'
@@ -496,13 +496,26 @@ export function ThemeProvider({
   }, [mode, colorTheme])
 
   // Set workspace-specific color theme override
-  const setWorkspaceColorTheme = useCallback((newTheme: string | null) => {
+  const setWorkspaceColorTheme = useCallback(async (newTheme: string | null) => {
     if (!activeWorkspaceId) return
+    const previousTheme = workspaceColorTheme
     setWorkspaceColorThemeState(newTheme)
-    window.electronAPI?.setWorkspaceColorTheme?.(activeWorkspaceId, newTheme)
-    // Broadcast to other windows
-    window.electronAPI?.broadcastWorkspaceThemeChange?.(activeWorkspaceId, newTheme)
-  }, [activeWorkspaceId])
+    try {
+      await window.electronAPI?.setWorkspaceColorTheme?.(activeWorkspaceId, newTheme)
+      // Broadcast to other windows only after persistence succeeds.
+      try {
+        await window.electronAPI?.broadcastWorkspaceThemeChange?.(activeWorkspaceId, newTheme)
+      } catch (error) {
+        // Cross-window notification is best effort; persistence already
+        // succeeded and must not be rolled back because another window was
+        // unavailable.
+        console.warn('[ThemeContext] Failed to broadcast workspace theme change:', error)
+      }
+    } catch (error) {
+      setWorkspaceColorThemeState(previousTheme)
+      throw error
+    }
+  }, [activeWorkspaceId, workspaceColorTheme])
 
   // Listen for workspace theme changes from other windows
   useEffect(() => {

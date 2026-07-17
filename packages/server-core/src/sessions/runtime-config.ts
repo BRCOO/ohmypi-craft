@@ -112,7 +112,7 @@ export function filterAttachmentsForModelInput(
   modelId: string,
 ): ModelAttachmentFilterResult {
   if (!attachments?.length) return { attachments, omittedImages: [] }
-  if (!connection || !isCompatProvider(connection.providerType)) return { attachments, omittedImages: [] }
+  if (!connection) return { attachments, omittedImages: [] }
   if (modelSupportsImages(connection, modelId)) return { attachments, omittedImages: [] }
 
   const modelAttachments: FileAttachment[] = []

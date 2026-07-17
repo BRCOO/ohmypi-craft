@@ -67,6 +67,30 @@ function createFakeSpawn(options: {
   }
 }
 
+const capabilityManifest = {
+  protocolVersion: 'desktop-parity-1',
+  runtimeVersion: 'test',
+  commands: ['get_capabilities', 'get_debug_tools', 'get_queue_state', 'get_state', 'set_plan_mode'],
+  events: [],
+  features: {
+    'tools.debug': { supported: true },
+    'queue.dequeue': { supported: true },
+  },
+}
+
+const debugTools = [
+  {
+    id: 'runtime_state',
+    name: 'Runtime state',
+    description: 'Inspect sanitized runtime state.',
+    parameters: [],
+  },
+]
+
+function writeResponse(child: FakeChild, id: string, data: unknown): void {
+  child.stdout.write(JSON.stringify({ type: 'response', id, success: true, data }) + '\n')
+}
+
 describe('probeOmpBinaryVersion', () => {
   it('parses omp/<version> from --version output', async () => {
     const spawn = createFakeSpawn({ versionOutput: 'omp/2.1.0-rc1 platform=win32\n' })
@@ -139,25 +163,13 @@ describe('validateRuntimeCapability', () => {
       rpcSequence: (child) => {
         child.stdout.write(JSON.stringify({ type: 'ready' }) + '\n')
         setTimeout(() => {
-          child.stdout.write(
-            JSON.stringify({
-              type: 'response',
-              id: 'omp-state',
-              success: true,
-              data: { capabilities: { planMode: true } },
-            }) + '\n',
-          )
+          writeResponse(child, 'omp-capabilities', capabilityManifest)
         }, 10)
         setTimeout(() => {
-          child.stdout.write(
-            JSON.stringify({
-              type: 'response',
-              id: 'omp-plan-mode',
-              success: true,
-              data: { enabled: true, phase: 'planning' },
-            }) + '\n',
-          )
+          writeResponse(child, 'omp-debug-tools', debugTools)
         }, 20)
+        setTimeout(() => writeResponse(child, 'omp-state', { capabilities: { planMode: true } }), 30)
+        setTimeout(() => writeResponse(child, 'omp-plan-mode', { enabled: true, phase: 'planning' }), 40)
       },
     })
 
@@ -169,7 +181,7 @@ describe('validateRuntimeCapability', () => {
     expect(result.output).toContain('Plan Mode phase: planning')
     expect(result.output).toContain('OMP version: 9.9.9')
     expect(result.data?.ompVersion).toBe('9.9.9')
-    expect(result.data?.capabilities).toEqual(['planMode'])
+    expect(result.data?.capabilities).toEqual(expect.arrayContaining(['tools.debug', 'queue.dequeue', 'planMode']))
   })
 
   it('fails when the OMP binary version cannot be probed', async () => {
@@ -190,16 +202,9 @@ describe('validateRuntimeCapability', () => {
     const spawn = createFakeSpawn({
       rpcSequence: (child) => {
         child.stdout.write(JSON.stringify({ type: 'ready' }) + '\n')
-        setTimeout(() => {
-          child.stdout.write(
-            JSON.stringify({
-              type: 'response',
-              id: 'omp-state',
-              success: true,
-              data: { capabilities: {} },
-            }) + '\n',
-          )
-        }, 10)
+        setTimeout(() => writeResponse(child, 'omp-capabilities', capabilityManifest), 10)
+        setTimeout(() => writeResponse(child, 'omp-debug-tools', debugTools), 20)
+        setTimeout(() => writeResponse(child, 'omp-state', { capabilities: {} }), 30)
       },
     })
 
@@ -215,27 +220,10 @@ describe('validateRuntimeCapability', () => {
     const spawn = createFakeSpawn({
       rpcSequence: (child) => {
         child.stdout.write(JSON.stringify({ type: 'ready' }) + '\n')
-        setTimeout(() => {
-          child.stdout.emit(
-            'data',
-            JSON.stringify({
-              type: 'response',
-              id: 'omp-state',
-              success: true,
-              data: { capabilities: { planMode: true } },
-            }) + '\n',
-          )
-        }, 10)
-        setTimeout(() => {
-          child.stdout.write(
-            JSON.stringify({
-              type: 'response',
-              id: 'omp-plan-mode',
-              success: true,
-              data: { enabled: false, phase: 'inactive' },
-            }) + '\n',
-          )
-        }, 20)
+        setTimeout(() => writeResponse(child, 'omp-capabilities', capabilityManifest), 10)
+        setTimeout(() => writeResponse(child, 'omp-debug-tools', debugTools), 20)
+        setTimeout(() => writeResponse(child, 'omp-state', { capabilities: { planMode: true } }), 30)
+        setTimeout(() => writeResponse(child, 'omp-plan-mode', { enabled: false, phase: 'inactive' }), 40)
       },
     })
 
@@ -245,6 +233,23 @@ describe('validateRuntimeCapability', () => {
     )
     expect(result.status).toBe('failed')
     expect(result.error).toContain('did not enter planning')
+  })
+
+  it('fails when the debug-tool response does not match the desktop array contract', async () => {
+    const spawn = createFakeSpawn({
+      rpcSequence: (child) => {
+        child.stdout.write(JSON.stringify({ type: 'ready' }) + '\n')
+        setTimeout(() => writeResponse(child, 'omp-capabilities', capabilityManifest), 10)
+        setTimeout(() => writeResponse(child, 'omp-debug-tools', { tools: debugTools }), 20)
+      },
+    })
+
+    const result = await validateRuntimeCapability(
+      { root, timeoutMs: 500 },
+      { spawnProcess: spawn as unknown as typeof import('node:child_process').spawn },
+    )
+    expect(result.status).toBe('failed')
+    expect(result.error).toContain('invalid desktop debug-tool list')
   })
 
   it('fails when OMP exits before ready', async () => {

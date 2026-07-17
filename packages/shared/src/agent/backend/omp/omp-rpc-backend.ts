@@ -84,6 +84,8 @@ import {
 } from './omp-subagent-state.ts';
 import {
   type OmpControlState,
+  type OmpGoalControlState,
+  type OmpLoopControlState,
   type OmpPlanControlState,
   DEFAULT_OMP_RPC_LONG_REQUEST_TIMEOUT_MS,
   DEFAULT_OMP_RPC_REQUEST_TIMEOUT_MS,
@@ -94,6 +96,7 @@ import {
   craftThinkingLevelToOmp,
   ompThinkingLevelToCraft,
   parseOmpAvailableCommandsResponseData,
+  parseOmpCapabilityManifest,
   parseOmpBranchMessagesResponseData,
   parseOmpBranchResult,
   parseOmpCancellationResult,
@@ -109,6 +112,8 @@ import {
   parseOmpSetHostUriSchemesResponseData,
   parseOmpLastAssistantTextResponseData,
   parseOmpMessagesResponseData,
+  parseOmpGoalModeState,
+  parseOmpLoopModeState,
   parseOmpPlanModeState,
   parseOmpPromptResponseData,
   parseOmpRuntimeEvent,
@@ -137,6 +142,8 @@ import {
   type OmpRpcExportHtmlResponseData,
   type OmpRpcExtensionErrorFrame,
   type OmpRpcExtensionUiResponse,
+  type OmpCapabilityManifest,
+  type OmpFeatureId,
   type OmpRpcHandoffResult,
   type OmpRpcHostToolCallFrame,
   type OmpRpcHostToolDefinition,
@@ -147,6 +154,8 @@ import {
   type OmpRpcHostUriResultFrame,
   type OmpRpcLoginProvider,
   type OmpRpcLoginResult,
+  type OmpRpcGoalModeState,
+  type OmpRpcLoopModeState,
   type OmpRpcPlanModeState,
   type OmpRpcPlanReviewRequestFrame,
   type OmpRpcReadyFrame,
@@ -406,6 +415,36 @@ function cloneOmpPlanControlState(state: OmpPlanControlState): OmpPlanControlSta
   };
 }
 
+function createOmpGoalControlState(): OmpGoalControlState {
+  return {
+    supported: false,
+    state: { enabled: false, paused: false },
+    updatedAt: Date.now(),
+  };
+}
+
+function cloneOmpGoalControlState(state: OmpGoalControlState): OmpGoalControlState {
+  return {
+    ...state,
+    state: {
+      ...state.state,
+      goal: state.state.goal ? { ...state.state.goal } : undefined,
+    },
+  };
+}
+
+function createOmpLoopControlState(): OmpLoopControlState {
+  return {
+    supported: false,
+    state: { enabled: false, status: 'disabled' },
+    updatedAt: Date.now(),
+  };
+}
+
+function cloneOmpLoopControlState(state: OmpLoopControlState): OmpLoopControlState {
+  return { ...state, state: { ...state.state } };
+}
+
 export class OmpRpcBackend extends BaseAgent {
   protected backendName = 'OMP';
 
@@ -429,6 +468,8 @@ export class OmpRpcBackend extends BaseAgent {
   private sessionState: OmpRpcSessionState | null = null;
   private runtimeState: OmpRuntimeState = createOmpRuntimeState();
   private planState: OmpPlanControlState = createOmpPlanControlState();
+  private goalState: OmpGoalControlState = createOmpGoalControlState();
+  private loopState: OmpLoopControlState = createOmpLoopControlState();
   private todoState: OmpTodoState = createOmpTodoState();
   private todoRefresh: Promise<OmpTodoState> | null = null;
   private todoWrite: Promise<OmpTodoState> | null = null;
@@ -444,6 +485,7 @@ export class OmpRpcBackend extends BaseAgent {
   private pendingHostUriRequests = new Map<string, PendingHostUriRequest>();
   private pendingLogin: PendingLogin | null = null;
   private availableCommands: OmpRpcAvailableSlashCommand[] = [];
+  private capabilityManifest: OmpCapabilityManifest | null = null;
   private controlStateUpdatedAt = Date.now();
   private remoteThinkingLevel: OmpThinkingLevel | null = null;
   private thinkingLevelUpdate: Promise<void> | null = null;
@@ -897,12 +939,62 @@ export class OmpRpcBackend extends BaseAgent {
     }));
   }
 
+  getCapabilities(): OmpCapabilityManifest | null {
+    return this.capabilityManifest;
+  }
+
+  isCommandSupported(command: string): boolean {
+    if (this.capabilityManifest) {
+      return this.capabilityManifest.commands.includes(command);
+    }
+    // Legacy OMP without manifest: allow all known commands to preserve existing behavior.
+    return getOmpRpcCommandTimeout(command) !== this.requestTimeoutMs;
+  }
+
+  isFeatureSupported(feature: OmpFeatureId): boolean {
+    return this.capabilityManifest?.features[feature]?.supported ?? false;
+  }
+
+  async refreshCapabilities(): Promise<void> {
+    try {
+      const data = await this.send({ type: 'get_capabilities' });
+      const manifest = parseOmpCapabilityManifest(data);
+      if (manifest) {
+        this.capabilityManifest = manifest;
+        this.debug(`OMP capability manifest loaded: ${manifest.commands.length} commands, ${manifest.events.length} events`);
+        return;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.debug(`OMP get_capabilities failed, falling back to get_available_commands: ${message}`);
+    }
+
+    try {
+      const data = await this.send({ type: 'get_available_commands' });
+      const parsed = parseOmpAvailableCommandsResponseData(data);
+      const commands = parsed?.commands.map((c) => c.name) ?? [];
+      this.capabilityManifest = {
+        protocolVersion: 'legacy',
+        commands,
+        events: [],
+        features: {},
+      };
+      this.debug(`OMP legacy capability fallback loaded: ${commands.length} commands`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.debug(`OMP capability fallback failed: ${message}`);
+    }
+  }
+
+
   getOmpControlState(): OmpControlState {
     return {
       availableCommands: this.getCachedAvailableCommands(),
       queue: this.currentQueueControlState(),
       runtime: cloneOmpRuntimeState(this.runtimeState),
       plan: cloneOmpPlanControlState(this.planState),
+      goal: cloneOmpGoalControlState(this.goalState),
+      loop: cloneOmpLoopControlState(this.loopState),
       updatedAt: this.controlStateUpdatedAt,
     };
   }
@@ -917,6 +1009,52 @@ export class OmpRpcBackend extends BaseAgent {
     if (!state) throw new Error('OMP set_plan_mode returned an invalid Plan Mode state');
     this.applyPlanState(state, true);
     return cloneOmpPlanControlState(this.planState);
+  }
+
+  getOmpGoalState(): OmpGoalControlState {
+    return cloneOmpGoalControlState(this.goalState);
+  }
+
+  async setOmpGoal(objective: string, tokenBudget?: number, replace = false): Promise<OmpGoalControlState> {
+    await this.ensureSubprocess();
+    if (!this.goalState.supported) throw new Error('This OMP runtime does not expose native Goal Mode over RPC');
+    const command = replace ? 'replace_goal' : 'set_goal';
+    const data = await this.send({ type: command, objective, tokenBudget });
+    return this.applyGoalResponse(data, command);
+  }
+
+  async pauseOmpGoal(): Promise<OmpGoalControlState> {
+    await this.ensureSubprocess();
+    return this.applyGoalResponse(await this.send({ type: 'pause_goal' }), 'pause_goal');
+  }
+
+  async resumeOmpGoal(): Promise<OmpGoalControlState> {
+    await this.ensureSubprocess();
+    return this.applyGoalResponse(await this.send({ type: 'resume_goal' }), 'resume_goal');
+  }
+
+  async dropOmpGoal(): Promise<OmpGoalControlState> {
+    await this.ensureSubprocess();
+    return this.applyGoalResponse(await this.send({ type: 'drop_goal' }), 'drop_goal');
+  }
+
+  async setOmpGoalBudget(tokenBudget?: number): Promise<OmpGoalControlState> {
+    await this.ensureSubprocess();
+    return this.applyGoalResponse(await this.send({ type: 'set_goal_budget', tokenBudget }), 'set_goal_budget');
+  }
+
+  getOmpLoopState(): OmpLoopControlState {
+    return cloneOmpLoopControlState(this.loopState);
+  }
+
+  async setOmpLoop(enabled: boolean, prompt?: string, limit?: string): Promise<OmpLoopControlState> {
+    await this.ensureSubprocess();
+    if (!this.loopState.supported) throw new Error('This OMP runtime does not expose native Loop Mode over RPC');
+    const data = await this.send({ type: 'set_loop', enabled, prompt, limit });
+    const state = parseOmpLoopModeState(data);
+    if (!state) throw new Error('OMP set_loop returned an invalid Loop Mode state');
+    this.applyLoopState(state, true);
+    return cloneOmpLoopControlState(this.loopState);
   }
 
   async respondToOmpPlanReview(
@@ -946,6 +1084,12 @@ export class OmpRpcBackend extends BaseAgent {
     const parsed = parseOmpLoginProvidersResponseData(data);
     if (!parsed) throw new Error('OMP get_login_providers returned an invalid provider list');
     return parsed.providers;
+  }
+
+  async logoutOmpProvider(providerId: string): Promise<{ providerId: string }> {
+    await this.ensureSubprocess();
+    const result = await this.send<{ providerId?: string }>({ type: 'logout', providerId });
+    return { providerId: result?.providerId ?? providerId };
   }
 
   async loginOmpProvider(providerId: string, options: OmpLoginOptions = {}): Promise<OmpLoginResult> {
@@ -1443,13 +1587,26 @@ export class OmpRpcBackend extends BaseAgent {
       env.USERPROFILE = ompHome;
     }
 
-    this.debug(`Starting OMP RPC: ${resolved.command} ${[...resolved.args, '--mode', 'rpc'].join(' ')}`);
+    // OMP builds its initial system/workstation context as the process starts.
+    // Passing Craft's concrete selection here prevents that context from being
+    // initialized with OMP's last persisted model and only switched afterwards.
+    const startupSelection = resolveOmpModelSelection(this._model);
+    const args = [
+      ...resolved.args,
+      '--mode',
+      'rpc',
+      ...(startupSelection
+        ? [`--model=${startupSelection.provider}/${startupSelection.modelId}`]
+        : []),
+    ];
+
+    this.debug(`Starting OMP RPC: ${resolved.command} ${args.join(' ')}`);
     this.diagnostics.startProcess(generation, {
       executable: resolved.command,
       source: resolved.source,
     });
 
-    const child = this.spawnProcess(resolved.command, [...resolved.args, '--mode', 'rpc'], {
+    const child = this.spawnProcess(resolved.command, args, {
       cwd,
       env,
       windowsHide: true,
@@ -1524,8 +1681,7 @@ export class OmpRpcBackend extends BaseAgent {
     const runtimeEvent = parseOmpRuntimeEvent(raw);
     if (runtimeEvent) {
       if (runtimeEvent.type === 'retry_fallback_succeeded' && runtimeEvent.role === 'default') {
-        super.setModel(runtimeEvent.model);
-        this.selectedModelKey = runtimeEvent.model;
+        this.applyRemoteModel(runtimeEvent.model);
       }
       this.updateRuntimeState({ type: 'runtime_event', event: runtimeEvent });
       if (runtimeEvent.type === 'auto_compaction_end') {
@@ -1594,6 +1750,7 @@ export class OmpRpcBackend extends BaseAgent {
     if (adapted.thinkingLevel) {
       this.remoteThinkingLevel = adapted.thinkingLevel;
       if (this.sessionState) this.sessionState.thinkingLevel = adapted.thinkingLevel;
+      this.applyRemoteThinkingLevel(adapted.thinkingLevel);
       this.updateRuntimeState({
         type: 'config_update',
         config: { thinkingLevel: adapted.thinkingLevel },
@@ -1610,8 +1767,7 @@ export class OmpRpcBackend extends BaseAgent {
       const runtimeConfig: OmpRuntimeConfig = {};
       if (config.model && typeof config.model === 'string') {
         runtimeConfig.model = config.model;
-        super.setModel(config.model);
-        this.selectedModelKey = config.model;
+        this.applyRemoteModel(config.model);
       }
       const level = config.thinkingLevel ?? config.thinking_level;
       if (
@@ -1623,6 +1779,7 @@ export class OmpRpcBackend extends BaseAgent {
         || level === 'xhigh'
       ) {
         runtimeConfig.thinkingLevel = level;
+        this.applyRemoteThinkingLevel(level);
       }
       if (typeof config.autoCompactionEnabled === 'boolean') runtimeConfig.autoCompactionEnabled = config.autoCompactionEnabled;
       if (typeof config.autoRetryEnabled === 'boolean') runtimeConfig.autoRetryEnabled = config.autoRetryEnabled;
@@ -1642,6 +1799,14 @@ export class OmpRpcBackend extends BaseAgent {
 
     if (adapted.planModeState) {
       this.applyPlanState(adapted.planModeState.state, true);
+    }
+
+    if (adapted.goalModeState) {
+      this.applyGoalState(adapted.goalModeState.state, true);
+    }
+
+    if (adapted.loopModeState) {
+      this.applyLoopState(adapted.loopModeState.state, true);
     }
 
     if (adapted.planReviewRequest) {
@@ -1727,6 +1892,17 @@ export class OmpRpcBackend extends BaseAgent {
     return this.createRequest<T>(command, timeoutMs).promise;
   }
 
+  /**
+   * Public escape hatch for sending a raw OMP RPC command. Used by the
+   * SessionManager generic dispatcher for commands that do not yet have a
+   * dedicated typed method. The command is still validated against the
+   * capability manifest when one is available.
+   */
+  async sendCommand<T = unknown>(command: OmpRpcCommand, timeoutMs?: number): Promise<T> {
+    await this.ensureSubprocess();
+    return this.send<T>(command, timeoutMs);
+  }
+
   private createRequest<T = unknown>(command: OmpRpcCommand, timeoutMsOverride?: number): { id: string; promise: Promise<T> } {
     const child = this.child;
     const stdin = child?.stdin;
@@ -1741,6 +1917,12 @@ export class OmpRpcBackend extends BaseAgent {
     const id = `omp-${++this.requestCounter}`;
     const frame = { id, ...command };
     const commandName = command.type;
+    if (this.capabilityManifest && !this.capabilityManifest.commands.includes(commandName)) {
+      return {
+        id: '',
+        promise: Promise.reject(new Error(`OMP capability not supported: ${commandName}`)),
+      };
+    }
     const timeoutMs = timeoutMsOverride
       ?? this.requestTimeoutOverrideMs
       ?? getOmpRpcCommandTimeout(commandName, this.requestTimeoutMs, this.longRequestTimeoutMs);
@@ -1874,6 +2056,8 @@ export class OmpRpcBackend extends BaseAgent {
     this.sessionState = null;
     this.availableCommands = [];
     this.planState = createOmpPlanControlState();
+    this.goalState = createOmpGoalControlState();
+    this.loopState = createOmpLoopControlState();
     this.subagentRefresh = null;
     this.hostBridgeRegistration = null;
     this.registeredHostToolNames.clear();
@@ -3581,8 +3765,50 @@ export class OmpRpcBackend extends BaseAgent {
     this.touchControlState();
   }
 
+  /** Keep Craft's persisted session in sync with OMP-native model switches. */
+  private applyRemoteModel(model: string): void {
+    const trimmed = model.trim();
+    if (!trimmed || this.getModel() === trimmed) return;
+    super.setModel(trimmed);
+    this.selectedModelKey = trimmed;
+    this.config.onModelUpdate?.(trimmed);
+  }
+
+  /** Normalize OMP thinking names at the RPC boundary and persist the change. */
+  private applyRemoteThinkingLevel(level: unknown): void {
+    const craftLevel = ompThinkingLevelToCraft(level);
+    if (!craftLevel || this.getThinkingLevel() === craftLevel) return;
+    super.setThinkingLevel(craftLevel);
+    this.config.onThinkingLevelUpdate?.(craftLevel);
+  }
+
   private applyPlanState(state: OmpRpcPlanModeState, supported: boolean): void {
     this.planState = {
+      supported,
+      state: { ...state },
+      updatedAt: Date.now(),
+    };
+    this.touchControlState();
+  }
+
+  private applyGoalResponse(data: unknown, command: string): OmpGoalControlState {
+    const state = parseOmpGoalModeState(data);
+    if (!state) throw new Error(`OMP ${command} returned an invalid Goal Mode state`);
+    this.applyGoalState(state, true);
+    return cloneOmpGoalControlState(this.goalState);
+  }
+
+  private applyGoalState(state: OmpRpcGoalModeState, supported: boolean): void {
+    this.goalState = {
+      supported,
+      state: { ...state, goal: state.goal ? { ...state.goal } : undefined },
+      updatedAt: Date.now(),
+    };
+    this.touchControlState();
+  }
+
+  private applyLoopState(state: OmpRpcLoopModeState, supported: boolean): void {
+    this.loopState = {
       supported,
       state: { ...state },
       updatedAt: Date.now(),
@@ -3623,6 +3849,8 @@ export class OmpRpcBackend extends BaseAgent {
     if (this.sessionState && this.sessionState.sessionId !== state.sessionId) {
       this.runtimeState = createOmpRuntimeState();
       this.planState = createOmpPlanControlState();
+      this.goalState = createOmpGoalControlState();
+      this.loopState = createOmpLoopControlState();
       this.todoState = createOmpTodoState();
       this.subagentState = createOmpSubagentState();
     }
@@ -3635,9 +3863,33 @@ export class OmpRpcBackend extends BaseAgent {
         : { state: { enabled: false, phase: 'inactive' as const } }),
       updatedAt: Date.now(),
     };
+    this.goalState = {
+      ...this.goalState,
+      supported: state.capabilities?.goalMode === true,
+      ...(state.capabilities?.goalMode === true
+        ? {}
+        : { state: { enabled: false, paused: false } }),
+      updatedAt: Date.now(),
+    };
+    this.loopState = {
+      ...this.loopState,
+      supported: state.capabilities?.loopMode === true,
+      ...(state.capabilities?.loopMode === true
+        ? {}
+        : { state: { enabled: false, status: 'disabled' as const } }),
+      updatedAt: Date.now(),
+    };
     if (typeof state.model === 'string' && state.model.trim().length > 0) {
-      super.setModel(state.model);
-      this.selectedModelKey = state.model;
+      // `omp/default` means “use whatever OMP currently has selected”. When
+      // Craft provided a concrete model, keep that selection and let the next
+      // turn's ensureModelSelected() synchronize OMP to it. Otherwise, adopt
+      // OMP's runtime model for the default-placeholder path.
+      if (this._model === DEFAULT_OMP_MODEL) {
+        // Initial hydration is not a user change; keep the persisted Craft
+        // session model unset and only use OMP's value for this process.
+        super.setModel(state.model);
+        this.selectedModelKey = state.model;
+      }
     }
     this.runtimeState = reduceOmpRuntimeState(this.runtimeState, { type: 'session_state', state });
     this.touchControlState();

@@ -81,6 +81,20 @@ describe('getDefaultModelForConnection', () => {
     expect(modelIds).toContain(defaultModel)
   })
 
+  it('Pi Kimi Coding defaults to the current K2.7 catalog', () => {
+    const defaultModel = getDefaultModelForConnection('pi', 'kimi-coding')
+    const modelIds = getDefaultModelsForConnection('pi', 'kimi-coding').map(m => typeof m === 'string' ? m : m.id)
+    expect(modelIds).toContain('pi/k2p7')
+    expect(defaultModel).toBe('pi/k2p7')
+  })
+
+  it('Pi MiniMax defaults to the current M2.7/M3 catalog', () => {
+    const modelIds = getDefaultModelsForConnection('pi', 'minimax-cn').map(m => typeof m === 'string' ? m : m.id)
+    expect(modelIds).toContain('pi/MiniMax-M2.7')
+    expect(modelIds).toContain('pi/MiniMax-M3')
+    expect(getDefaultModelForConnection('pi', 'minimax-cn')).toBe('pi/MiniMax-M2.7')
+  })
+
   it('returns empty string for pi_compat (dynamic provider)', () => {
     const defaultModel = getDefaultModelForConnection('pi_compat')
     expect(defaultModel).toBe('')

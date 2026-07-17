@@ -35,6 +35,7 @@ import type {
   OmpTodoStateChangedEvent,
   PermissionModeChangedEvent,
   SessionModelChangedEvent,
+  SessionThinkingLevelChangedEvent,
   LLMConnectionChangedEvent,
   UserMessageEvent,
   MessageAnnotationsUpdatedEvent,
@@ -843,6 +844,21 @@ export function handleCredentialRequest(
       type: 'credential_request',
       request: event.request,
     }]
+  }
+}
+
+/** Handle a backend effort correction after model capability validation. */
+export function handleSessionThinkingLevelChanged(
+  state: SessionState,
+  event: SessionThinkingLevelChangedEvent,
+): ProcessResult {
+  const { session, streaming } = state
+  return {
+    state: {
+      session: { ...session, thinkingLevel: event.thinkingLevel },
+      streaming,
+    },
+    effects: [],
   }
 }
 

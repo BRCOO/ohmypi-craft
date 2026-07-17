@@ -122,6 +122,66 @@ describe('startup migration (integration)', () => {
     expect(connection.authType).toBe('api_key')
   })
 
+  it('migrates legacy Kimi compatible connections to Kimi K2.7 Pi models', () => {
+    const { configDir, workspaceRoot, configPath } = setupWorkspaceConfigDir()
+
+    writeRootConfig(configPath, workspaceRoot, [
+      {
+        slug: 'pi-api-key',
+        name: 'Kimi (Coding)',
+        providerType: 'pi_compat',
+        authType: 'api_key_with_endpoint',
+        baseUrl: 'https://api.kimi.com/coding',
+        customEndpoint: { api: 'anthropic-messages' },
+        models: ['k2p5', 'kimi-k2-thinking'],
+        defaultModel: 'k2p5',
+        createdAt: Date.now(),
+      },
+    ])
+
+    runMigration(configDir)
+
+    const connection = readPiApiKeyConnection(configPath)
+    expect(connection.providerType).toBe('pi')
+    expect(connection.authType).toBe('api_key')
+    expect(connection.piAuthProvider).toBe('kimi-coding')
+    expect(connection.customEndpoint).toBeUndefined()
+    expect(connection.modelSelectionMode).toBe('automaticallySyncedFromProvider')
+    expect(getModelIds(connection)).toContain('pi/k2p7')
+    expect(getModelIds(connection)).not.toContain('k2p5')
+    expect(connection.defaultModel).toBe('pi/k2p7')
+  })
+
+  it('migrates legacy MiniMax M2.5 compatible connections to current Pi models', () => {
+    const { configDir, workspaceRoot, configPath } = setupWorkspaceConfigDir()
+
+    writeRootConfig(configPath, workspaceRoot, [
+      {
+        slug: 'pi-api-key',
+        name: 'Minimax CN',
+        providerType: 'pi_compat',
+        authType: 'api_key_with_endpoint',
+        baseUrl: 'https://api.minimaxi.com/anthropic',
+        customEndpoint: { api: 'anthropic-messages' },
+        models: ['MiniMax-M2.5', 'MiniMax-M2.5-highspeed'],
+        defaultModel: 'MiniMax-M2.5',
+        createdAt: Date.now(),
+      },
+    ])
+
+    runMigration(configDir)
+
+    const connection = readPiApiKeyConnection(configPath)
+    expect(connection.providerType).toBe('pi')
+    expect(connection.authType).toBe('api_key')
+    expect(connection.piAuthProvider).toBe('minimax-cn')
+    expect(connection.modelSelectionMode).toBe('automaticallySyncedFromProvider')
+    expect(getModelIds(connection)).toContain('pi/MiniMax-M2.7')
+    expect(getModelIds(connection)).toContain('pi/MiniMax-M3')
+    expect(getModelIds(connection)).not.toContain('MiniMax-M2.5')
+    expect(connection.defaultModel).toBe('pi/MiniMax-M2.7')
+  })
+
   it('preserves userDefined3Tier model subsets during startup migration', () => {
     const { configDir, workspaceRoot, configPath } = setupWorkspaceConfigDir()
     const userDefinedModels = ['pi/claude-opus-4-6', 'pi/claude-sonnet-4-6', 'pi/claude-haiku-4-5']

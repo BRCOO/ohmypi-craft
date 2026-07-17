@@ -136,10 +136,96 @@ describe('OMP Feature Center service', () => {
     expect(state.nativePlan.rpcCommands).toEqual([
       'get_plan_mode_state',
       'set_plan_mode',
+      'reopen_plan_review',
       'plan_review_result',
+      'get_goal_state',
+      'set_goal',
+      'replace_goal',
+      'pause_goal',
+      'resume_goal',
+      'drop_goal',
+      'set_goal_budget',
+      'guided_goal_turn',
+      'get_loop_state',
+      'set_loop',
     ])
     expect(state.unavailableCommands.map(command => command.command)).not.toContain('/plan')
+    expect(state.unavailableCommands.map(command => command.command)).toEqual(expect.arrayContaining([
+      '/advisor configure',
+      '/todo edit',
+      '/mcp reauth',
+      '/mcp notifications',
+    ]))
     expect(state.lastRefreshedAt).toBe(2000)
+  })
+
+  it('merges resources discovered by the live OMP runtime without inventing editable paths', async () => {
+    const root = await makeTempRoot()
+    const homeDir = join(root, 'home')
+    const agentDir = join(homeDir, '.omp', 'agent')
+    const projectRootPath = join(root, 'workspace')
+    const codexSkillPath = join(homeDir, '.codex', 'skills', 'review', 'SKILL.md')
+    await write(codexSkillPath, '# Review\n')
+
+    const runtimeDiagnostics: OmpDiagnosticsSummary = {
+      ...diagnostics(),
+      runtimeResources: {
+        skills: [{ name: 'review', description: 'Review changes', path: codexSkillPath, source: 'user', provider: 'codex' }],
+        mcp: [{ name: 'github', source: 'native', provider: 'codex', status: 'connected', toolCount: 4 }],
+        agents: [{ name: 'explore', description: 'Explore the repository', source: 'bundled', provider: 'omp' }],
+      },
+    }
+
+    const state = await getOmpFeatureCenterState({
+      diagnostics: runtimeDiagnostics,
+      homeDir,
+      agentDir,
+      workspaceRootPath: projectRootPath,
+      projectRootPath,
+    })
+
+    const snapshot = await getOmpResourceSnapshot({}, {
+      diagnostics: runtimeDiagnostics,
+      homeDir,
+      agentDir,
+      workspaceRootPath: projectRootPath,
+      projectRootPath,
+    })
+
+    expect(state.skills.items).toContainEqual(expect.objectContaining({
+      name: 'review',
+      path: resolve(codexSkillPath),
+      provider: 'codex',
+      runtimeLoaded: true,
+    }))
+    expect(state.mcp.items).toContainEqual(expect.objectContaining({
+      name: 'github',
+      level: 'bundled',
+      status: 'connected',
+      toolCount: 4,
+      runtimeLoaded: true,
+    }))
+    expect(state.agents.items).toContainEqual(expect.objectContaining({
+      name: 'explore',
+      level: 'bundled',
+      runtimeLoaded: true,
+    }))
+    expect(snapshot.runtimeCounts).toEqual({ skills: 1, mcp: 1, agents: 1 })
+    expect(snapshot.skills.entries).toContainEqual(expect.objectContaining({
+      name: 'review',
+      readOnly: true,
+    }))
+    expect(snapshot.mcp.entries).toContainEqual(expect.objectContaining({
+      name: 'github',
+      source: 'bundled',
+      status: 'connected',
+      readOnly: true,
+    }))
+    expect(snapshot.agents.entries).toContainEqual(expect.objectContaining({
+      name: 'explore',
+      source: 'bundled',
+      readOnly: true,
+    }))
   })
 
   it('only allows opening paths surfaced by the current Feature Center state', async () => {

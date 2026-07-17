@@ -15,6 +15,26 @@ import type {
   DeepLinkNavigation,
 } from './dto'
 
+/** Runtime status payload emitted by the messaging gateway. */
+export interface MessagingPlatformRuntimeInfo {
+  platform: string
+  configured: boolean
+  connected: boolean
+  state: 'disconnected' | 'connecting' | 'connected' | 'reconnect_required' | 'error'
+  identity?: string
+  lastError?: string
+  updatedAt: number
+}
+
+/** WhatsApp adapter events surfaced to the renderer during pairing/connect. */
+export type WhatsAppUiEvent =
+  | { type: 'qr'; qr: string }
+  | { type: 'pairing_code'; code: string }
+  | { type: 'connected'; jid?: string; name?: string }
+  | { type: 'disconnected'; loggedOut: boolean; reason?: string }
+  | { type: 'unavailable'; reason: string; message: string }
+  | { type: 'error'; message: string }
+
 export interface BroadcastEventMap {
   // Session events (workspace-scoped via broadcastToWorkspace)
   [RPC_CHANNELS.sessions.EVENT]: [event: SessionEvent]
@@ -69,5 +89,7 @@ export interface BroadcastEventMap {
 
   // Messaging gateway broadcasts
   [RPC_CHANNELS.messaging.BINDING_CHANGED]: [workspaceId: string]
-  [RPC_CHANNELS.messaging.PLATFORM_STATUS]: [workspaceId: string, platform: string, connected: boolean]
+  [RPC_CHANNELS.messaging.PLATFORM_STATUS]: [workspaceId: string, platform: string, status: MessagingPlatformRuntimeInfo]
+  [RPC_CHANNELS.messaging.PENDING_CHANGED]: [workspaceId: string]
+  [RPC_CHANNELS.messaging.WA_UI_EVENT]: [payload: { workspaceId: string; event: WhatsAppUiEvent }]
 }

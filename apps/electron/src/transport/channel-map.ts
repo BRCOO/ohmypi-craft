@@ -8,11 +8,11 @@
 import { RPC_CHANNELS } from '../shared/types'
 import type { ChannelMap } from './build-api'
 
-function invoke(channel: string, transform?: (result: any) => any) {
+function invoke<const TChannel extends string>(channel: TChannel, transform?: (result: any) => any) {
   return { type: 'invoke' as const, channel, ...(transform && { transform }) }
 }
 
-function listener(channel: string) {
+function listener<const TChannel extends string>(channel: TChannel) {
   return { type: 'listener' as const, channel }
 }
 
@@ -175,6 +175,7 @@ export const CHANNEL_MAP = {
   clearOmpCommandPath: invoke(RPC_CHANNELS.omp.CLEAR_COMMAND_PATH),
   getOmpLoginProviders: invoke(RPC_CHANNELS.omp.GET_LOGIN_PROVIDERS),
   loginOmpProvider: invoke(RPC_CHANNELS.omp.LOGIN_PROVIDER),
+  logoutOmpProvider: invoke(RPC_CHANNELS.omp.LOGOUT_PROVIDER),
   getOmpDiagnosticsSummary: invoke(RPC_CHANNELS.omp.GET_DIAGNOSTICS_SUMMARY),
   getOmpFeatureCenterState: invoke(RPC_CHANNELS.omp.GET_FEATURE_CENTER_STATE),
   openOmpFeatureCenterPath: invoke(RPC_CHANNELS.omp.OPEN_FEATURE_CENTER_PATH),
@@ -439,4 +440,6 @@ export const CHANNEL_MAP = {
   allowMessagingPendingSender: invoke(RPC_CHANNELS.messaging.ALLOW_PENDING_SENDER),
   setMessagingBindingAccess: invoke(RPC_CHANNELS.messaging.SET_BINDING_ACCESS),
   onMessagingPendingChanged: listener(RPC_CHANNELS.messaging.PENDING_CHANGED),
+  // Audio/Speech-to-text
+  transcribeAudio: invoke(RPC_CHANNELS.audio.TRANSCRIBE),
 } satisfies ChannelMap

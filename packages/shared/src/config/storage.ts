@@ -50,6 +50,11 @@ import {
   normalizeDeprecatedModelId,
   type ModelDefinition,
 } from './models.ts';
+import {
+  getKnownCompatLegacyDefaults,
+  getKnownCompatModelDefaults,
+  getKnownCompatProviderForUrl,
+} from './compat-models.ts';
 
 // Config stored in JSON file (credentials stored in encrypted file, not here)
 export interface StoredConfig {
@@ -1867,6 +1872,94 @@ function backfillAllConnectionModels(config: StoredConfig): boolean {
   return changed;
 }
 
+/**
+ * Move branded endpoints that were created through the old generic
+ * Anthropic-compatible flow onto their first-class Pi provider.
+ *
+ * Kimi Coding and MiniMax expose Anthropic-compatible endpoints, but their
+ * model catalogs and authentication are owned by the Pi SDK. Older builds
+ * stored these connections as `pi_compat` with stale hand-written model IDs
+ * (for example `k2p5`). Converting only URLs that exactly match a built-in
+ * provider keeps arbitrary custom endpoints untouched.
+ */
+function migrateKnownPiCompatConnections(config: StoredConfig): boolean {
+  if (!config.llmConnections) return false;
+
+  let changed = false;
+
+  for (const connection of config.llmConnections) {
+    if (connection.providerType !== 'pi_compat') continue;
+
+    const provider = getKnownCompatProviderForUrl(connection.baseUrl);
+    if (!provider) continue;
+
+    // The UI preset `minimax-global` maps to the Pi SDK provider key `minimax`.
+    const piAuthProvider = provider === 'minimax-global' ? 'minimax' : provider;
+    const providerModels = getDefaultModelsForConnection('pi', piAuthProvider);
+    const providerModelIds = normalizeModelIds(providerModels as Array<{ id: string } | string>);
+    const fallbackIds = getKnownCompatModelDefaults(provider).map(id => `pi/${id}`);
+    const liveModelIds = providerModelIds.length > 0 ? providerModelIds : fallbackIds;
+    if (liveModelIds.length === 0) continue;
+
+    const currentIds = normalizeModelIds(connection.models);
+    const currentBareIds = currentIds.map(id => id.startsWith('pi/') ? id.slice(3) : id);
+    const legacyIds = getKnownCompatLegacyDefaults(provider);
+    const isLegacyDefaultList = currentIds.length === 0 || modelSetEquals(currentBareIds, legacyIds);
+
+    let nextModels: Array<ModelDefinition | string>;
+    let nextMode: 'automaticallySyncedFromProvider' | 'userDefined3Tier';
+
+    if (isLegacyDefaultList) {
+      nextModels = providerModels.length > 0 ? providerModels : liveModelIds;
+      nextMode = 'automaticallySyncedFromProvider';
+    } else {
+      const allowed = new Set(liveModelIds);
+      const normalizedCurrent = currentIds.map(id => id.startsWith('pi/') ? id : `pi/${id}`);
+      const filtered = normalizedCurrent.filter(id => allowed.has(id));
+      nextModels = filtered.length > 0 ? filtered : (providerModels.length > 0 ? providerModels : liveModelIds);
+      nextMode = filtered.length > 0 ? 'userDefined3Tier' : 'automaticallySyncedFromProvider';
+    }
+
+    const nextIds = normalizeModelIds(nextModels as Array<{ id: string } | string>);
+    const currentDefault = connection.defaultModel?.trim();
+    const normalizedDefault = currentDefault
+      ? (currentDefault.startsWith('pi/') ? currentDefault : `pi/${currentDefault}`)
+      : undefined;
+    const nextDefault = normalizedDefault && nextIds.includes(normalizedDefault) && !isLegacyDefaultList
+      ? normalizedDefault
+      : nextIds[0];
+
+    connection.providerType = 'pi';
+    changed = true;
+    if (connection.authType !== 'api_key') {
+      connection.authType = 'api_key';
+      changed = true;
+    }
+    if (connection.piAuthProvider !== piAuthProvider) {
+      connection.piAuthProvider = piAuthProvider;
+      changed = true;
+    }
+    if (connection.customEndpoint !== undefined) {
+      connection.customEndpoint = undefined;
+      changed = true;
+    }
+    if (connection.modelSelectionMode !== nextMode) {
+      connection.modelSelectionMode = nextMode;
+      changed = true;
+    }
+    if (!modelSetEquals(normalizeModelIds(connection.models), nextIds)) {
+      connection.models = nextModels;
+      changed = true;
+    }
+    if (nextDefault && connection.defaultModel !== nextDefault) {
+      connection.defaultModel = nextDefault;
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
 const OPUS_DEFAULT_ID = 'claude-opus-4-8';
 const OPUS_FALLBACK_ID = 'claude-opus-4-7';
 
@@ -2363,6 +2456,11 @@ export function migrateLegacyLlmConnectionsConfig(): void {
     if (migrateLegacyOpusToDefaultOpus(config)) {
       needsSave = true;
     }
+    // Phase 1c-bis: move branded Kimi/MiniMax compatible connections onto
+    // their live Pi provider catalogs (also repairs stale K2.5/M2.5 lists).
+    if (migrateKnownPiCompatConnections(config)) {
+      needsSave = true;
+    }
     // Phase 1c: Backfill models/defaultModel on ALL connections (not just compat)
     // This ensures built-in connections (anthropic, openai) always have models populated
     if (backfillAllConnectionModels(config)) {
@@ -2386,6 +2484,11 @@ export function migrateLegacyLlmConnectionsConfig(): void {
     migrateWorkspaceSonnet45ToSonnet46(config);
     // Phase 1j: Migrate legacy provider types (bedrock/vertex/anthropic_compat → pi/pi_compat)
     if (migrateLegacyProviderTypes(config)) {
+      needsSave = true;
+    }
+    // Legacy anthropic_compat connections are now pi_compat; apply the
+    // branded-provider migration to those records in the same startup pass.
+    if (migrateKnownPiCompatConnections(config)) {
       needsSave = true;
     }
     // Phase 1k: Normalize legacy Opus IDs introduced by provider-type migration.
@@ -2512,6 +2615,7 @@ export function migrateLegacyLlmConnectionsConfig(): void {
 
   // Run the same backfill and migration on newly created connections
   migrateCodexCopilotToPi(config);
+  migrateKnownPiCompatConnections(config);
   backfillAllConnectionModels(config);
   migrateModelDefaultsToConnections(config);
   migrateLegacyOpusToDefaultOpus(config);

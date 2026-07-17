@@ -73,6 +73,7 @@
     "smoke:electron-packaged": "bun run scripts/smoke-electron-packaged.ts",
     "smoke:omp-hardening": "bun run scripts/smoke-omp-hardening.ts",
     "smoke:omp-todos": "bun run scripts/smoke-omp-todos.ts",
+    "omp-cli": "bun run apps/omp-cli/src/index.ts",
     "smoke:release-qa": "bun run scripts/smoke/runner.ts",
     "test:ui:ai-settings": "node --experimental-strip-types scripts/e2e/ai-settings-ui.ts",
     "test:ui:ai-settings:strict": "node --experimental-strip-types scripts/e2e/ai-settings-ui.ts --strict",

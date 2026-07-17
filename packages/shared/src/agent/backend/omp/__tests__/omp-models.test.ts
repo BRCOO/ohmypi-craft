@@ -20,7 +20,7 @@ const rawModels = [
     id: 'deepseek-v4-flash',
     name: 'DeepSeek V4 Flash',
     contextWindow: 0,
-    thinking: { mode: 'effort' },
+    thinking: { mode: 'effort', efforts: ['minimal', 'low', 'medium', 'high'] },
     input: ['text', 'image'],
   },
   {
@@ -56,6 +56,7 @@ describe('normalizeOmpModels', () => {
     expect(models[1]).toMatchObject({
       contextWindow: DEFAULT_OMP_CONTEXT_WINDOW,
       supportsThinking: true,
+      supportedThinkingLevels: ['off', 'minimal', 'low', 'medium', 'high'],
       supportsImages: true,
     });
   });

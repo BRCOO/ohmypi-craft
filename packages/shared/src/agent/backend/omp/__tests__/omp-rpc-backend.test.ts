@@ -7,6 +7,7 @@ import { PassThrough } from 'node:stream';
 import type { ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { getSessionDataPath } from '../../../../sessions/storage.ts';
 import type { OmpSessionLink } from '../../../../sessions/types.ts';
+import type { ThinkingLevel } from '../../../thinking-levels.ts';
 
 import { createMockBackendConfig, createMockSource } from '../../../__tests__/test-utils.ts';
 import { executeBrowserToolCommand } from '../../../browser-tool-runtime.ts';
@@ -221,14 +222,19 @@ function createHarness(options: {
   hostToolExecutionTimeoutMs?: number;
   hostToolUpdateThrottleMs?: number;
   hostToolMaxConcurrentExecutions?: number;
+  model?: string;
   onSessionId?: (id: string) => void;
   sessionLink?: OmpSessionLink;
   onSessionLink?: (link: OmpSessionLink) => void;
+  onModelUpdate?: (model: string) => void;
+  onThinkingLevelUpdate?: (level: ThinkingLevel) => void;
   attachmentReadFile?: (path: string) => Buffer;
   workspaceRootPath?: string;
 } = {}) {
   const children: FakeChild[] = [];
-  const spawnProcess = (() => {
+  const spawnCalls: Array<{ command: string; args: string[] }> = [];
+  const spawnProcess = ((command: string, args: string[]) => {
+    spawnCalls.push({ command, args: [...args] });
     const child = new FakeChild();
     children.push(child);
     return child as unknown as ChildProcessWithoutNullStreams;
@@ -236,10 +242,12 @@ function createHarness(options: {
 
   const config = createMockBackendConfig({
     provider: 'omp',
-    model: DEFAULT_OMP_MODEL,
+    model: options.model ?? DEFAULT_OMP_MODEL,
     runtime: { ompCommand: 'omp' },
     onSdkSessionIdUpdate: options.onSessionId,
     onOmpSessionLinkUpdate: options.onSessionLink,
+    onModelUpdate: options.onModelUpdate,
+    onThinkingLevelUpdate: options.onThinkingLevelUpdate,
   });
   if (options.workspaceRootPath) {
     config.workspace = {
@@ -272,7 +280,7 @@ function createHarness(options: {
     attachmentReadFile: options.attachmentReadFile,
   });
 
-  return { backend, children, config };
+  return { backend, children, config, spawnCalls };
 }
 
 function readHostUriAuditRecords(backend: OmpRpcBackend): Array<Record<string, unknown>> {
@@ -687,6 +695,56 @@ describe('OmpRpcBackend subprocess lifecycle', () => {
     expect((backend as any).selectedModelKey).toBe('deepseek/deepseek-v4-flash');
     await waitFor(() => backend.getCachedAvailableCommands()[0]?.name === 'stats');
     expect(backend.getCachedAvailableCommands().map((command) => command.name)).toEqual(['stats']);
+    backend.destroy();
+  });
+
+  it('keeps an explicit Craft model instead of adopting OMP persisted state', async () => {
+    const { backend, children, spawnCalls } = createHarness({ model: 'kimi-code/kimi-for-coding' });
+    const ready = (backend as any).ensureSubprocess() as Promise<void>;
+    const child = children[0]!;
+
+    expect(spawnCalls[0]).toMatchObject({
+      command: 'omp',
+      args: ['--mode', 'rpc', '--model=kimi-code/kimi-for-coding'],
+    });
+
+    child.emitFrame({ type: 'ready' });
+    await waitFor(() => child.frames.some((frame) => frame.type === 'get_state'));
+    const stateRequest = child.frames.findLast((frame) => frame.type === 'get_state')!;
+    child.emitFrame({
+      type: 'response',
+      id: stateRequest.id,
+      command: 'get_state',
+      success: true,
+      data: sessionState('session-explicit-model', {
+        model: {
+          provider: 'opencode-go',
+          id: 'glm-5.1',
+        },
+      }),
+    });
+
+    await ready;
+
+    expect(backend.getModel()).toBe('kimi-code/kimi-for-coding');
+    expect((backend as any).selectedModelKey).toBeNull();
+
+    const selection = (backend as any).ensureModelSelected() as Promise<void>;
+    await waitFor(() => child.frames.some((frame) => frame.type === 'set_model'));
+    const setModelRequest = child.frames.findLast((frame) => frame.type === 'set_model')!;
+    expect(setModelRequest).toMatchObject({
+      type: 'set_model',
+      provider: 'kimi-code',
+      modelId: 'kimi-for-coding',
+    });
+    child.emitFrame({
+      type: 'response',
+      id: setModelRequest.id,
+      command: 'set_model',
+      success: true,
+    });
+    await selection;
+
     backend.destroy();
   });
 
@@ -2278,6 +2336,68 @@ describe('OmpRpcBackend subprocess lifecycle', () => {
     backend.destroy();
   });
 
+  it('publishes native Goal and Loop state and routes structured controls', async () => {
+    const { backend, children } = createHarness();
+    const child = await startReady(backend, children, { capabilities: { goalMode: true, loopMode: true } });
+
+    expect(backend.getOmpControlState().goal).toMatchObject({
+      supported: true,
+      state: { enabled: false, paused: false },
+    });
+    expect(backend.getOmpControlState().loop).toMatchObject({
+      supported: true,
+      state: { enabled: false, status: 'disabled' },
+    });
+
+    const setGoal = backend.setOmpGoal('Finish desktop parity', 2000);
+    await waitFor(() => child.frames.some((frame) => frame.type === 'set_goal'));
+    const goalFrame = child.frames.findLast((frame) => frame.type === 'set_goal')!;
+    expect(goalFrame).toMatchObject({ objective: 'Finish desktop parity', tokenBudget: 2000 });
+    child.emitFrame({
+      type: 'response',
+      id: goalFrame.id,
+      command: 'set_goal',
+      success: true,
+      data: {
+        enabled: true,
+        paused: false,
+        goal: {
+          id: 'goal-1',
+          objective: 'Finish desktop parity',
+          status: 'active',
+          tokenBudget: 2000,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+    });
+    await setGoal;
+    expect(backend.getOmpControlState().goal.state.goal?.objective).toBe('Finish desktop parity');
+
+    const setLoop = backend.setOmpLoop(true);
+    await waitFor(() => child.frames.some((frame) => frame.type === 'set_loop'));
+    const loopFrame = child.frames.findLast((frame) => frame.type === 'set_loop')!;
+    child.emitFrame({
+      type: 'response',
+      id: loopFrame.id,
+      command: 'set_loop',
+      success: true,
+      data: { enabled: true, status: 'waiting_for_prompt' },
+    });
+    await setLoop;
+    expect(backend.getOmpControlState().loop.state).toEqual({ enabled: true, status: 'waiting_for_prompt' });
+
+    child.emitFrame({
+      type: 'loop_mode_state_update',
+      state: { enabled: true, status: 'running', prompt: 'check again', remaining: 3 },
+    });
+    await waitFor(() => backend.getOmpControlState().loop.state.status === 'running');
+    expect(backend.getOmpControlState().loop.state.remaining).toBe(3);
+    backend.destroy();
+  });
+
   it('sends OMP native follow-up and abort-and-prompt with image attachments', async () => {
     const { backend, children } = createHarness();
     const child = await startReady(backend, children);
@@ -2339,6 +2459,29 @@ describe('OmpRpcBackend subprocess lifecycle', () => {
       interruptMode: 'immediate',
       queuedMessageCount: 4,
     });
+    backend.destroy();
+  });
+
+  it('reconciles OMP-native model and thinking changes back to Craft callbacks', async () => {
+    const models: string[] = [];
+    const thinking: ThinkingLevel[] = [];
+    const { backend, children } = createHarness({
+      model: 'omp/default',
+      onModelUpdate: (model) => models.push(model),
+      onThinkingLevelUpdate: (level) => thinking.push(level),
+    });
+    const child = await startReady(backend, children);
+
+    child.emitFrame({
+      type: 'config_update',
+      config: { model: 'kimi-code/kimi-for-coding', thinkingLevel: 'minimal' },
+    });
+    await waitFor(() => models.length === 1 && thinking.length === 1);
+
+    expect(backend.getModel()).toBe('kimi-code/kimi-for-coding');
+    expect(backend.getThinkingLevel()).toBe('minimal');
+    expect(models).toEqual(['kimi-code/kimi-for-coding']);
+    expect(thinking).toEqual(['minimal']);
     backend.destroy();
   });
 

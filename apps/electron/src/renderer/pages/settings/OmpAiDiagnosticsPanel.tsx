@@ -43,24 +43,26 @@ export function buildOmpFeatureCountTiles(
   snapshot: OmpResourceSnapshot | null,
   labels: { mcp: string; skills: string; agents: string },
 ): OmpFeatureCountTile[] {
+  const runtimeCounts = snapshot?.runtimeCounts
+  const runtimeError = snapshot?.runtimeResourcesError
   return [
     {
       section: 'mcp',
       label: labels.mcp,
-      count: snapshot?.mcp.entries.length,
-      error: snapshot?.mcp.error,
+      count: runtimeCounts?.mcp ?? snapshot?.mcp.entries.length,
+      error: snapshot?.mcp.error ?? (!runtimeCounts ? runtimeError : undefined),
     },
     {
       section: 'skills',
       label: labels.skills,
-      count: snapshot?.skills.entries.length,
-      error: snapshot?.skills.error,
+      count: runtimeCounts?.skills ?? snapshot?.skills.entries.length,
+      error: snapshot?.skills.error ?? (!runtimeCounts ? runtimeError : undefined),
     },
     {
       section: 'agents',
       label: labels.agents,
-      count: snapshot?.agents.entries.length,
-      error: snapshot?.agents.error,
+      count: runtimeCounts?.agents ?? snapshot?.agents.entries.length,
+      error: snapshot?.agents.error ?? (!runtimeCounts ? runtimeError : undefined),
     },
   ]
 }

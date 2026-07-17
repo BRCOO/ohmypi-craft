@@ -26,7 +26,8 @@ import {
   type OmpTodoState,
   type PostInitResult,
 } from '@craft-agent/shared/agent/backend'
-import { getLlmConnection, getLlmConnections, getDefaultLlmConnection, getDefaultThinkingLevel, resetManagedAnthropicAuthEnvVars, resolveMidStreamBehavior, getPersistedUiLanguage, resolveTitleLanguageName } from '@craft-agent/shared/config'
+import { getLlmConnection, getLlmConnections, getDefaultLlmConnection, getDefaultThinkingLevel, resetManagedAnthropicAuthEnvVars, resolveMidStreamBehavior, getPersistedUiLanguage, resolveTitleLanguageName, clampThinkingLevelToSupported, getSupportedThinkingLevels } from '@craft-agent/shared/config'
+import type { LlmConnection, ModelDefinition } from '@craft-agent/shared/config'
 import { PrivilegedExecutionBroker } from '@craft-agent/server-core/services'
 import { isValidWorkingDirectory } from '../utils/path-validation'
 import { InitGate } from '@craft-agent/server-core/domain'
@@ -123,6 +124,31 @@ let _platform: PlatformServices | null = null
 // Scoped logger — upgraded from console fallback when setSessionPlatform() is called.
 // Named `sessionLog` so all ~30 existing call sites remain unchanged.
 let sessionLog: Logger = createScopedLogger(CONSOLE_LOGGER, 'session')
+
+function getConnectionModelDefinition(connection: LlmConnection | null, modelId: string): ModelDefinition | string | undefined {
+  if (!connection?.models) return undefined
+  const normalizedModelId = modelId.replace(/^pi\//, '')
+  return connection.models.find(model => {
+    const id = typeof model === 'string' ? model : model.id
+    return id === modelId || id === normalizedModelId
+  })
+}
+
+function clampThinkingLevelForBackend(
+  level: ThinkingLevel,
+  connection: LlmConnection | null,
+  providerType: string | undefined,
+  modelId: string,
+): ThinkingLevel {
+  const supported = getSupportedThinkingLevels(
+    getConnectionModelDefinition(connection, modelId),
+    providerType,
+    modelId,
+  )
+  return supported
+    ? clampThinkingLevelToSupported(level, supported) as ThinkingLevel
+    : level
+}
 
 export function setSessionPlatform(platform: PlatformServices): void {
   _platform = platform
@@ -799,6 +825,15 @@ interface OmpPlanAgent extends OmpControllableAgent {
   ): Promise<void> | void
 }
 
+interface OmpGoalLoopAgent extends OmpControllableAgent {
+  setOmpGoal(objective: string, tokenBudget?: number, replace?: boolean): Promise<unknown>
+  pauseOmpGoal(): Promise<unknown>
+  resumeOmpGoal(): Promise<unknown>
+  dropOmpGoal(): Promise<unknown>
+  setOmpGoalBudget(tokenBudget?: number): Promise<unknown>
+  setOmpLoop(enabled: boolean, prompt?: string, limit?: string): Promise<unknown>
+}
+
 interface OmpTodoAgent extends AgentBackend {
   onTodoStateChange: ((state: OmpTodoState) => void) | null
   getOmpTodoState(): OmpTodoState
@@ -832,6 +867,7 @@ interface OmpLoginAgent extends AgentBackend {
     providerId: string,
     options?: import('@craft-agent/shared/agent/backend/omp/omp-rpc-backend').OmpLoginOptions,
   ): Promise<import('@craft-agent/shared/agent/backend/omp/omp-rpc-backend').OmpLoginResult>
+  logoutOmpProvider(providerId: string): Promise<{ providerId: string }>
 }
 
 function isOmpControllableAgent(agent: AgentInstance | null | undefined): agent is OmpControllableAgent {
@@ -863,6 +899,17 @@ function isOmpPlanAgent(agent: AgentInstance | null | undefined): agent is OmpPl
     && typeof candidate?.respondToOmpPlanReview === 'function'
 }
 
+function isOmpGoalLoopAgent(agent: AgentInstance | null | undefined): agent is OmpGoalLoopAgent {
+  const candidate = agent as Partial<OmpGoalLoopAgent> | null | undefined
+  return isOmpControllableAgent(agent)
+    && typeof candidate?.setOmpGoal === 'function'
+    && typeof candidate?.pauseOmpGoal === 'function'
+    && typeof candidate?.resumeOmpGoal === 'function'
+    && typeof candidate?.dropOmpGoal === 'function'
+    && typeof candidate?.setOmpGoalBudget === 'function'
+    && typeof candidate?.setOmpLoop === 'function'
+}
+
 function isOmpTodoAgent(agent: AgentInstance | null | undefined): agent is OmpTodoAgent {
   const candidate = agent as Partial<OmpTodoAgent> | null | undefined
   return !!candidate
@@ -887,6 +934,24 @@ function isOmpLoginAgent(agent: AgentInstance | null | undefined): agent is OmpL
     && typeof candidate.getOmpLoginProviders === 'function'
     && typeof candidate.loginOmpProvider === 'function'
 }
+
+interface OmpCapabilityAgent extends AgentBackend {
+  getCapabilities(): import('@craft-agent/shared/agent/backend/omp/omp-rpc-protocol').OmpCapabilityManifest | null
+  refreshCapabilities(): Promise<void>
+  isCommandSupported(command: string): boolean
+  isFeatureSupported(feature: import('@craft-agent/shared/agent/backend/omp/omp-rpc-protocol').OmpFeatureId): boolean
+  sendCommand<T = unknown>(command: import('@craft-agent/shared/agent/backend/omp/omp-rpc-protocol').OmpRpcCommand, timeoutMs?: number): Promise<T>
+}
+
+function isOmpCapabilityAgent(agent: AgentInstance | null | undefined): agent is OmpCapabilityAgent {
+  const candidate = agent as Partial<OmpCapabilityAgent> | null | undefined
+  return !!candidate
+    && typeof candidate.getCapabilities === 'function'
+    && typeof candidate.refreshCapabilities === 'function'
+    && typeof candidate.isCommandSupported === 'function'
+    && typeof candidate.isFeatureSupported === 'function'
+}
+
 
 function isOmpSessionAgent(agent: AgentInstance | null | undefined): agent is OmpSessionAgent {
   const candidate = agent as Partial<OmpSessionAgent> | null | undefined
@@ -977,6 +1042,22 @@ function toOmpControlStateDto(state: OmpControlState): OmpControlStateDto {
     plan: {
       ...plan,
       state: { ...plan.state },
+    },
+    goal: {
+      supported: state.goal?.supported ?? false,
+      state: {
+        enabled: state.goal?.state.enabled ?? false,
+        paused: state.goal?.state.paused ?? false,
+        goal: state.goal?.state.goal ? { ...state.goal.state.goal } : undefined,
+      },
+      updatedAt: state.goal?.updatedAt ?? state.updatedAt,
+      error: state.goal?.error,
+    },
+    loop: {
+      supported: state.loop?.supported ?? false,
+      state: state.loop?.state ? { ...state.loop.state } : { enabled: false, status: 'disabled' },
+      updatedAt: state.loop?.updatedAt ?? state.updatedAt,
+      error: state.loop?.error,
     },
     updatedAt: state.updatedAt,
   }
@@ -1270,6 +1351,8 @@ interface ManagedSession {
   backendRestartSignature?: string
   // Runtime-only OMP command list / queue controls bridged to the renderer.
   ompControlState?: OmpControlStateDto
+  // Cached OMP capability manifest for feature gating.
+  ompCapabilityManifest?: import('@craft-agent/shared/agent/backend/omp/omp-rpc-protocol').OmpCapabilityManifest
   // Runtime-only OMP phased Todo snapshot bridged to the renderer.
   ompTodoState?: OmpTodoStateDto
   // Runtime-only OMP subagent state bridged to the renderer.
@@ -1470,6 +1553,10 @@ export class SessionManager implements ISessionManager {
     sessionId: string
     method: string
   }> = new Map()
+  // Prompt history storage per session (client-side local feature)
+  private promptHistory: Map<string, { prompts: string[]; enabled: boolean }> = new Map()
+  // Capability gates may mount concurrently before the first OMP prompt.
+  private ompCapabilityAgentInitializations = new Map<string, Promise<AgentInstance | null>>()
   // Privileged approval binding + audit logger
   private privilegedExecutionBroker = new PrivilegedExecutionBroker(sessionLog)
   // Session-local admin remember windows (exact command hash binding)
@@ -3256,6 +3343,12 @@ export class SessionManager implements ISessionManager {
     // Reuse precomputed target context so branch validation and session construction share the same target identity.
     const resolvedContext = targetBackendContext
     const resolvedModel = resolvedContext.resolvedModel
+    const resolvedThinkingLevel = clampThinkingLevelForBackend(
+      defaultThinkingLevel,
+      resolvedContext.connection,
+      resolvedContext.connection?.providerType ?? resolvedContext.provider,
+      resolvedModel,
+    )
 
     // Log mini agent session creation
     if (options?.systemPromptPreset === 'mini' || options?.model) {
@@ -3269,7 +3362,7 @@ export class SessionManager implements ISessionManager {
       workingDirectory: resolvedWorkingDir,
       model: resolvedModel,
       llmConnection: options?.llmConnection,
-      thinkingLevel: defaultThinkingLevel,
+      thinkingLevel: resolvedThinkingLevel,
       systemPromptPreset: options?.systemPromptPreset,
       enabledSourceSlugs: defaultEnabledSourceSlugs,
       branchFromMessageId: validatedBranch?.sourceMessageId,
@@ -3432,7 +3525,7 @@ export class SessionManager implements ISessionManager {
     const backendContext = resolveBackendContext({
       sessionConnectionSlug: managed.llmConnection,
       workspaceDefaultConnectionSlug: workspaceConfig?.defaults?.defaultLlmConnection,
-      managedModel: managed.model,
+      managedModel: managed.model ?? workspaceConfig?.defaults?.model,
     })
     const connection = backendContext.connection
     const sigInput = {
@@ -3577,7 +3670,7 @@ export class SessionManager implements ISessionManager {
     const backendContext = resolveBackendContext({
       sessionConnectionSlug: managed.llmConnection,
       workspaceDefaultConnectionSlug: workspaceConfig?.defaults?.defaultLlmConnection,
-      managedModel: managed.model,
+      managedModel: managed.model ?? workspaceConfig?.defaults?.model,
     })
     const connection = backendContext.connection
     const sigInput = {
@@ -3717,6 +3810,25 @@ export class SessionManager implements ISessionManager {
         sessionPersistenceQueue.flush(managed.id)
       }
 
+      const onModelUpdate = (model: string) => {
+        const trimmed = model.trim()
+        if (!trimmed || managed.model === trimmed) return
+        managed.model = trimmed
+        sessionLog.info(`OMP runtime model changed for ${managed.id}: ${trimmed}`)
+        this.persistSession(managed)
+        sessionPersistenceQueue.flush(managed.id)
+        this.sendEvent({ type: 'session_model_changed', sessionId: managed.id, model: trimmed }, managed.workspace.id)
+      }
+
+      const onThinkingLevelUpdate = (level: ThinkingLevel) => {
+        if (managed.thinkingLevel === level) return
+        managed.thinkingLevel = level
+        sessionLog.info(`OMP runtime thinking level changed for ${managed.id}: ${level}`)
+        this.persistSession(managed)
+        sessionPersistenceQueue.flush(managed.id)
+        this.sendEvent({ type: 'session_thinking_level_changed', sessionId: managed.id, thinkingLevel: level }, managed.workspace.id)
+      }
+
       const onSdkSessionIdCleared = () => {
         managed.sdkSessionId = undefined
         sessionLog.info(`SDK session ID cleared for ${managed.id} (resume recovery)`)
@@ -3809,6 +3921,8 @@ export class SessionManager implements ISessionManager {
         session: sessionConfig,
         onSdkSessionIdUpdate,
         onOmpSessionLinkUpdate,
+        onModelUpdate,
+        onThinkingLevelUpdate,
         onSdkSessionIdCleared,
         onBranchForkInvalidated,
         getRecoveryMessages,
@@ -5594,25 +5708,50 @@ export class SessionManager implements ISessionManager {
       if (connection && !managed.connectionLocked) {
         managed.llmConnection = connection
       }
-      // Persist to disk (include connection if it was updated)
-      const updates: { model?: string; llmConnection?: string } = { model: model ?? undefined }
+
+      // Resolve the new model and connection together, then clamp any sticky
+      // thinking level before the next request can use an incompatible value.
+      const wsConfig = loadWorkspaceConfig(managed.workspace.rootPath)
+      const resolvedContext = resolveBackendContext({
+        sessionConnectionSlug: managed.llmConnection,
+        workspaceDefaultConnectionSlug: wsConfig?.defaults?.defaultLlmConnection,
+        managedModel: model ?? wsConfig?.defaults?.model,
+      })
+      const nextThinkingLevel = clampThinkingLevelForBackend(
+        managed.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+        resolvedContext.connection,
+        resolvedContext.connection?.providerType ?? resolvedContext.provider,
+        resolvedContext.resolvedModel,
+      )
+      const thinkingLevelChanged = managed.thinkingLevel !== nextThinkingLevel
+      managed.thinkingLevel = nextThinkingLevel
+
+      // Persist to disk (include connection and any capability-driven effort
+      // correction when they were updated).
+      const updates: { model?: string; llmConnection?: string; thinkingLevel?: ThinkingLevel } = {
+        model: model ?? undefined,
+        thinkingLevel: nextThinkingLevel,
+      }
       if (connection && !managed.connectionLocked) {
         updates.llmConnection = connection
       }
       await updateSessionMetadata(managed.workspace.rootPath, sessionId, updates)
       // Update agent model if it already exists (takes effect on next query)
       if (managed.agent) {
-        // Fallback chain: session model > workspace default > connection default
-        const wsConfig = loadWorkspaceConfig(managed.workspace.rootPath)
-        const sessionConn = resolveSessionConnection(managed.llmConnection, wsConfig?.defaults?.defaultLlmConnection)
-        const effectiveModel = model ?? wsConfig?.defaults?.model ?? sessionConn?.defaultModel!
+        const effectiveModel = resolvedContext.resolvedModel
         sessionLog.info(`[updateSessionModel] Calling agent.setModel(${effectiveModel}) [agent exists=${!!managed.agent}, connectionLocked=${managed.connectionLocked}]`)
         managed.agent.setModel(effectiveModel)
+        if (thinkingLevelChanged) {
+          managed.agent.setThinkingLevel(nextThinkingLevel)
+        }
       } else {
         sessionLog.info(`[updateSessionModel] No agent yet, model will apply on next agent creation`)
       }
       // Notify renderer of the model change
       this.sendEvent({ type: 'session_model_changed', sessionId, model }, managed.workspace.id)
+      if (thinkingLevelChanged) {
+        this.sendEvent({ type: 'session_thinking_level_changed', sessionId, thinkingLevel: nextThinkingLevel }, managed.workspace.id)
+      }
       sessionLog.info(`Session ${sessionId} model updated to: ${model ?? '(global config)'}`)
     }
   }
@@ -6338,7 +6477,7 @@ export class SessionManager implements ISessionManager {
       const messageBackendContext = resolveBackendContext({
         sessionConnectionSlug: managed.llmConnection,
         workspaceDefaultConnectionSlug: loadWorkspaceConfig(workspaceRootPath)?.defaults?.defaultLlmConnection,
-        managedModel: managed.model,
+        managedModel: managed.model ?? loadWorkspaceConfig(workspaceRootPath)?.defaults?.model,
       })
       const modelInputAttachments = filterAttachmentsForModelInput(
         attachments,
@@ -7539,17 +7678,34 @@ export class SessionManager implements ISessionManager {
   setSessionThinkingLevel(sessionId: string, level: ThinkingLevel): void {
     const managed = this.sessions.get(sessionId)
     if (managed) {
-      // Update thinking level in managed session
-      managed.thinkingLevel = level
+      const wsConfig = loadWorkspaceConfig(managed.workspace.rootPath)
+      const resolvedContext = resolveBackendContext({
+        sessionConnectionSlug: managed.llmConnection,
+        workspaceDefaultConnectionSlug: wsConfig?.defaults?.defaultLlmConnection,
+        managedModel: managed.model ?? wsConfig?.defaults?.model,
+      })
+      const resolvedLevel = clampThinkingLevelForBackend(
+        level,
+        resolvedContext.connection,
+        resolvedContext.connection?.providerType ?? resolvedContext.provider,
+        resolvedContext.resolvedModel,
+      )
+
+      // Update thinking level in managed session after validating it against
+      // the actual provider/model capability, not just the generic DTO enum.
+      managed.thinkingLevel = resolvedLevel
 
       // Update the agent's thinking level if it exists
       if (managed.agent) {
-        managed.agent.setThinkingLevel(level)
+        managed.agent.setThinkingLevel(resolvedLevel)
       }
 
-      sessionLog.info(`Session ${sessionId}: thinking level set to ${level}`)
+      sessionLog.info(`Session ${sessionId}: thinking level set to ${resolvedLevel}${resolvedLevel !== level ? ` (requested ${level})` : ''}`)
       // Persist to disk
       this.persistSession(managed)
+      if (resolvedLevel !== level) {
+        this.sendEvent({ type: 'session_thinking_level_changed', sessionId, thinkingLevel: resolvedLevel }, managed.workspace.id)
+      }
     }
   }
 
@@ -7594,6 +7750,42 @@ export class SessionManager implements ISessionManager {
       throw new Error('Native OMP Plan Mode is only available for an OMP session with a compatible runtime')
     }
     await agent.setOmpPlanMode(enabled)
+    this.publishOmpControlState(managed, agent.getOmpControlState())
+  }
+
+  async setOmpGoal(sessionId: string, objective: string, tokenBudget?: number, replace?: boolean): Promise<void> {
+    const { managed, agent } = await this.getOrCreateOmpGoalLoopAgent(sessionId)
+    await agent.setOmpGoal(objective, tokenBudget, replace)
+    this.publishOmpControlState(managed, agent.getOmpControlState())
+  }
+
+  async pauseOmpGoal(sessionId: string): Promise<void> {
+    const { managed, agent } = await this.getOrCreateOmpGoalLoopAgent(sessionId)
+    await agent.pauseOmpGoal()
+    this.publishOmpControlState(managed, agent.getOmpControlState())
+  }
+
+  async resumeOmpGoal(sessionId: string): Promise<void> {
+    const { managed, agent } = await this.getOrCreateOmpGoalLoopAgent(sessionId)
+    await agent.resumeOmpGoal()
+    this.publishOmpControlState(managed, agent.getOmpControlState())
+  }
+
+  async dropOmpGoal(sessionId: string): Promise<void> {
+    const { managed, agent } = await this.getOrCreateOmpGoalLoopAgent(sessionId)
+    await agent.dropOmpGoal()
+    this.publishOmpControlState(managed, agent.getOmpControlState())
+  }
+
+  async setOmpGoalBudget(sessionId: string, tokenBudget?: number): Promise<void> {
+    const { managed, agent } = await this.getOrCreateOmpGoalLoopAgent(sessionId)
+    await agent.setOmpGoalBudget(tokenBudget)
+    this.publishOmpControlState(managed, agent.getOmpControlState())
+  }
+
+  async setOmpLoop(sessionId: string, enabled: boolean, prompt?: string, limit?: string): Promise<void> {
+    const { managed, agent } = await this.getOrCreateOmpGoalLoopAgent(sessionId)
+    await agent.setOmpLoop(enabled, prompt, limit)
     this.publishOmpControlState(managed, agent.getOmpControlState())
   }
 
@@ -7679,6 +7871,19 @@ export class SessionManager implements ISessionManager {
     return { managed, agent }
   }
 
+  private async getOrCreateOmpGoalLoopAgent(sessionId: string): Promise<{
+    managed: ManagedSession
+    agent: OmpGoalLoopAgent
+  }> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+    const agent = await this.getOrCreateAgent(managed)
+    if (!isOmpGoalLoopAgent(agent)) {
+      throw new Error('OMP Goal and Loop controls are only available for OMP sessions')
+    }
+    return { managed, agent }
+  }
+
   async refreshOmpSubagents(sessionId: string): Promise<void> {
     const { managed, agent } = await this.getOmpSubagentAgent(sessionId)
     await agent.refreshOmpSubagents()
@@ -7715,6 +7920,156 @@ export class SessionManager implements ISessionManager {
       throw new Error('OMP subagent controls are only available for OMP sessions')
     }
     return { managed, agent }
+  }
+
+  /**
+   * Send a raw OMP RPC command after verifying the active session's capability
+   * manifest supports it. Returns the OMP response payload on success, or a
+   * structured error when the capability is missing or the command fails.
+   */
+  async sendRawOmpCommand(sessionId: string, command: import('@craft-agent/shared/agent/backend/omp/omp-rpc-protocol').OmpRpcCommand): Promise<{ success: boolean; data?: unknown; error?: string }> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) return { success: false, error: `Session ${sessionId} not found` }
+    const agent = await this.getOrCreateOmpCapabilityAgent(managed)
+    if (!isOmpCapabilityAgent(agent)) {
+      return { success: false, error: 'OMP command interface not available for this session' }
+    }
+    try {
+      await agent.refreshCapabilities()
+      if (!agent.isCommandSupported(command.type)) {
+        const featureId = this.inferFeatureForCommand(command.type)
+        return { success: false, error: `OMP capability not supported: ${command.type}${featureId ? ` (${featureId})` : ''}` }
+      }
+      const data = await agent.sendCommand(command)
+      return { success: true, data }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      sessionLog.warn(`Raw OMP command ${command.type} failed for ${sessionId}:`, error)
+      return { success: false, error: message }
+    }
+  }
+
+  private inferFeatureForCommand(commandType: string): import('@craft-agent/shared/agent/backend/omp/omp-rpc-protocol').OmpFeatureId | undefined {
+    const map: Record<string, import('@craft-agent/shared/agent/backend/omp/omp-rpc-protocol').OmpFeatureId> = {
+      get_mcp_state: 'mcp.oauth',
+      mcp_reauth: 'mcp.oauth',
+      mcp_unauth: 'mcp.oauth',
+      mcp_reconnect: 'mcp.oauth',
+      get_mcp_notifications: 'mcp.notifications',
+      set_mcp_notifications: 'mcp.notifications',
+      smithery_login: 'smithery.auth',
+      smithery_logout: 'smithery.auth',
+      logout: 'auth.provider.logout',
+      get_collab_state: 'collab.live',
+      start_collab: 'collab.live',
+      join_collab: 'collab.live',
+      leave_collab: 'collab.live',
+      stop_collab: 'collab.live',
+      set_collab_presence: 'collab.live',
+      get_session_tree: 'session.tree',
+      fork_session: 'session.tree',
+      get_extensions: 'extensions.control',
+      set_extension_enabled: 'extensions.control',
+      reload_extensions: 'extensions.control',
+      uninstall_extension: 'extensions.control',
+      search_marketplace: 'marketplace.browse',
+      get_marketplace_item: 'marketplace.browse',
+      install_marketplace_item: 'marketplace.browse',
+      update_marketplace_item: 'marketplace.browse',
+      uninstall_marketplace_item: 'marketplace.browse',
+      get_agent_definitions: 'agents.control',
+      set_agent_enabled: 'agents.control',
+      set_agent_model_override: 'agents.control',
+      create_agent: 'agents.control',
+      update_agent: 'agents.control',
+      reload_agents: 'agents.control',
+      ask_side_question: 'tools.btw',
+      start_tangential_agent: 'tools.tan',
+      get_tangential_agents: 'tools.tan',
+      cancel_tangential_agent: 'tools.tan',
+      propose_ttsr_rule: 'tools.omfg',
+      confirm_ttsr_rule: 'tools.omfg',
+      list_ttsr_rules: 'tools.omfg',
+      delete_ttsr_rule: 'tools.omfg',
+      get_debug_tools: 'tools.debug',
+      run_debug_tool: 'tools.debug',
+      transcribe_audio: 'audio.stt',
+      retry_last_turn: 'retry.exact',
+      get_retry_state: 'retry.exact',
+      get_queue_state: 'queue.dequeue',
+      dequeue_message: 'queue.dequeue',
+      reorder_queue: 'queue.dequeue',
+      set_temporary_model: 'model.temporary',
+      clear_temporary_model: 'model.temporary',
+      guided_goal_turn: 'goal.guided',
+      get_settings_schema: 'settings.schema',
+      get_settings: 'settings.schema',
+      set_settings: 'settings.schema',
+    }
+    return map[commandType]
+  }
+
+  async getOmpCapabilities(sessionId: string): Promise<{ success: boolean; manifest?: import('@craft-agent/shared/agent/backend/omp/omp-rpc-protocol').OmpCapabilityManifest; error?: string }> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) return { success: false, error: `Session ${sessionId} not found` }
+    const agent = await this.getOrCreateOmpCapabilityAgent(managed)
+    if (!isOmpCapabilityAgent(agent)) {
+      return { success: false, error: 'OMP capabilities not available for this session' }
+    }
+    try {
+      await agent.refreshCapabilities()
+      const manifest = agent.getCapabilities()
+      managed.ompCapabilityManifest = manifest ?? undefined
+      return { success: true, manifest: manifest ?? undefined }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return { success: false, error: message }
+    }
+  }
+
+  /**
+   * Capability gates run before a user sends the first prompt, when normal
+   * sessions have not created their lazy agent yet. Restrict that eager
+   * creation to OMP so visiting a capability-gated control cannot start a
+   * different provider's backend.
+   */
+  private async getOrCreateOmpCapabilityAgent(managed: ManagedSession): Promise<AgentInstance | null> {
+    if (managed.agent) return managed.agent
+
+    const pending = this.ompCapabilityAgentInitializations.get(managed.id)
+    if (pending) return pending
+
+    const initialization = (async () => {
+      const workspaceConfig = loadWorkspaceConfig(managed.workspace.rootPath)
+      const backendContext = resolveBackendContext({
+        sessionConnectionSlug: managed.llmConnection,
+        workspaceDefaultConnectionSlug: workspaceConfig?.defaults?.defaultLlmConnection,
+        managedModel: managed.model ?? workspaceConfig?.defaults?.model,
+      })
+      if (backendContext.provider !== 'omp') return null
+
+      return this.getOrCreateAgent(managed)
+    })()
+    this.ompCapabilityAgentInitializations.set(managed.id, initialization)
+    try {
+      return await initialization
+    } finally {
+      if (this.ompCapabilityAgentInitializations.get(managed.id) === initialization) {
+        this.ompCapabilityAgentInitializations.delete(managed.id)
+      }
+    }
+  }
+
+  async logoutOmpProvider(sessionId: string, providerId: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const { agent } = await this.getOmpLoginAgent(sessionId)
+      await agent.logoutOmpProvider(providerId)
+      return { success: true }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      sessionLog.warn(`OMP provider logout failed for ${sessionId}/${providerId}:`, error)
+      return { success: false, error: message }
+    }
   }
 
   async getOmpLoginProviders(sessionId: string): Promise<import('@craft-agent/shared/protocol').OmpLoginProvidersResult> {
@@ -9229,6 +9584,22 @@ export class SessionManager implements ISessionManager {
     const connections = getLlmConnections()
     const match = connections.find(c => c.providerType === providerType)
     return match?.slug ?? null
+  }
+
+  /**
+   * Get stored prompt history for a session (client-side local feature).
+   * Returns the stored prompts list and whether history tracking is enabled.
+   */
+  async getPromptHistory(sessionId: string): Promise<{ prompts: string[]; enabled: boolean }> {
+    return this.promptHistory.get(sessionId) ?? { prompts: [], enabled: true }
+  }
+
+  /**
+   * Set prompt history for a session. Replaces the entire prompts list
+   * and updates the enabled flag.
+   */
+  async setPromptHistory(sessionId: string, prompts: string[], enabled: boolean): Promise<void> {
+    this.promptHistory.set(sessionId, { prompts, enabled })
   }
 
   /**

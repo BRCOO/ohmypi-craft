@@ -2,6 +2,7 @@ import {
   spawn,
   type ChildProcessWithoutNullStreams,
 } from 'node:child_process';
+import readline from 'node:readline';
 
 import type {
   OmpRuntimeErrorCode,
@@ -16,6 +17,7 @@ import { probeOmpAuth } from './omp-auth-probe.ts';
 import { checkOmpVersionCompatibility } from './omp-version-check.ts';
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
+import { parseOmpRuntimeResources, type OmpRpcRuntimeResources } from './omp-rpc-protocol.ts';
 
 export interface OmpRuntimeDiagnosticsOptions {
   configuredCommand?: unknown;
@@ -171,12 +173,74 @@ export interface OmpDiagnosticsSummary {
   configFileExists?: boolean;
   /** Whether the OMP auth directory exists. */
   authDirExists?: boolean;
+  /** Resources loaded by OMP's real discovery providers for this cwd. */
+  runtimeResources?: OmpRpcRuntimeResources;
+  runtimeResourcesError?: string;
   /** Version compatibility conclusion from the runtime probe. */
   versionCompatibility?: {
     ompVersion?: string;
     compatible: boolean;
     warning?: string;
   };
+}
+
+async function probeOmpRuntimeResources(
+  command: string,
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number; spawnProcess?: typeof spawn },
+): Promise<{ resources?: OmpRpcRuntimeResources; error?: string }> {
+  return new Promise((resolve) => {
+    const spawnProcess = options.spawnProcess ?? spawn;
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawnProcess(command, [...args, '--mode', 'rpc', '--no-session'], {
+        cwd: options.cwd,
+        env: options.env ? { ...process.env, ...options.env } : process.env,
+        windowsHide: true,
+      });
+    } catch (error) {
+      resolve({ error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+
+    let settled = false;
+    let stderr = '';
+    const reader = readline.createInterface({ input: child.stdout });
+    const finish = (result: { resources?: OmpRpcRuntimeResources; error?: string }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reader.close();
+      if (!child.killed) child.kill();
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish({ error: 'Timed out while reading OMP runtime resources.' }), options.timeoutMs ?? 15_000);
+
+    child.stderr.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-4096); });
+    child.on('error', error => finish({ error: error.message }));
+    child.on('exit', code => {
+      if (!settled) finish({ error: stderr.trim() || `OMP exited with code ${code ?? 0} while reading runtime resources.` });
+    });
+    reader.on('line', line => {
+      let frame: Record<string, unknown>;
+      try {
+        frame = JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        return;
+      }
+      if (frame.type === 'ready') {
+        child.stdin.write(`${JSON.stringify({ id: 'omp-runtime-resources', type: 'get_runtime_resources' })}\n`);
+        return;
+      }
+      if (frame.type !== 'response' || frame.id !== 'omp-runtime-resources') return;
+      if (frame.success === false) {
+        finish({ error: typeof frame.error === 'string' ? frame.error : 'OMP get_runtime_resources failed.' });
+        return;
+      }
+      const resources = parseOmpRuntimeResources(frame.data);
+      finish(resources ? { resources } : { error: 'OMP returned invalid runtime resource data.' });
+    });
+  });
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -248,7 +312,7 @@ export async function getOmpDiagnosticsSummary(
     };
   }
 
-  const [authResult, agentDir] = await Promise.all([
+  const [authResult, agentDir, runtimeResourceResult] = await Promise.all([
     probeOmpAuth({
       rawCommand: runtime.rawCommand,
       cwd: runtime.cwd,
@@ -259,6 +323,12 @@ export async function getOmpDiagnosticsSummary(
       cwd: runtime.cwd,
       env: options.env,
       timeoutMs: 3_000,
+      spawnProcess: dependencies.spawnProcess,
+    }),
+    probeOmpRuntimeResources(runtime.command, runtime.args, {
+      cwd: runtime.cwd,
+      env: options.env,
+      timeoutMs: Math.min(options.timeoutMs ?? 30_000, 15_000),
       spawnProcess: dependencies.spawnProcess,
     }),
   ]);
@@ -287,6 +357,8 @@ export async function getOmpDiagnosticsSummary(
     agentDir,
     configFileExists,
     authDirExists,
+    runtimeResources: runtimeResourceResult.resources,
+    runtimeResourcesError: runtimeResourceResult.error,
     versionCompatibility: {
       ompVersion: runtime.version,
       ...checkOmpVersionCompatibility(runtime.version, undefined),

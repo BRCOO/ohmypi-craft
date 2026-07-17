@@ -44,6 +44,7 @@ import {
   handleOmpSubagentStateChanged,
   handlePermissionModeChanged,
   handleSessionModelChanged,
+  handleSessionThinkingLevelChanged,
   handleConnectionChanged,
   handleUserMessage,
   handleMessageAnnotationsUpdated,
@@ -165,6 +166,9 @@ export function processEvent(
 
     case 'session_model_changed':
       return handleSessionModelChanged(state, event)
+
+    case 'session_thinking_level_changed':
+      return handleSessionThinkingLevelChanged(state, event)
 
     case 'connection_changed':
       return handleConnectionChanged(state, event)

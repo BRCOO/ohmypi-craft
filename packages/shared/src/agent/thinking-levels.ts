@@ -3,6 +3,7 @@
  *
  * Six-tier thinking system for extended reasoning:
  * - OFF: No extended thinking (disabled)
+ * - Minimal: Minimal reasoning effort (provider-specific)
  * - Low: Light reasoning, faster responses
  * - Medium: Balanced speed and reasoning (default)
  * - High: Deep reasoning for complex tasks
@@ -27,6 +28,7 @@
  */
 export const THINKING_LEVEL_IDS = [
   'off',
+  'minimal',
   'low',
   'medium',
   'high',
@@ -52,6 +54,7 @@ export interface ThinkingLevelDefinition {
  */
 export const THINKING_LEVELS: readonly ThinkingLevelDefinition[] = [
   { id: 'off', nameKey: 'thinking.off', descriptionKey: 'thinking.offDesc' },
+  { id: 'minimal', nameKey: 'thinking.minimal', descriptionKey: 'thinking.minimalDesc' },
   { id: 'low', nameKey: 'thinking.low', descriptionKey: 'thinking.lowDesc' },
   { id: 'medium', nameKey: 'thinking.medium', descriptionKey: 'thinking.mediumDesc' },
   { id: 'high', nameKey: 'thinking.high', descriptionKey: 'thinking.highDesc' },
@@ -69,6 +72,7 @@ export const DEFAULT_THINKING_LEVEL: ThinkingLevel = 'medium';
  */
 export const THINKING_TO_EFFORT: Record<ThinkingLevel, 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null> = {
   off: null,
+  minimal: 'low',
   low: 'low',
   medium: 'medium',
   high: 'high',
@@ -88,6 +92,7 @@ export const THINKING_TO_EFFORT: Record<ThinkingLevel, 'low' | 'medium' | 'high'
 const TOKEN_BUDGETS = {
   haiku: {
     off: 0,
+    minimal: 1_000,
     low: 2_000,
     medium: 4_000,
     high: 6_000,
@@ -96,6 +101,7 @@ const TOKEN_BUDGETS = {
   },
   default: {
     off: 0,
+    minimal: 2_000,
     low: 4_000,
     medium: 10_000,
     high: 20_000,

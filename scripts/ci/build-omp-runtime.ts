@@ -2,8 +2,8 @@
 
 /** Build a matching OMP RPC runtime from the pinned upstream source.
  *
- * The upstream v16.3.6 release binaries predate the native Plan Mode RPC
- * bridge. This builder applies the small source patch kept in this repository,
+ * The upstream v16.3.6 release binaries predate the desktop-parity RPC
+ * bridge. This builder applies the versioned source overlay kept in this repository,
  * reuses the published platform native addon, and compiles the OMP binary on
  * the GitHub runner that will package Craft.
  */
@@ -11,6 +11,7 @@
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { brotliDecompressSync } from 'node:zlib'
 
 type TargetId = 'win32-x64' | 'darwin-arm64' | 'darwin-x64' | 'linux-x64' | 'linux-arm64'
 
@@ -25,7 +26,8 @@ interface Target {
 
 const ROOT = resolve(import.meta.dir, '..', '..')
 const OMP_ROOT = join(ROOT, 'apps', 'electron', 'resources', 'omp')
-const PATCH_B64_FILE = join(ROOT, 'scripts', 'ci', 'omp-plan-mode.patch.b64')
+const PATCH_B64_FILE = join(ROOT, 'scripts', 'ci', 'omp-desktop-parity.patch.br.b64')
+const RUNTIME_OVERLAY_VERSION = 'desktop-parity-2'
 const TARGETS: Record<TargetId, Target> = {
   'win32-x64': {
     id: 'win32-x64',
@@ -113,7 +115,7 @@ async function downloadAddon(buildRoot: string, target: Target, version: string)
 async function main(): Promise<void> {
   const { targets, tag, dryRun } = parseArgs(process.argv.slice(2))
   const sourceRepo = process.env.OMP_RUNTIME_SOURCE_REPO || 'can1357/oh-my-pi'
-  const buildRoot = mkdtempSync(join(tmpdir(), 'omp-plan-rpc-build-'))
+  const buildRoot = mkdtempSync(join(tmpdir(), 'omp-desktop-parity-build-'))
   const sourceRoot = join(buildRoot, 'oh-my-pi')
 
   try {
@@ -125,9 +127,9 @@ async function main(): Promise<void> {
     }
 
     await run(['git', 'clone', '--depth=1', '--branch', tag, `https://github.com/${sourceRepo}.git`, sourceRoot], ROOT)
-    const patchFile = join(buildRoot, 'omp-plan-mode.patch')
+    const patchFile = join(buildRoot, 'omp-desktop-parity.patch')
     const patchBase64 = (await Bun.file(PATCH_B64_FILE).text()).replace(/\s+/g, '')
-    await Bun.write(patchFile, Buffer.from(patchBase64, 'base64'))
+    await Bun.write(patchFile, brotliDecompressSync(Buffer.from(patchBase64, 'base64')))
     await run(['git', 'apply', patchFile], sourceRoot)
     // The source lockfile contains platform-conditional optional packages. A
     // writable temporary checkout must resolve those for the current runner;
@@ -156,7 +158,7 @@ async function main(): Promise<void> {
     }
 
     mkdirSync(OMP_ROOT, { recursive: true })
-    await Bun.write(join(OMP_ROOT, 'FETCHED_VERSION'), `${tag}-plan-rpc\n`)
+    await Bun.write(join(OMP_ROOT, 'FETCHED_VERSION'), `${tag}-${RUNTIME_OVERLAY_VERSION}\n`)
   } finally {
     rmSync(buildRoot, { recursive: true, force: true })
   }

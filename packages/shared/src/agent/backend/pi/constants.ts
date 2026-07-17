@@ -14,6 +14,7 @@ import type { ThinkingLevel } from '../../thinking-levels.ts';
  */
 export const THINKING_TO_PI: Record<ThinkingLevel, PiThinkingLevel> = {
   off: 'off',
+  minimal: 'minimal',
   low: 'low',
   medium: 'medium',
   high: 'high',

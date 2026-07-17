@@ -26,6 +26,9 @@ import MessagingSettingsPage from './MessagingSettingsPage'
 import ServerSettingsPage from './ServerSettingsPage'
 import ShortcutsPage from './ShortcutsPage'
 import PreferencesPage from './PreferencesPage'
+import ExtensionsControlCenterPage from './ExtensionsControlCenterPage'
+import OmpAdvancedSettingsPage from './OmpAdvancedSettingsPage'
+import OmpMarketplacePage from './OmpMarketplacePage'
 
 /**
  * Map of settings subpage IDs to their page components.
@@ -35,6 +38,7 @@ export const SETTINGS_PAGE_COMPONENTS: Record<SettingsSubpage, ComponentType> = 
   app: AppSettingsPage,
   ai: AiSettingsPage,
   omp: OmpFeatureCenterSettingsPage,
+  'omp-advanced': OmpAdvancedSettingsPage,
   appearance: AppearanceSettingsPage,
   input: InputSettingsPage,
   workspace: WorkspaceSettingsPage,
@@ -42,7 +46,9 @@ export const SETTINGS_PAGE_COMPONENTS: Record<SettingsSubpage, ComponentType> = 
   labels: LabelsSettingsPage,
   messaging: MessagingSettingsPage,
   server: ServerSettingsPage,
+  marketplace: OmpMarketplacePage,
   shortcuts: ShortcutsPage,
+  extensions: ExtensionsControlCenterPage,
   preferences: PreferencesPage,
 }
 

@@ -1,9 +1,13 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
+import { useAtomValue } from 'jotai'
 import { toast } from 'sonner'
 import { Bot, BrainCircuit, Check, ChevronDown, ChevronRight, ClipboardCopy, Cpu, ExternalLink, EyeOff, FolderOpen, ListChecks, Plus, RefreshCw, Save, ServerCog, Sparkles, Trash2 } from 'lucide-react'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { OmpResourceDirectory } from '@/components/app-shell/settings/OmpResourceDirectory'
+import { OmpAgentControlCenter } from '@/components/app-shell/settings/OmpAgentControlCenter'
+import { OmpSmitheryCard } from '@/components/app-shell/OmpSmitheryCard'
+import { sessionMetaMapAtom } from '@/atoms/sessions'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -119,6 +123,7 @@ function sourceLabel(source: string): string {
   if (source === 'project') return 'project override'
   if (source === 'global') return 'global'
   if (source === 'user') return 'user'
+  if (source === 'bundled') return 'bundled'
   return 'default'
 }
 
@@ -343,25 +348,34 @@ export function CapabilityCard({
       <div className="space-y-1.5">
         {visibleItems.length > 0 ? (
           visibleItems.map((item, index) => (
-            <div key={`${item.path}-${item.name}-${index}`} className="flex items-center justify-between gap-2 text-xs">
-              <button
-                type="button"
-                className="min-w-0 truncate text-left font-medium hover:underline"
-                title={item.path}
-                onClick={() => void openFeatureCenterPath(workspaceId, item.path, 'reveal')}
-              >
-                {item.name}
-              </button>
-              <div className="flex shrink-0 items-center gap-1.5">
-                <SourceBadge source={item.level} />
+            <div key={`${item.path ?? 'runtime'}-${item.name}-${index}`} className="flex items-center justify-between gap-2 text-xs">
+              {item.path ? (
                 <button
                   type="button"
-                  className="text-muted-foreground hover:text-foreground"
-                  title={`${t('omp.featureCenter.reveal')} ${item.name}`}
-                  onClick={() => void openFeatureCenterPath(workspaceId, item.path, 'reveal')}
+                  className="min-w-0 truncate text-left font-medium hover:underline"
+                  title={item.path}
+                  onClick={() => void openFeatureCenterPath(workspaceId, item.path!, 'reveal')}
                 >
-                  <FolderOpen className="size-3.5" />
+                  {item.name}
                 </button>
+              ) : (
+                <span className="min-w-0 truncate font-medium" title={item.provider ?? item.name}>{item.name}</span>
+              )}
+              <div className="flex shrink-0 items-center gap-1.5">
+                {item.status && (
+                  <span className="text-[11px] text-muted-foreground">{item.status}</span>
+                )}
+                <SourceBadge source={item.level} />
+                {item.path && (
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-foreground"
+                    title={`${t('omp.featureCenter.reveal')} ${item.name}`}
+                    onClick={() => void openFeatureCenterPath(workspaceId, item.path!, 'reveal')}
+                  >
+                    <FolderOpen className="size-3.5" />
+                  </button>
+                )}
               </div>
             </div>
           ))
@@ -371,6 +385,9 @@ export function CapabilityCard({
       </div>
       {capability.count > visibleItems.length && (
         <div className="mt-2 text-xs text-muted-foreground">+{capability.count - visibleItems.length} {t('common.more')}</div>
+      )}
+      {capability.error && (
+        <div className="mt-2 text-xs text-amber-700 dark:text-amber-300">{capability.error}</div>
       )}
       <div className="mt-3 rounded-md bg-muted/50 px-2 py-1.5 text-xs text-muted-foreground">
         {capability.usageHint}
@@ -880,6 +897,15 @@ export default function OmpFeatureCenterSettingsPage() {
   const skillsSectionRef = React.useRef<HTMLDivElement>(null)
   const mcpSectionRef = React.useRef<HTMLDivElement>(null)
   const agentsSectionRef = React.useRef<HTMLDivElement>(null)
+  const sessionMetaMap = useAtomValue(sessionMetaMapAtom)
+
+  // Derive the first available OMP session ID for session-level actions like Smithery.
+  const ompSessionId = React.useMemo<string | undefined>(() => {
+    for (const meta of sessionMetaMap.values()) {
+      if (meta.ompSessionLink?.provider === 'omp') return meta.id
+    }
+    return undefined
+  }, [sessionMetaMap])
 
   const hydrateDraft = React.useCallback((next: OmpFeatureCenterStateDto) => {
     const roles: RoleDraft = {}
@@ -1118,6 +1144,10 @@ export default function OmpFeatureCenterSettingsPage() {
                   </SettingsCard>
                 </SettingsSection>
 
+                {ompSessionId && (
+                  <OmpSmitheryCard sessionId={ompSessionId} />
+                )}
+
                 <div ref={modelsSectionRef} tabIndex={-1} className="outline-none">
                   <SettingsSection title={t('omp.featureCenter.modelRoles')} description={t('omp.featureCenter.modelRolesDescription')}>
                     <SettingsCard>
@@ -1275,19 +1305,8 @@ export default function OmpFeatureCenterSettingsPage() {
                       />
                     </div>
                     <div ref={agentsSectionRef} tabIndex={-1} className="outline-none">
-                      <OmpResourceDirectory
-                        workspaceId={activeWorkspaceId}
-                        type="agent"
-                        title={t('omp.featureCenter.agents')}
-                        icon={Bot}
-                        snapshot={resourceSnapshot ?? {
-                          mcp: { entries: [], sourcePaths: [] },
-                          skills: { entries: [], sourcePaths: [] },
-                          agents: { entries: [], sourcePaths: [] },
-                          diagnostics: [],
-                          refreshedAt: 0,
-                        }}
-                        onChange={() => void refreshState()}
+                      <OmpAgentControlCenter
+                        sessionId={ompSessionId ?? ''}
                       />
                     </div>
                   </div>

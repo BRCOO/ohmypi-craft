@@ -2,11 +2,11 @@ import * as React from 'react'
 import { useTranslation } from "react-i18next"
 import type { TFunction } from 'i18next'
 import { Command as CommandPrimitive } from 'cmdk'
-import { Bot, BrainCircuit, Check, Cpu, ListChecks, Minimize2, ServerCog, Sparkles, Wrench } from 'lucide-react'
+import { Bot, BrainCircuit, Check, Cpu, FileCode2, GitBranch, ListChecks, MessageSquareMore, Minimize2, Repeat2, ServerCog, Sparkles, Target, Wrench } from 'lucide-react'
 import { Icon_Folder } from '@craft-agent/ui'
 import { cn } from '@/lib/utils'
 import { PERMISSION_MODE_CONFIG, PERMISSION_MODE_ORDER, type PermissionMode } from '@craft-agent/shared/agent/modes'
-import type { LoadedSkill, OmpAvailableCommandDto, OmpAvailableCommandSource, OmpFeatureCenterStateDto, OmpFeatureUnavailableCommandDto, OmpPlanControlStateDto } from '../../../shared/types'
+import type { LoadedSkill, OmpAvailableCommandDto, OmpAvailableCommandSource, OmpFeatureCenterStateDto, OmpFeatureUnavailableCommandDto, OmpGoalControlStateDto, OmpLoopControlStateDto, OmpPlanControlStateDto } from '../../../shared/types'
 
 // ============================================================================
 // Types
@@ -20,7 +20,7 @@ export interface OmpSlashCommandId {
 
 export interface OmpCuratedCommandId {
   type: 'omp-curated'
-  kind: 'plan' | 'advisor' | 'mcp' | 'skills' | 'agents' | 'models'
+  kind: 'plan' | 'goal' | 'loop' | 'advisor' | 'mcp' | 'skills' | 'agents' | 'models' | 'btw' | 'tan' | 'omfg'
 }
 
 export type SlashCommandId = PermissionMode | 'compact' | OmpSlashCommandId | OmpCuratedCommandId
@@ -702,27 +702,41 @@ export function filterAvailableOmpCommands(
   unavailableCommandsLoaded = true,
 ): OmpAvailableCommandDto[] {
   if (!unavailableCommandsLoaded) return []
-  const hidden = new Set<string>()
+  const hiddenCommands = new Set<string>()
+  const hiddenSubcommands = new Map<string, Set<string>>()
   for (const command of unavailableCommands) {
-    if (command.status === 'hidden' || command.status === 'needs-upstream-rpc') {
-      hidden.add(normalizeOmpCommandName(command.command))
+    const path = normalizeOmpCommandPath(command.command)
+    if (!path.name) continue
+    if (!path.subcommand) {
+      hiddenCommands.add(path.name)
+      continue
     }
+    const subcommands = hiddenSubcommands.get(path.name) ?? new Set<string>()
+    subcommands.add(path.subcommand)
+    hiddenSubcommands.set(path.name, subcommands)
   }
-  return commands.filter(command => !hidden.has(normalizeOmpCommandName(command.name)))
+  return commands.flatMap(command => {
+    const name = normalizeOmpCommandName(command.name)
+    if (hiddenCommands.has(name)) return []
+    const subcommandsToHide = hiddenSubcommands.get(name)
+    if (!subcommandsToHide || !command.subcommands) return [command]
+    return [{
+      ...command,
+      subcommands: command.subcommands.filter(subcommand => (
+        !subcommandsToHide.has(normalizeOmpSubcommandName(subcommand.name))
+      )),
+    }]
+  })
 }
 
 function insertRuntimeOmpSections(
   baseSections: SlashSection[],
   runtimeSections: SlashSection[],
-  includeRuntime: boolean,
 ): SlashSection[] {
-  const visibleRuntimeSections = includeRuntime
-    ? runtimeSections
-    : runtimeSections.filter(section => section.id === 'omp-skills')
-  if (visibleRuntimeSections.length === 0) return baseSections
+  if (runtimeSections.length === 0) return baseSections
   const result = [...baseSections]
   const folderIndex = result.findIndex(section => section.id === 'folders')
-  result.splice(folderIndex === -1 ? result.length : folderIndex, 0, ...visibleRuntimeSections)
+  result.splice(folderIndex === -1 ? result.length : folderIndex, 0, ...runtimeSections)
   return result
 }
 
@@ -732,13 +746,38 @@ export function filterSlashSectionsForInput(
   filterText: string,
 ): SlashSection[] {
   return filterSections(
-    insertRuntimeOmpSections(baseSections, runtimeSections, filterText.length > 0),
+    insertRuntimeOmpSections(baseSections, runtimeSections),
     filterText,
   )
 }
 
 function normalizeOmpCommandName(command: string): string {
   return command.trim().replace(/^\/+/, '').split(/\s+/, 1)[0]?.toLowerCase() ?? ''
+}
+
+function normalizeOmpSubcommandName(subcommand: string): string {
+  return subcommand.trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+function normalizeOmpCommandPath(command: string): { name: string; subcommand?: string } {
+  const normalized = command.trim().replace(/^\/+/, '').replace(/\s+/g, ' ')
+  const separator = normalized.indexOf(' ')
+  if (separator === -1) return { name: normalized.toLowerCase() }
+  return {
+    name: normalized.slice(0, separator).toLowerCase(),
+    subcommand: normalizeOmpSubcommandName(normalized.slice(separator + 1)),
+  }
+}
+
+export function matchInlineSlashCommand(textBeforeCursor: string): { filter: string; start: number } | null {
+  // OMP uses namespaced command names such as `skill:foo` and aliases such as
+  // `force:`. Keep those characters inside the searchable command token.
+  const match = textBeforeCursor.match(/(?:^|\s)\/([\w:-]*)$/)
+  if (!match) return null
+  return {
+    filter: match[1] ?? '',
+    start: textBeforeCursor.lastIndexOf('/'),
+  }
 }
 
 export interface UseInlineSlashCommandOptions {
@@ -760,6 +799,16 @@ export interface UseInlineSlashCommandOptions {
   ompModelCount?: number
   /** Native Plan capability negotiated with the active OMP RPC process. */
   ompPlanState?: OmpPlanControlStateDto
+  /** Native Goal capability and lifecycle state negotiated with the active OMP RPC process. */
+  ompGoalState?: OmpGoalControlStateDto
+  /** Native Loop capability and lifecycle state negotiated with the active OMP RPC process. */
+  ompLoopState?: OmpLoopControlStateDto
+  /** Whether the OMP runtime advertises the BTW (side question) capability. */
+  ompBtwAvailable?: boolean
+  /** Whether the OMP runtime advertises the TAN (tangential agent) capability. */
+  ompTanAvailable?: boolean
+  /** Whether the OMP runtime advertises the OMFG (TTSR rule) capability. */
+  ompOmfgAvailable?: boolean
   recentFolders?: string[]
   homeDir?: string
 }
@@ -781,12 +830,22 @@ export function buildOmpCuratedSections(
   t: TFunction,
   ompModelCount?: number,
   ompPlanState?: OmpPlanControlStateDto,
+  ompGoalState?: OmpGoalControlStateDto,
+  ompLoopState?: OmpLoopControlStateDto,
+  ompBtwAvailable?: boolean,
+  ompTanAvailable?: boolean,
+  ompOmfgAvailable?: boolean,
 ): SlashSection[] {
   // OMP starts lazily on the first action. Keep Plan actionable when this
   // desktop's bundled runtime advertises the RPC bridge, so the click itself
   // can start the process and complete capability negotiation.
   const planDisabled = !ompPlanState?.supported && !state.nativePlan.toggleAvailable
+  const goalDisabled = !ompGoalState?.supported && !state.nativePlan.rpcCommands.includes('set_goal')
+  const loopDisabled = !ompLoopState?.supported && !state.nativePlan.rpcCommands.includes('set_loop')
   const planEnabled = ompPlanState?.state.enabled === true
+  const goalEnabled = ompGoalState?.state.enabled === true
+  const goalPaused = ompGoalState?.state.paused === true
+  const loopEnabled = ompLoopState?.state.enabled === true
   const advisorEnabled = state.advisor.enabled.effectiveValue
   const advisorProjectOverridden = state.advisor.enabled.projectOverridden
 
@@ -802,6 +861,28 @@ export function buildOmpCuratedSections(
       disabled: planDisabled,
       disabledReason: planDisabled ? t('omp.quickControls.rpcUnavailable') : undefined,
       checked: planEnabled,
+    },
+    {
+      id: { type: 'omp-curated', kind: 'goal' },
+      label: t('omp.quickControls.goalMode', { defaultValue: 'Goal mode' }),
+      description: goalEnabled || goalPaused
+        ? t('omp.quickControls.goalPauseResumeDescription', { defaultValue: 'Pause or resume the active OMP goal' })
+        : t('omp.quickControls.goalStartDescription', { defaultValue: 'Start a guided OMP goal' }),
+      icon: <Target className={MENU_ICON_SIZE} />,
+      meta: goalEnabled ? t('omp.quickControls.on') : goalPaused ? t('omp.quickControls.paused', { defaultValue: 'Paused' }) : t('omp.quickControls.off'),
+      disabled: goalDisabled,
+      disabledReason: goalDisabled ? t('omp.quickControls.rpcUnavailable') : undefined,
+      checked: goalEnabled,
+    },
+    {
+      id: { type: 'omp-curated', kind: 'loop' },
+      label: t('omp.quickControls.loopMode', { defaultValue: 'Loop mode' }),
+      description: t('omp.quickControls.loopToggleDescription', { defaultValue: 'Repeat the next prompt after each turn' }),
+      icon: <Repeat2 className={MENU_ICON_SIZE} />,
+      meta: loopEnabled ? t('omp.quickControls.on') : t('omp.quickControls.off'),
+      disabled: loopDisabled,
+      disabledReason: loopDisabled ? t('omp.quickControls.rpcUnavailable') : undefined,
+      checked: loopEnabled,
     },
     {
       id: { type: 'omp-curated', kind: 'advisor' },
@@ -856,6 +937,27 @@ export function buildOmpCuratedSections(
         ? t('omp.quickControls.unavailable')
         : t('omp.quickControls.modelCount', { count: ompModelCount }),
     },
+    ...(ompBtwAvailable ? [{
+      id: { type: 'omp-curated', kind: 'btw' } as const,
+      label: t('omp.quickControls.btw', { defaultValue: 'Side question (BTW)' }),
+      description: t('omp.quickControls.btwDescription', { defaultValue: 'Ask a quick side question without affecting the main conversation' }),
+      icon: <MessageSquareMore className={MENU_ICON_SIZE} />,
+      meta: '',
+    }] : []),
+    ...(ompTanAvailable ? [{
+      id: { type: 'omp-curated', kind: 'tan' } as const,
+      label: t('omp.quickControls.tan', { defaultValue: 'Tangential agent (TAN)' }),
+      description: t('omp.quickControls.tanDescription', { defaultValue: 'Spawn a background agent to explore a tangent' }),
+      icon: <GitBranch className={MENU_ICON_SIZE} />,
+      meta: '',
+    }] : []),
+    ...(ompOmfgAvailable ? [{
+      id: { type: 'omp-curated', kind: 'omfg' } as const,
+      label: t('omp.quickControls.omfg', { defaultValue: 'TTSR rule (OMFG)' }),
+      description: t('omp.quickControls.omfgDescription', { defaultValue: 'Define a TTSR rule to shape future behavior' }),
+      icon: <FileCode2 className={MENU_ICON_SIZE} />,
+      meta: '',
+    }] : []),
   ]
 
   return [
@@ -876,6 +978,11 @@ export function useInlineSlashCommand({
   ompFeatureCenterState,
   ompModelCount,
   ompPlanState,
+  ompGoalState,
+  ompLoopState,
+  ompBtwAvailable,
+  ompTanAvailable,
+  ompOmfgAvailable,
   recentFolders = [],
   homeDir,
 }: UseInlineSlashCommandOptions): UseInlineSlashCommandReturn {
@@ -966,8 +1073,8 @@ export function useInlineSlashCommand({
 
   const ompCuratedSections = React.useMemo((): SlashSection[] => {
     if (!isOmpSession || !ompFeatureCenterState) return []
-    return buildOmpCuratedSections(ompFeatureCenterState, t, ompModelCount, ompPlanState)
-  }, [isOmpSession, ompFeatureCenterState, ompModelCount, ompPlanState, t])
+    return buildOmpCuratedSections(ompFeatureCenterState, t, ompModelCount, ompPlanState, ompGoalState, ompLoopState, ompBtwAvailable, ompTanAvailable, ompOmfgAvailable)
+  }, [isOmpSession, ompFeatureCenterState, ompGoalState, ompLoopState, ompModelCount, ompPlanState, t, ompBtwAvailable, ompTanAvailable, ompOmfgAvailable])
 
   // Build sections from commands and folders
   const baseSections = React.useMemo((): SlashSection[] => {
@@ -987,12 +1094,18 @@ export function useInlineSlashCommand({
       result.push(...ompCuratedSections)
     }
 
-    // Commands section
-    result.push({
-      id: 'commands',
-      label: t('commands.commands', { defaultValue: 'Commands' }),
-      items: [localizedCompactCommand],
-    })
+    // Keep the generic compact fallback before OMP starts, but do not show a
+    // duplicate once the live runtime advertises its richer /compact command.
+    const hasRuntimeCompact = isOmpSession && availableOmpCommands.some(command => (
+      normalizeOmpCommandName(command.name) === 'compact'
+    ))
+    if (!hasRuntimeCompact) {
+      result.push({
+        id: 'commands',
+        label: t('commands.commands', { defaultValue: 'Commands' }),
+        items: [localizedCompactCommand],
+      })
+    }
 
     // Recent folders section - sorted alphabetically by folder name, show all
     if (recentFolders.length > 0) {
@@ -1017,11 +1130,11 @@ export function useInlineSlashCommand({
     }
 
     return result
-  }, [ompCuratedSections, recentFolders, homeDir, t])
+  }, [availableOmpCommands, homeDir, isOmpSession, ompCuratedSections, recentFolders, t])
 
   const sections = React.useMemo(
-    () => insertRuntimeOmpSections(baseSections, ompSections, filter.length > 0),
-    [baseSections, filter, ompSections],
+    () => insertRuntimeOmpSections(baseSections, ompSections),
+    [baseSections, ompSections],
   )
 
   const handleInputChange = React.useCallback((value: string, cursorPosition: number) => {
@@ -1029,10 +1142,10 @@ export function useInlineSlashCommand({
     currentInputRef.current = { value, cursorPosition }
 
     const textBeforeCursor = value.slice(0, cursorPosition)
-    const slashMatch = textBeforeCursor.match(/(?:^|\s)\/([\w-]*)$/)
+    const slashMatch = matchInlineSlashCommand(textBeforeCursor)
 
     if (slashMatch) {
-      const filterText = slashMatch[1] || ''
+      const filterText = slashMatch.filter
       // Check if there are any filtered results before opening menu
       // This ensures Enter key works normally when no matches exist
       const filteredSections = filterSlashSectionsForInput(baseSections, ompSections, filterText)
@@ -1046,8 +1159,7 @@ export function useInlineSlashCommand({
         return
       }
 
-      const matchStart = textBeforeCursor.lastIndexOf('/')
-      setSlashStart(matchStart)
+      setSlashStart(slashMatch.start)
       setFilter(filterText)
 
       if (inputRef.current) {

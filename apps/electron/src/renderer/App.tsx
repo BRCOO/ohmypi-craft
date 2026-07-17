@@ -1014,6 +1014,13 @@ export default function App() {
         // Update atom directly (UI sees update immediately)
         updateSessionDirect(sessionId, () => updatedSession)
 
+        // Backend may clamp a requested effort after a model/connection
+        // capability check. Keep the composer options (a separate state map)
+        // aligned with the authoritative session event as well.
+        if (event.type === 'session_thinking_level_changed') {
+          syncSessionOptionsFromSession(updatedSession)
+        }
+
         // Handle side effects
         handleEffects(effects, sessionId, event.type)
 
@@ -1063,6 +1070,10 @@ export default function App() {
 
       // Update per-session atom
       updateSessionDirect(sessionId, () => updatedSession)
+
+      if (event.type === 'session_thinking_level_changed') {
+        syncSessionOptionsFromSession(updatedSession)
+      }
 
       // Update metadata map
       const metaMap = store.get(sessionMetaMapAtom)
@@ -1447,13 +1458,25 @@ export default function App() {
     // Handle persistence/backend for specific options
     if (updates.permissionMode !== undefined) {
       // Sync permission mode change with backend
-      window.electronAPI.sessionCommand(sessionId, { type: 'setPermissionMode', mode: updates.permissionMode })
+      void window.electronAPI.sessionCommand(sessionId, { type: 'setPermissionMode', mode: updates.permissionMode })
+        .catch((error: unknown) => {
+          // The UI update above is optimistic.  If the server rejects it (for
+          // example because the session disappeared or the mode is no longer
+          // allowed), reload the authoritative session instead of leaving a
+          // frontend-only mode visible.
+          console.error('[App] Failed to persist permission mode:', error)
+          void refreshSessionFromServer(sessionId)
+        })
     }
     if (updates.thinkingLevel !== undefined) {
       // Sync thinking level change with backend (session-level, persisted)
-      window.electronAPI.sessionCommand(sessionId, { type: 'setThinkingLevel', level: updates.thinkingLevel })
+      void window.electronAPI.sessionCommand(sessionId, { type: 'setThinkingLevel', level: updates.thinkingLevel })
+        .catch((error: unknown) => {
+          console.error('[App] Failed to persist thinking level:', error)
+          void refreshSessionFromServer(sessionId)
+        })
     }
-  }, [sessionOptions])
+  }, [refreshSessionFromServer])
 
   // Handle input draft changes per session with debounced persistence
   const draftSaveTimeoutRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())

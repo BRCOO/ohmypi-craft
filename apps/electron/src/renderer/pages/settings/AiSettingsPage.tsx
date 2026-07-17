@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button'
 import { HeaderMenu } from '@/components/ui/HeaderMenu'
 import { navigate, routes } from '@/lib/navigate'
 import { requestOmpFeatureCenterSection, type OmpFeatureCenterSection } from '@/lib/omp-feature-center-navigation'
-import { X, MoreHorizontal, Pencil, Trash2, Star, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, RefreshCcw, Settings2, MessageSquareMore, Zap, Clock, Check, ExternalLink, Loader2, ClipboardCopy } from 'lucide-react'
+import { X, MoreHorizontal, Pencil, Trash2, Star, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, RefreshCcw, Settings2, MessageSquareMore, Zap, Clock, Check, ExternalLink, Loader2, ClipboardCopy, LogOut } from 'lucide-react'
 import { OmpAiDiagnosticsPanel } from './OmpAiDiagnosticsPanel'
 import type { CredentialHealthStatus, CredentialHealthIssue } from '../../../shared/types'
 import { Spinner, FullscreenOverlayBase, Tooltip, TooltipTrigger, TooltipContent } from '@craft-agent/ui'
@@ -252,7 +252,9 @@ function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, 
   useEffect(() => {
     const provider = connection.providerType || connection.type
     if (provider === 'pi' && connection.piAuthProvider && !connection.baseUrl) {
-      window.electronAPI.getPiProviderBaseUrl(connection.piAuthProvider).then(url => setPiBaseUrl(url))
+      window.electronAPI.getPiProviderBaseUrl(connection.piAuthProvider)
+        .then(url => setPiBaseUrl(url))
+        .catch((error) => console.warn('[AiSettings] Failed to load provider base URL:', error))
     }
   }, [connection.providerType, connection.type, connection.piAuthProvider, connection.baseUrl])
 
@@ -994,11 +996,17 @@ export default function AiSettingsPage() {
         refreshLlmConnections?.()
       } else {
         console.error('Failed to set default connection:', result.error)
+        toast.error(t('toast.failedToSaveSetting', { setting: t('settings.ai.connection') }), {
+          description: result.error,
+        })
       }
     } catch (error) {
       console.error('Failed to set default connection:', error)
+      toast.error(t('toast.failedToSaveSetting', { setting: t('settings.ai.connection') }), {
+        description: error instanceof Error ? error.message : undefined,
+      })
     }
-  }, [refreshLlmConnections])
+  }, [refreshLlmConnections, t])
 
   // Update a connection's mid-stream send behavior (steer vs queue).
   // Uses the same saveLlmConnection RPC as other connection edits.
@@ -1049,9 +1057,16 @@ export default function AiSettingsPage() {
     const updated = { ...defaultConnection, defaultModel: model }
     // Remove status fields that aren't part of LlmConnection
     const { isAuthenticated: _a, authError: _b, isDefault: _c, ...connectionData } = updated
-    await window.electronAPI.saveLlmConnection(connectionData as import('../../../shared/types').LlmConnection)
-    await refreshLlmConnections()
-  }, [defaultConnection, refreshLlmConnections])
+    try {
+      const result = await window.electronAPI.saveLlmConnection(connectionData as import('../../../shared/types').LlmConnection)
+      if (!result.success) throw new Error(result.error || 'Failed to save default model')
+      await refreshLlmConnections()
+    } catch (error) {
+      toast.error(t('toast.failedToSaveSetting', { setting: t('settings.ai.model') }), {
+        description: error instanceof Error ? error.message : undefined,
+      })
+    }
+  }, [defaultConnection, refreshLlmConnections, t])
 
   const handleDefaultThinkingChange = useCallback(async (level: ThinkingLevel) => {
     if (!window.electronAPI) return
@@ -1064,27 +1079,57 @@ export default function AiSettingsPage() {
       if (!result.success) {
         console.error('Failed to set default thinking level:', result.error)
         setDefaultThinking(previous)
+        toast.error(t('toast.failedToSaveSetting', { setting: t('settings.ai.thinking') }), {
+          description: result.error,
+        })
       }
     } catch (error) {
       console.error('Failed to set default thinking level:', error)
       setDefaultThinking(previous)
+      toast.error(t('toast.failedToSaveSetting', { setting: t('settings.ai.defaultThinking') }), {
+        description: error instanceof Error ? error.message : undefined,
+      })
     }
-  }, [defaultThinking])
+  }, [defaultThinking, t])
 
   const handleExtendedPromptCacheChange = useCallback(async (enabled: boolean) => {
+    const previous = extendedPromptCache
     setExtendedPromptCache(enabled)
-    await window.electronAPI?.setExtendedPromptCache(enabled)
-  }, [])
+    try {
+      await window.electronAPI?.setExtendedPromptCache(enabled)
+    } catch (error) {
+      setExtendedPromptCache(previous)
+      toast.error(t('toast.failedToSaveSetting', { setting: t('settings.ai.extendedPromptCache') }), {
+        description: error instanceof Error ? error.message : undefined,
+      })
+    }
+  }, [extendedPromptCache, t])
 
   const handleEnable1MContextChange = useCallback(async (enabled: boolean) => {
+    const previous = enable1MContext
     setEnable1MContext(enabled)
-    await window.electronAPI?.setEnable1MContext(enabled)
-  }, [])
+    try {
+      await window.electronAPI?.setEnable1MContext(enabled)
+    } catch (error) {
+      setEnable1MContext(previous)
+      toast.error(t('toast.failedToSaveSetting', { setting: t('settings.ai.extendedContext') }), {
+        description: error instanceof Error ? error.message : undefined,
+      })
+    }
+  }, [enable1MContext, t])
 
   const handleRtkToggle = useCallback(async (enabled: boolean) => {
+    const previous = rtkEnabled
     setRtkEnabled(enabled)
-    await window.electronAPI?.setRtkEnabled(enabled)
-  }, [])
+    try {
+      await window.electronAPI?.setRtkEnabled(enabled)
+    } catch (error) {
+      setRtkEnabled(previous)
+      toast.error(t('toast.failedToSaveSetting', { setting: 'RTK' }), {
+        description: error instanceof Error ? error.message : undefined,
+      })
+    }
+  }, [rtkEnabled, t])
 
   const handleRecheckRtk = useCallback(async () => {
     setRtkRechecking(true)
@@ -1245,6 +1290,26 @@ export default function AiSettingsPage() {
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'OMP login failed')
+    } finally {
+      setOmpLoggingInProviderId(undefined)
+    }
+  }, [loadOmpProviders, handleRefreshOmpModels])
+
+  const handleLogoutOmpProvider = useCallback(async (provider: OmpLoginProviderDto) => {
+    if (!window.electronAPI) return
+    setOmpLoggingInProviderId(provider.id)
+    setOmpProvidersError(undefined)
+    try {
+      const result = await window.electronAPI.logoutOmpProvider(provider.id)
+      if (!result.success) {
+        toast.error(result.error || 'OMP logout failed')
+        return
+      }
+      toast.success(`Logged out of ${provider.name}`)
+      await loadOmpProviders()
+      await handleRefreshOmpModels()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'OMP logout failed')
     } finally {
       setOmpLoggingInProviderId(undefined)
     }
@@ -1470,7 +1535,24 @@ export default function AiSettingsPage() {
                             </div>
                           </div>
                           {provider.authenticated ? (
-                            <CheckCircle2 className="size-5 shrink-0 text-emerald-500" />
+                            <Button
+                              size="sm"
+                              onClick={() => handleLogoutOmpProvider(provider)}
+                              disabled={ompLoggingInProviderId === provider.id}
+                              className="bg-background shadow-minimal text-foreground hover:bg-foreground/5 rounded-lg"
+                            >
+                              {ompLoggingInProviderId === provider.id ? (
+                                <>
+                                  <Loader2 className="mr-1.5 size-3 animate-spin" />
+                                  {t('settings.ai.ompProviders.loggingOut', { defaultValue: 'Logging out' })}
+                                </>
+                              ) : (
+                                <>
+                                  <LogOut className="mr-1.5 size-3" />
+                                  {t('settings.ai.ompProviders.logout', { defaultValue: 'Logout' })}
+                                </>
+                              )}
+                            </Button>
                           ) : provider.available ? (
                             <Button
                               size="sm"

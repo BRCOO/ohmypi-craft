@@ -32,17 +32,22 @@ import {
   type LlmConnectionWithStatus,
 } from '@config/llm-connections'
 import {
-  THINKING_LEVELS,
   type ThinkingLevel,
 } from '@craft-agent/shared/agent/thinking-levels'
 import { ConnectionIcon } from '@/components/icons/ConnectionIcon'
 import { derivePickerMode } from './picker-mode'
 import {
   formatTokenCount,
+  clampThinkingLevelToModel,
+  getThinkingLevelsForModel,
   groupConnectionsByProvider,
   stripPiPrefixForDisplay,
 } from './model-picker-helpers'
 import { useModelVisionToggle } from './useModelVisionToggle'
+import { useOmpCapabilities } from '@/hooks/useOmpCapabilities'
+import { useOmpSessionCommand } from '@/hooks/useOmpSessionCommand'
+import type { OmpModelState, OmpModelSelectionSource } from '@craft-agent/shared/protocol'
+import { toast } from 'sonner'
 
 interface CompactModelSelectorProps {
   currentModel: string
@@ -58,6 +63,8 @@ interface CompactModelSelectorProps {
     inputTokens?: number
     contextWindow?: number
   }
+  /** OMP session ID for capability-gated features (temporary model, etc.) */
+  sessionId?: string
 }
 
 export function CompactModelSelector({
@@ -70,6 +77,7 @@ export function CompactModelSelector({
   isEmptySession = false,
   connectionUnavailable = false,
   contextStatus,
+  sessionId,
 }: CompactModelSelectorProps) {
   const { t } = useTranslation()
   const [open, setOpen] = React.useState(false)
@@ -81,6 +89,7 @@ export function CompactModelSelector({
 
   const toggleVision = useModelVisionToggle()
 
+
   const effectiveConnection = resolveEffectiveConnectionSlug(
     currentConnection,
     workspaceDefaultConnection,
@@ -91,6 +100,38 @@ export function CompactModelSelector({
     if (!effectiveConnection) return null
     return llmConnections.find(c => c.slug === effectiveConnection) ?? null
   }, [llmConnections, effectiveConnection])
+
+  // ── Temporary model state ──────────────────────────────────────────────
+  const { isFeatureSupported: isTempModelSupported } = useOmpCapabilities(sessionId)
+  const { execute: executeOmpCommand } = useOmpSessionCommand(sessionId)
+  const tempModelSupported = !!sessionId && isTempModelSupported('model.temporary')
+
+  const [tempModelActive, setTempModelActive] = React.useState(false)
+  const [tempModelId, setTempModelId] = React.useState<string | null>(null)
+
+  const handleSetTemporaryModel = React.useCallback(async (modelId: string) => {
+    if (!sessionId) return
+    try {
+      await executeOmpCommand({ type: 'setTemporaryModel', provider: effectiveConnection ?? '', modelId })
+      setTempModelActive(true)
+      setTempModelId(modelId)
+      toast.success(t('omp.temporaryModelSet', { defaultValue: 'Temporary model set' }))
+    } catch {
+      toast.error(t('omp.temporaryModelFailed', { defaultValue: 'Failed to set temporary model' }))
+    }
+  }, [sessionId, executeOmpCommand, effectiveConnection, t])
+
+  const handleClearTemporaryModel = React.useCallback(async () => {
+    if (!sessionId) return
+    try {
+      await executeOmpCommand({ type: 'clearTemporaryModel' })
+      setTempModelActive(false)
+      setTempModelId(null)
+      toast.success(t('omp.temporaryModelCleared', { defaultValue: 'Temporary model cleared' }))
+    } catch {
+      toast.error(t('omp.temporaryModelClearFailed', { defaultValue: 'Failed to clear temporary model' }))
+    }
+  }, [sessionId, executeOmpCommand, t])
 
   const connectionDefaultModel = React.useMemo(() => {
     const conn = effectiveConnectionDetails
@@ -123,12 +164,23 @@ export function CompactModelSelector({
     return model.name ?? stripPiPrefixForDisplay(model.id)
   }, [availableModels, currentModel, connectionDefaultModel])
 
-  const thinkingDisabled = React.useMemo(() => {
+  const currentModelDefinition = React.useMemo(() => {
     const model = availableModels.find(
       m => typeof m !== 'string' && m.id === currentModel,
     )
-    return typeof model !== 'string' && model?.supportsThinking === false
+    return typeof model === 'string' ? undefined : model
   }, [availableModels, currentModel])
+
+  const thinkingDisabled = currentModelDefinition?.supportsThinking === false
+  const availableThinkingLevels = React.useMemo(() => getThinkingLevelsForModel(
+    currentModelDefinition,
+    effectiveConnectionDetails?.providerType,
+    currentModel,
+  ), [currentModelDefinition, effectiveConnectionDetails?.providerType, currentModel])
+  const effectiveThinkingLevel = React.useMemo(() => clampThinkingLevelToModel(
+    thinkingLevel,
+    availableThinkingLevels,
+  ), [thinkingLevel, availableThinkingLevels])
 
   const connectionsByProvider = React.useMemo(
     () => groupConnectionsByProvider(llmConnections),
@@ -192,6 +244,11 @@ export function CompactModelSelector({
                 <ConnectionIcon connection={effectiveConnectionDetails} size={14} />
               )}
               <span className="truncate min-w-0">{currentModelDisplayName}</span>
+              {tempModelActive && (
+                <span className="text-[9px] px-1 py-0.5 rounded-full bg-warning/20 text-warning-foreground font-semibold leading-none">
+                  TEMP
+                </span>
+              )}
               {pickerMode !== 'locked-single' && (
                 <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
               )}
@@ -395,13 +452,13 @@ export function CompactModelSelector({
           )}
 
           {/* === Thinking section === */}
-          {THINKING_LEVELS.length > 0 && pickerMode !== 'unavailable' && (
+          {availableThinkingLevels.length > 0 && pickerMode !== 'unavailable' && (
             <>
               <div className="px-3 pt-4 pb-1 text-xs font-medium text-foreground/60 uppercase tracking-wide select-none">
                 {t('chat.modelPicker.thinkingSection')}
               </div>
-              {THINKING_LEVELS.map(({ id, nameKey, descriptionKey }) => {
-                const isSelected = thinkingLevel === id
+              {availableThinkingLevels.map(({ id, nameKey, descriptionKey }) => {
+                const isSelected = effectiveThinkingLevel === id
                 return (
                   <DrawerClose asChild key={id}>
                     <button
@@ -426,6 +483,61 @@ export function CompactModelSelector({
                       )}
                     </button>
                   </DrawerClose>
+                )
+              })}
+            </>
+          )}
+
+          {/* === Temporary Model section === */}
+          {tempModelSupported && (
+            <>
+              <div className="px-3 pt-4 pb-1 text-xs font-medium text-foreground/60 uppercase tracking-wide select-none">
+                {t('chat.modelPicker.temporaryModel')}
+              </div>
+              {tempModelActive && tempModelId ? (
+                <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-warning/10">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium truncate flex items-center gap-1.5">
+                      {stripPiPrefixForDisplay(getModelDisplayName(tempModelId))}
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-warning/20 text-warning-foreground font-medium">
+                        TEMP
+                      </span>
+                    </div>
+                    <div className="text-xs text-foreground/50">{t('chat.modelPicker.temporaryModelHint')}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleClearTemporaryModel}
+                    className="text-xs text-destructive hover:underline shrink-0 ml-2"
+                  >
+                    {t('common.clear')}
+                  </button>
+                </div>
+              ) : (
+                <div className="text-xs text-foreground/50 px-3 py-1">
+                  {t('chat.modelPicker.setTemporaryModelHint')}
+                </div>
+              )}
+              {availableModels.slice(0, 3).map(model => {
+                const modelId = typeof model === 'string' ? model : model.id
+                const modelName = typeof model === 'string'
+                  ? stripPiPrefixForDisplay(getModelShortName(model))
+                  : (model.name ?? stripPiPrefixForDisplay(model.id))
+                const isActive = tempModelActive && tempModelId === modelId
+                return (
+                  <button
+                    key={modelId}
+                    type="button"
+                    disabled={isActive}
+                    onClick={() => handleSetTemporaryModel(modelId)}
+                    className={cn(
+                      'flex items-center justify-between w-full px-3 py-2 rounded-lg text-left transition-colors',
+                      isActive ? 'opacity-50 cursor-not-allowed' : 'hover:bg-foreground/5',
+                    )}
+                  >
+                    <span className="text-sm truncate">{modelName}</span>
+                    {isActive && <Check className="h-3 w-3 text-foreground/60 shrink-0 ml-3" />}
+                  </button>
                 )
               })}
             </>

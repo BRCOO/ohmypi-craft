@@ -77,14 +77,13 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
     cwd: deps.platform.appRootPath || process.cwd(),
     timeoutMs: 15_000,
   })
-  const getCurrentOmpDiagnostics = () => getOmpDiagnosticsSummary({
+  const getCurrentOmpDiagnostics = (cwd = deps.platform.appRootPath || process.cwd()) => getOmpDiagnosticsSummary({
     configuredCommand: getOmpCommandPath(),
     bundledCommand: getBundledOmpCommand(),
-    cwd: deps.platform.appRootPath || process.cwd(),
+    cwd,
     timeoutMs: 30_000,
   })
   const resolveOmpFeatureCenterOptions = async (workspaceId?: string | null) => {
-    const diagnostics = await getCurrentOmpDiagnostics()
     let workspaceRootPath: string | undefined
     let projectRootPath: string | undefined
     if (workspaceId) {
@@ -92,6 +91,7 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
       workspaceRootPath = workspace.rootPath
       projectRootPath = loadWorkspaceConfig(workspace.rootPath)?.defaults?.workingDirectory || workspace.rootPath
     }
+    const diagnostics = await getCurrentOmpDiagnostics(projectRootPath || workspaceRootPath)
     return {
       diagnostics,
       workspaceRootPath,
@@ -682,6 +682,45 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
       const msg = error instanceof Error ? error.message : String(error)
       deps.platform.logger?.warn(`[OMP LOGIN_PROVIDER] ${msg}`)
       return { success: false, error: `OMP login failed: ${msg}` }
+    }
+  })
+
+  server.handle(RPC_CHANNELS.omp.LOGOUT_PROVIDER, async (_ctx, providerId: string): Promise<OmpLoginSessionResult> => {
+    if (!providerId || typeof providerId !== 'string') {
+      return { success: false, error: 'Provider ID is required.' }
+    }
+
+    const status = await checkCurrentOmpRuntime()
+    if (!status.ok) {
+      return {
+        success: false,
+        error: status.error || 'OMP runtime is not available. Check the OMP command path.',
+      }
+    }
+
+    try {
+      const result = await probeOmpAuth({
+        rawCommand: getOmpCommandPath(),
+        cwd: deps.platform.appRootPath || process.cwd(),
+        timeoutMs: 30_000,
+        logoutProviderId: providerId,
+      })
+
+      if (!result.success) {
+        return {
+          success: false,
+          error: result.message,
+        }
+      }
+
+      return {
+        success: true,
+        providerId,
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      deps.platform.logger?.warn(`[OMP LOGOUT_PROVIDER] ${msg}`)
+      return { success: false, error: `OMP logout failed: ${msg}` }
     }
   })
 

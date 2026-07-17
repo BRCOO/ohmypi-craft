@@ -38,13 +38,23 @@ import type {
   OmpBranchSessionResult,
   OmpExportHtmlResult,
   OmpHandoffSessionResult,
+  OmpSessionTreeResult,
+  OmpSessionForkResult,
 } from '../../shared/types'
+import type { OmpSessionTreeState } from '@craft-agent/shared/protocol'
 
 export interface UseSessionMenuActionsOptions {
   item: SessionMeta
   onLabelsChange?: (labels: string[]) => void
 }
 
+
+export interface OmpSessionTreeDialogState {
+  open: boolean
+  tree: OmpSessionTreeState | null
+  loading: boolean
+  error: string | null
+}
 export interface OmpBranchDialogState {
   open: boolean
   options: OmpBranchOption[]
@@ -75,10 +85,15 @@ export interface SessionMenuActions {
   ompBranchDialog: OmpBranchDialogState
   closeOmpBranchDialog: () => void
   selectOmpBranchOption: (option: OmpBranchOption) => Promise<void>
+  /** State and controls for the OMP session tree navigator dialog. */
+  sessionTreeDialog: OmpSessionTreeDialogState
+  openSessionTreeDialog: () => Promise<void>
+  closeSessionTreeDialog: () => void
+  /** Switch to a different OMP session in the session tree. */
+  switchOmpSession: (ompSessionPath: string) => Promise<void>
+  /** Fork the current OMP session at a given entry point. */
+  forkOmpSession: () => Promise<void>
 }
-
-// SOH (U+0001) — non-printable so it can't collide with label IDs (which
-// validate to [a-z0-9-]) or values (which may themselves contain '::').
 const LABEL_KEY_SEPARATOR = String.fromCharCode(1)
 
 function joinLabelKey(labels: readonly string[] | undefined): string {
@@ -97,18 +112,21 @@ export function useSessionMenuActions({
   const isOmpSession = item.ompSessionLink?.provider === 'omp'
 
   const [optimisticLabels, setOptimisticLabels] = React.useState<string[]>(() => propLabels ?? [])
-  // Mirror of `optimisticLabels` so toggles can read the latest value
-  // synchronously without going through React's update queue. Reading from
-  // a state-updater callback would be impure (Strict Mode can invoke updaters
-  // twice in dev), which would double-fire onLabelsChange.
   const optimisticLabelsRef = React.useRef<string[]>(propLabels ?? [])
-  const propKey = React.useMemo(() => joinLabelKey(propLabels), [propLabels])
   const lastSentKeyRef = React.useRef<string | null>(null)
-
+  const propKey = joinLabelKey(propLabels)
   const [ompBranchDialog, setOmpBranchDialog] = React.useState<OmpBranchDialogState>({
     open: false,
     options: [],
   })
+
+  const [sessionTreeDialog, setSessionTreeDialog] = React.useState<OmpSessionTreeDialogState>({
+    open: false,
+    tree: null,
+    loading: false,
+    error: null,
+  })
+
 
   // Hard-reset on session change so optimistic state from a previous session
   // cannot leak into a new one (e.g. user toggles `bug` on session A, navigates
@@ -120,6 +138,7 @@ export function useSessionMenuActions({
     lastSentKeyRef.current = null
     setOptimisticLabels(next)
     setOmpBranchDialog({ open: false, options: [] })
+    setSessionTreeDialog({ open: false, tree: null, loading: false, error: null })
     // Intentionally only depending on sessionId — propLabels changes within
     // the same session are handled by the prop-sync effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -261,6 +280,84 @@ export function useSessionMenuActions({
     }
   }, [closeOmpBranchDialog, sessionId, t])
 
+  const forkOmpSession = React.useCallback(async () => {
+    if (!isOmpSession) {
+      toast.error(t('sessionMenu.ompUnavailable'))
+      return
+    }
+
+    // Open the tree dialog first so the user can choose where to fork from
+    const treeResult = await window.electronAPI.sessionCommand(sessionId, {
+      type: 'getSessionTree',
+    }) as OmpSessionTreeResult | undefined
+
+    if (!treeResult?.success || !treeResult.tree) {
+      toast.error(t('sessionMenu.ompForkFailed', { defaultValue: 'Failed to retrieve session tree' }))
+      return
+    }
+
+    setSessionTreeDialog({
+      open: true,
+      tree: treeResult.tree,
+      loading: false,
+      error: null,
+    })
+  }, [isOmpSession, sessionId, t])
+
+  const openSessionTreeDialog = React.useCallback(async () => {
+    if (!isOmpSession) {
+      toast.error(t('sessionMenu.ompUnavailable'))
+      return
+    }
+
+    setSessionTreeDialog((prev) => ({ ...prev, loading: true, error: null }))
+
+    const result = await window.electronAPI.sessionCommand(sessionId, {
+      type: 'getSessionTree',
+    }) as OmpSessionTreeResult | undefined
+
+    if (result?.success && result.tree) {
+      setSessionTreeDialog({
+        open: true,
+        tree: result.tree,
+        loading: false,
+        error: null,
+      })
+    } else {
+      setSessionTreeDialog({
+        open: true,
+        tree: null,
+        loading: false,
+        error: result?.error ? String(result.error) : t('sessionMenu.ompTreeLoadFailed', { defaultValue: 'Failed to load session tree' }),
+      })
+    }
+  }, [isOmpSession, sessionId, t])
+
+  const closeSessionTreeDialog = React.useCallback(() => {
+    setSessionTreeDialog((prev) => ({ ...prev, open: false }))
+  }, [])
+
+  const switchOmpSession = React.useCallback(async (ompSessionPath: string) => {
+    if (!isOmpSession) return
+
+    const result = await window.electronAPI.sessionCommand(sessionId, {
+      type: 'switchSession',
+      ompSessionPath,
+    }) as { success: boolean; craftSessionId?: string; error?: string } | undefined
+
+    if (result?.success) {
+      closeSessionTreeDialog()
+      if (result.craftSessionId) {
+        navigate(routes.view.allSessions(result.craftSessionId))
+      }
+      toast.success(t('sessionMenu.ompSwitchComplete', { defaultValue: 'Switched to session' }))
+    } else {
+      toast.error(t('sessionMenu.ompSwitchFailed', { defaultValue: 'Failed to switch session' }), {
+        description: result?.error ?? t('toast.unknownError'),
+      })
+    }
+  }, [isOmpSession, sessionId, t, closeSessionTreeDialog])
+
   const branchOmpSession = React.useCallback(async () => {
     if (!isOmpSession) {
       toast.error(t('sessionMenu.ompUnavailable'))
@@ -359,10 +456,15 @@ export function useSessionMenuActions({
     updateShare,
     revokeShare,
     branchOmpSession,
+    forkOmpSession,
     handoffOmpSession,
     exportOmpSessionHtml,
     ompBranchDialog,
     closeOmpBranchDialog,
     selectOmpBranchOption,
+    sessionTreeDialog,
+    openSessionTreeDialog,
+    closeSessionTreeDialog,
+    switchOmpSession,
   }
 }
