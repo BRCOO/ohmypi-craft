@@ -2,11 +2,19 @@
 
 All notable changes to Oh My Pi Desktop will be documented here.
 
-The project is currently in active development. Release notes will become versioned once the first public desktop release is published.
+The project is currently in active development. Release notes are versioned by desktop release.
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-07-17
+
 ### Highlights
+
+- Added the OMP CLI workspace and aligned its command surface with the desktop RPC bridge.
+- Added OMP session controls, collaboration panels, advanced settings, marketplace, and extension control centers.
+- Fixed runtime-discovered OMP skills, MCP servers, and agents being shown as zero items in desktop diagnostics.
+- Added provider-aware model capabilities, thinking levels, and compatibility handling.
+- Added release validation and synced the workspace lockfile for reproducible CI installs.
 
 - Oh My Pi is exposed as a first-class desktop backend through a typed RPC bridge.
 - Sessions can discover and select OMP models without leaving the desktop workspace.
@@ -17,5 +25,4 @@ The project is currently in active development. Release notes will become versio
 
 ### Notes
 
-- The repository is not yet a stable release; packaging, APIs, and provider integrations may change.
-- Local development uses the `codex/omp-rpc-backend` development line until the project is promoted to its public default branch.
+- Packaging, APIs, and provider integrations may continue to change during active development.

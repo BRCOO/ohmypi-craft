@@ -1,6 +1,6 @@
 {
   "name": "@craft-agent/electron",
-  "version": "0.10.5",
+  "version": "0.10.6",
   "description": "Oh My Pi desktop app",
   "main": "dist/main.cjs",
   "private": true,
