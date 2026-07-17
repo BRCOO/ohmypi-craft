@@ -16,27 +16,20 @@ describe('release-meta', () => {
   })
 
   it('marks tag pushes as releases when version matches package', () => {
+    const version = computeReleaseMeta({
+      GITHUB_REF: 'refs/heads/main',
+      GITHUB_SHA: 'abcdef0123456789',
+      GITHUB_EVENT_NAME: 'push',
+    }).version
     const meta = computeReleaseMeta({
-      GITHUB_REF: 'refs/tags/v0.10.5',
+      GITHUB_REF: `refs/tags/v${version}`,
       GITHUB_SHA: 'abcdef0123456789',
       GITHUB_EVENT_NAME: 'push',
     })
-    // version comes from real package.json — only assert release detection shape
     expect(meta.short_sha).toBe('abcdef012345')
     expect(meta.commit).toBe('abcdef0123456789')
-    if (meta.version === '0.10.5') {
-      expect(meta.is_release).toBe(true)
-      expect(meta.tag_name).toBe('v0.10.5')
-    } else {
-      // Package version may have been bumped; mismatched tags must fail.
-      expect(() =>
-        computeReleaseMeta({
-          GITHUB_REF: `refs/tags/v${meta.version}`,
-          GITHUB_SHA: 'abcdef0123456789',
-          GITHUB_EVENT_NAME: 'push',
-        }),
-      ).not.toThrow()
-    }
+    expect(meta.is_release).toBe(true)
+    expect(meta.tag_name).toBe(`v${version}`)
   })
 
   it('rejects tag that does not match package version', () => {
