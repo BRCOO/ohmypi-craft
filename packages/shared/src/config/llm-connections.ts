@@ -560,14 +560,19 @@ export function modelSupportsImages(
   connection: Pick<LlmConnection, 'providerType' | 'models' | 'customEndpoint'>,
   modelId: string,
 ): boolean {
-  if (!isCompatProvider(connection.providerType)) return true;
-
   const entry = connection.models?.find(m =>
     (typeof m === 'string' ? m : m.id) === modelId,
   );
   if (entry && typeof entry !== 'string' && typeof entry.supportsImages === 'boolean') {
     return entry.supportsImages;
   }
+
+  // Standard Pi catalogs now carry the SDK's explicit `input` capability.
+  // Honor it before falling back to the provider's historical permissive
+  // behavior. Anthropic and unknown providers still default to accepting
+  // images when no per-model metadata is available.
+  if (!isCompatProvider(connection.providerType)) return true;
+
   return connection.customEndpoint?.supportsImages ?? false;
 }
 
@@ -628,6 +633,9 @@ export const PI_PREFERRED_DEFAULTS: Record<string, string[]> = {
   // April 2026 — and are deliberately excluded from defaults.
   google: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3.1-flash-lite-preview'],
   deepseek: ['deepseek-v4-pro', 'deepseek-v4-flash'],
+  'kimi-coding': ['k2p7', 'kimi-for-coding', 'kimi-k2-thinking'],
+  minimax: ['MiniMax-M2.7', 'MiniMax-M2.7-highspeed', 'MiniMax-M3'],
+  'minimax-cn': ['MiniMax-M2.7', 'MiniMax-M2.7-highspeed', 'MiniMax-M3'],
   'github-copilot': ['claude-sonnet-4-6', 'gpt-5', 'o4-mini', 'claude-haiku-4-5'],
   'amazon-bedrock': ['claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
 };

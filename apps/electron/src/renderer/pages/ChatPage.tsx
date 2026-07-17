@@ -26,6 +26,7 @@ import { coerceInputText } from '@/lib/input-text'
 import { deriveSessionMessagesLoadState, formatSessionLoadFailure } from '@/lib/session-load'
 import { ensureSessionMessagesLoadedAtom, forceSessionMessagesReloadAtom, loadedSessionsAtom, sessionMetaMapAtom } from '@/atoms/sessions'
 import { getSessionTitle } from '@/utils/session'
+import { OmpCollabPanel } from '@/components/app-shell/OmpCollabPanel'
 // Model resolution: connection.defaultModel (no hardcoded defaults)
 import { resolveEffectiveConnectionSlug, isSessionConnectionUnavailable } from '@config/llm-connections'
 
@@ -603,7 +604,24 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     )
   }, [isCompactMode, sessionId, session?.sessionFolderPath, sessionMeta])
 
-  const headerActions = isCompactMode ? compactInfoButton : shareButton
+  const collabButton = React.useMemo(
+    () => <OmpCollabPanel sessionId={sessionId} />,
+    [sessionId],
+  )
+
+  const headerActions = isCompactMode
+    ? (
+      <div className="flex items-center gap-1">
+        {compactInfoButton}
+        {collabButton}
+      </div>
+    )
+    : (
+      <div className="flex items-center gap-1">
+        {shareButton}
+        {collabButton}
+      </div>
+    )
 
   // Build title menu content for chat sessions using shared SessionMenu.
   // Desktop uses Radix DropdownMenu via PanelHeader; compact mode uses a

@@ -141,16 +141,24 @@ export default function ServerSettingsPage() {
   }
 
   const handleBrowseCert = async () => {
-    const paths = await window.electronAPI.openFileDialog()
-    if (paths.length > 0) {
-      setForm(f => ({ ...f, tlsCertPath: paths[0]! }))
+    try {
+      const paths = await window.electronAPI.openFileDialog()
+      if (paths.length > 0) {
+        setForm(f => ({ ...f, tlsCertPath: paths[0]! }))
+      }
+    } catch (error) {
+      toast.error(t('toast.unknownError'), { description: error instanceof Error ? error.message : undefined })
     }
   }
 
   const handleBrowseKey = async () => {
-    const paths = await window.electronAPI.openFileDialog()
-    if (paths.length > 0) {
-      setForm(f => ({ ...f, tlsKeyPath: paths[0]! }))
+    try {
+      const paths = await window.electronAPI.openFileDialog()
+      if (paths.length > 0) {
+        setForm(f => ({ ...f, tlsKeyPath: paths[0]! }))
+      }
+    } catch (error) {
+      toast.error(t('toast.unknownError'), { description: error instanceof Error ? error.message : undefined })
     }
   }
 

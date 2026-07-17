@@ -14,6 +14,7 @@ import {
   AlertCircle,
   Image as ImageIcon,
   X,
+  Target,
   Sparkles,
 } from 'lucide-react'
 import { Icon_Home, Icon_Folder, Spinner } from '@craft-agent/ui'
@@ -87,10 +88,12 @@ import { CompactSourceSelector } from '@/components/ui/CompactSourceSelector'
 import { CompactWorkingDirectorySelector } from '@/components/ui/CompactWorkingDirectorySelector'
 import { ConnectionIcon } from '@/components/icons/ConnectionIcon'
 import { FreeFormInputContextBadge } from './FreeFormInputContextBadge'
+import { GuidedGoalModal } from '../GuidedGoalModal'
+import { useOmpCapabilities } from '@/hooks/useOmpCapabilities'
 import { derivePickerMode } from './picker-mode'
 import type { FileAttachment, LlmConnectionWithStatus, LoadedSource, LoadedSkill, OmpControlStateDto, OmpDeliveryMode, OmpFeatureCenterStateDto, OmpInterruptMode, OmpQueueMode, SaveOmpFeatureCenterConfigInput } from '../../../../shared/types'
 import type { PermissionMode } from '@craft-agent/shared/agent/modes'
-import { type ThinkingLevel, THINKING_LEVELS, getThinkingLevelNameKey } from '@craft-agent/shared/agent/thinking-levels'
+import { type ThinkingLevel, getThinkingLevelNameKey } from '@craft-agent/shared/agent/thinking-levels'
 import { useEscapeInterrupt } from '@/context/EscapeInterruptContext'
 import { hasOpenOverlay } from '@/lib/overlay-detection'
 import { ToolbarStatusSlot } from './ToolbarStatusSlot'
@@ -104,12 +107,18 @@ import {
 import { useWorkingDirectoryState } from './use-working-directory-state'
 import { CompactPermissionModeSelector } from './CompactPermissionModeSelector'
 import { CompactModelSelector } from './CompactModelSelector'
+import { PromptHistoryPicker, usePromptHistory } from './PromptHistoryPicker'
 import {
   formatTokenCount,
+  clampThinkingLevelToModel,
+  getThinkingLevelsForModel,
   groupConnectionsByProvider,
   stripPiPrefixForDisplay,
 } from './model-picker-helpers'
 import { useModelVisionToggle } from './useModelVisionToggle'
+import { SttButton } from './SttButton'
+import { QueueDequeueDrawer } from './QueueDequeueDrawer'
+import { ExternalEditorButton } from './ExternalEditorButton'
 
 function formatFollowUpChipText(text: string, fallback: string, maxLength = 50): string {
   const normalized = text.replace(/\s+/g, ' ').trim()
@@ -137,6 +146,9 @@ function OmpQueueControl({
   disabled?: boolean
 }) {
   const { t } = useTranslation()
+  const [queueDrawerOpen, setQueueDrawerOpen] = React.useState(false)
+  const { isFeatureSupported } = useOmpCapabilities(sessionId)
+  const hasQueueDequeue = sessionId ? isFeatureSupported('queue.dequeue') : false
   if (!controlState) return null
 
   const queue = controlState.queue
@@ -188,7 +200,15 @@ function OmpQueueControl({
               <Sparkles className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">{deliveryLabel(deliveryMode)}</span>
               {queue.queuedMessageCount > 0 && (
-                <span className="rounded-full bg-violet-400/15 px-1.5 py-0.5 text-[10px] text-violet-200">
+                <span
+                  className={cn(
+                    "rounded-full px-1.5 py-0.5 text-[10px]",
+                    hasQueueDequeue
+                      ? "bg-violet-400/15 text-violet-200 cursor-pointer hover:bg-violet-400/25"
+                      : "bg-violet-400/15 text-violet-200",
+                  )}
+                  onClick={hasQueueDequeue ? () => setQueueDrawerOpen(true) : undefined}
+                >
                   {queue.queuedMessageCount}
                 </span>
               )}
@@ -251,7 +271,32 @@ function OmpQueueControl({
             {renderCheck(queue.interruptMode === mode)}
           </StyledDropdownMenuItem>
         ))}
+
+        {hasQueueDequeue && (
+          <>
+            <StyledDropdownMenuSeparator />
+            <StyledDropdownMenuItem
+              onSelect={() => setQueueDrawerOpen(true)}
+              className="flex cursor-pointer items-center justify-between rounded-lg px-2 py-1.5"
+            >
+              <span>{t('omp.controls.manageQueue')}</span>
+              {queue.queuedMessageCount > 0 && (
+                <span className="rounded-full bg-violet-400/15 px-1.5 py-0.5 text-[10px] text-violet-200">
+                  {queue.queuedMessageCount}
+                </span>
+              )}
+            </StyledDropdownMenuItem>
+          </>
+        )}
       </StyledDropdownMenuContent>
+
+      {sessionId && (
+        <QueueDequeueDrawer
+          sessionId={sessionId}
+          open={queueDrawerOpen}
+          onOpenChange={setQueueDrawerOpen}
+        />
+      )}
     </DropdownMenu>
   )
 }
@@ -528,13 +573,13 @@ export function FreeFormInput({
     return connection.models || ANTHROPIC_MODELS
   }, [llmConnections, currentConnection, workspaceDefaultConnection, connectionUnavailable])
 
-  const availableThinkingLevels = THINKING_LEVELS
-
-  // Disable thinking selector when the current model explicitly doesn't support it
-  const thinkingDisabled = React.useMemo(() => {
-    const model = availableModels.find(m => typeof m !== 'string' && m.id === currentModel)
-    return typeof model !== 'string' && model?.supportsThinking === false
+  const currentModelDefinition = React.useMemo(() => {
+    const model = availableModels.find(model => typeof model !== 'string' && model.id === currentModel)
+    return typeof model === 'string' ? undefined : model
   }, [availableModels, currentModel])
+
+  // Disable thinking controls only when the active model explicitly opts out.
+  const thinkingDisabled = currentModelDefinition?.supportsThinking === false
 
   // Get display name for current model (full name, not short name)
   const currentModelDisplayName = React.useMemo(() => {
@@ -578,7 +623,43 @@ export function FreeFormInput({
   }, [llmConnections, effectiveConnection])
 
 
-    const isOmpSession = effectiveConnectionDetails?.providerType === 'omp'
+  const isOmpSession = effectiveConnectionDetails?.providerType === 'omp'
+  const { isFeatureSupported: isOmpCapSupported } = useOmpCapabilities(sessionId)
+  const ompBtwAvailable = sessionId ? isOmpCapSupported('tools.btw') : false
+  const ompTanAvailable = sessionId ? isOmpCapSupported('tools.tan') : false
+  const ompOmfgAvailable = sessionId ? isOmpCapSupported('tools.omfg') : false
+  const ompGuidedGoalAvailable = sessionId ? isOmpCapSupported('goal.guided') : false
+  const [guidedGoalOpen, setGuidedGoalOpen] = React.useState(false)
+
+  const promptHistory = usePromptHistory(sessionId, workspaceId)
+  const availableThinkingLevels = React.useMemo(() => getThinkingLevelsForModel(
+    currentModelDefinition,
+    effectiveConnectionDetails?.providerType,
+    currentModel,
+  ), [currentModelDefinition, effectiveConnectionDetails?.providerType, currentModel])
+  const effectiveThinkingLevel = React.useMemo(() => clampThinkingLevelToModel(
+    thinkingLevel,
+    availableThinkingLevels,
+  ), [thinkingLevel, availableThinkingLevels])
+
+  // A session's selected model can change while retaining an effort saved for
+  // the previous provider. Persist the compatible value immediately so the
+  // UI and the request sent to the backend stay in lockstep.
+  React.useEffect(() => {
+    if (
+      thinkingDisabled
+      || availableThinkingLevels.length === 0
+      || effectiveThinkingLevel === thinkingLevel
+      || !onThinkingLevelChange
+    ) return
+    onThinkingLevelChange(effectiveThinkingLevel)
+  }, [
+    availableThinkingLevels.length,
+    effectiveThinkingLevel,
+    onThinkingLevelChange,
+    thinkingDisabled,
+    thinkingLevel,
+  ])
 
   // Access sessionStatuses and onSessionStatusChange from context for the # menu state picker
   const sessionStatuses = appShellCtx?.sessionStatuses ?? []
@@ -729,6 +810,7 @@ export function FreeFormInput({
   const [isFocused, setIsFocused] = React.useState(false)
   const [inputMaxHeight, setInputMaxHeight] = React.useState(540)
   const [modelDropdownOpen, setModelDropdownOpen] = React.useState(false)
+  const [thinkingDropdownOpen, setThinkingDropdownOpen] = React.useState(false)
 
   // Input settings (loaded from config)
   const [autoCapitalisation, setAutoCapitalisation] = React.useState(true)
@@ -1187,10 +1269,37 @@ export function FreeFormInput({
           .catch((error) => {
             toast.error(error instanceof Error ? error.message : String(error))
           })
+      } else if (commandId.kind === 'goal') {
+        if (!sessionId) return
+        const goalState = ompControlState?.goal
+        const command = goalState?.state.enabled
+          ? { type: 'pauseOmpGoal' as const }
+          : goalState?.state.paused
+            ? { type: 'resumeOmpGoal' as const }
+            : undefined
+        if (!command) {
+          onSubmit('/goal', undefined)
+          return
+        }
+        void window.electronAPI?.sessionCommand?.(sessionId, command)
+          .then(() => toast.success(t(goalState?.state.enabled ? 'omp.quickControls.goalPaused' : 'omp.quickControls.goalResumed', {
+            defaultValue: goalState?.state.enabled ? 'Goal paused' : 'Goal resumed',
+          })))
+          .catch((error) => toast.error(error instanceof Error ? error.message : String(error)))
+      } else if (commandId.kind === 'loop') {
+        if (!sessionId) return
+        const enabled = ompControlState?.loop.state.enabled !== true
+        void window.electronAPI?.sessionCommand?.(sessionId, { type: 'setOmpLoop', enabled })
+          .then(() => toast.success(t(enabled ? 'omp.quickControls.loopEnabled' : 'omp.quickControls.loopDisabled', {
+            defaultValue: enabled ? 'Loop enabled' : 'Loop disabled',
+          })))
+          .catch((error) => toast.error(error instanceof Error ? error.message : String(error)))
       } else if (commandId.kind === 'mcp' || commandId.kind === 'skills' || commandId.kind === 'agents' || commandId.kind === 'models') {
         const targetSection: OmpFeatureCenterSection = commandId.kind
         navigate(routes.view.settings('omp'))
         window.requestAnimationFrame(() => requestOmpFeatureCenterSection(targetSection))
+      } else if (commandId.kind === 'btw' || commandId.kind === 'tan' || commandId.kind === 'omfg') {
+        // Handled by text insertion in handleInlineSlashCommandSelect — no action needed here
       }
       return
     }
@@ -1231,10 +1340,15 @@ export function FreeFormInput({
     ompCommands: ompControlState?.availableCommands ?? [],
     skills,
     ompUnavailableCommands,
+    ompBtwAvailable,
+    ompTanAvailable,
+    ompOmfgAvailable,
     isOmpSession,
     ompFeatureCenterState,
     ompModelCount: isOmpSession ? availableModels.length : undefined,
     ompPlanState: ompControlState?.plan,
+    ompGoalState: ompControlState?.goal,
+    ompLoopState: ompControlState?.loop,
     recentFolders,
     homeDir,
   })
@@ -1551,6 +1665,8 @@ export function FreeFormInput({
 
     const attachmentSnapshot = attachments
 
+    // Record prompt in history
+    promptHistory.recordPrompt(input.trim())
     onSubmit(
       input.trim(),
       attachmentSnapshot.length > 0 ? attachmentSnapshot : undefined,
@@ -1571,7 +1687,7 @@ export function FreeFormInput({
     })
 
     return true
-  }, [input, attachments, followUpItems, disabled, disableSend, onInputChange, onAttachmentsChange, onSubmit, skills, sources, optimisticSourceSlugs, onSourcesChange, onWorkingDirectoryChange, homeDir, isProcessing, ompControlState, ompDeliveryMode])
+  }, [input, attachments, followUpItems, disabled, disableSend, onInputChange, onAttachmentsChange, onSubmit, skills, sources, optimisticSourceSlugs, onSourcesChange, onWorkingDirectoryChange, homeDir, isProcessing, ompControlState, ompDeliveryMode, promptHistory.recordPrompt])
 
   // Listen for craft:submit-input events (simulate pressing the Send button)
   React.useEffect(() => {
@@ -1638,6 +1754,15 @@ export function FreeFormInput({
         inlineLabel.close()
         return
       }
+    }
+
+    // Ctrl+R / Cmd+R — Open prompt history picker
+    if ((e.ctrlKey || e.metaKey) && e.key === 'r' && !e.shiftKey && !e.altKey) {
+      e.preventDefault()
+      if (promptHistory.isSupported) {
+        promptHistory.open()
+      }
+      return
     }
 
     // Skip submission during IME composition - user is confirming composed characters, not sending
@@ -1743,8 +1868,14 @@ export function FreeFormInput({
   // Handle inline slash command selection (removes the /command text)
   const handleInlineSlashCommandSelect = React.useCallback((commandId: SlashCommandId) => {
     const newValue = inlineSlash.handleSelectCommand(commandId)
-    setInput(newValue)
-    syncToParent(newValue)
+    if (isOmpCuratedCommandId(commandId) && (commandId.kind === 'btw' || commandId.kind === 'tan' || commandId.kind === 'omfg')) {
+      const inserted = `/${commandId.kind} `
+      setInput(inserted)
+      syncToParent(inserted)
+    } else {
+      setInput(newValue)
+      syncToParent(newValue)
+    }
     richInputRef.current?.focus()
   }, [inlineSlash, syncToParent])
 
@@ -1817,15 +1948,16 @@ export function FreeFormInput({
   const hasContent = input.trim() || attachments.length > 0 || followUpItems.length > 0
 
   // Pre-flight image-support check: warn when staged images would be silently
-  // stripped by Pi SDK because the active custom-endpoint model is text-only.
+  // stripped because the active model is explicitly text-only.
   // Gate on pi_compat — built-in catalogs (anthropic/pi) are owned by the SDK
   // and we can't repair them from the UI here.
   const hasStagedImages = attachments.some(a => a.type === 'image' || a.mimeType?.startsWith('image/'))
+  const activeModelIsTextOnly =
+    !!effectiveConnectionDetails
+    && !modelSupportsImages(effectiveConnectionDetails, currentModel)
   const showVisionWarning =
     hasStagedImages
-    && !!effectiveConnectionDetails
-    && isCompatProvider(effectiveConnectionDetails.providerType)
-    && !modelSupportsImages(effectiveConnectionDetails, currentModel)
+    && activeModelIsTextOnly
 
   return (
     <form onSubmit={handleSubmit}>
@@ -1912,7 +2044,9 @@ export function FreeFormInput({
         {showVisionWarning && effectiveConnectionDetails && (
           <ImageSupportWarningBanner
             modelName={currentModelDisplayName}
-            onEnable={() => handleToggleModelVision(effectiveConnectionDetails.slug, currentModel, true)}
+            onEnable={isCompatProvider(effectiveConnectionDetails.providerType)
+              ? () => handleToggleModelVision(effectiveConnectionDetails.slug, currentModel, true)
+              : undefined}
           />
         )}
 
@@ -2080,6 +2214,7 @@ export function FreeFormInput({
               isEmptySession={isEmptySession}
               connectionUnavailable={connectionUnavailable}
               contextStatus={contextStatus}
+              sessionId={sessionId}
             />
           )}
           <FreeFormInputContextBadge
@@ -2095,6 +2230,18 @@ export function FreeFormInput({
             tooltip={t("chat.attachFilesTooltip")}
             disabled={disabled}
           />
+          {isOmpSession && ompGuidedGoalAvailable && (
+            <FreeFormInputContextBadge
+              icon={<Target className="h-4 w-4 text-amber-400" />}
+              label={t('omp.guidedGoal.badge', { defaultValue: 'Guided Goal' })}
+              isExpanded={false}
+              hasSelection={false}
+              showChevron={false}
+              onClick={() => setGuidedGoalOpen(true)}
+              tooltip={t('omp.guidedGoal.tooltip', { defaultValue: 'Set up a goal with guided questions' })}
+              disabled={disabled}
+            />
+          )}
           {onSourcesChange && (
             <div className="relative shrink min-w-0">
               <FreeFormInputContextBadge
@@ -2312,6 +2459,66 @@ export function FreeFormInput({
             onDeliveryModeChange={setOmpDeliveryMode}
             disabled={disabled}
           />
+          {/* STT microphone button */}
+          <SttButton sessionId={sessionId} disabled={disabled} />
+          <ExternalEditorButton
+            sessionId={sessionId}
+            disabled={disabled}
+            draft={input}
+            onInsertText={(text) => {
+              setInput(text)
+              onInputChange?.(text)
+            }}
+          />
+          {!compactMode && onThinkingLevelChange && !thinkingDisabled && availableThinkingLevels.length > 0 && (
+            <DropdownMenu open={thinkingDropdownOpen} onOpenChange={setThinkingDropdownOpen}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      disabled={disabled}
+                      aria-label={`${t('chat.modelPicker.thinkingSection')}: ${t(getThinkingLevelNameKey(effectiveThinkingLevel))}`}
+                      className={cn(
+                        'input-toolbar-btn inline-flex items-center h-7 px-1.5 gap-1 text-[13px] shrink-0 rounded-[6px] hover:bg-foreground/5 transition-colors select-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                        thinkingDropdownOpen && 'bg-foreground/5',
+                        disabled && 'opacity-50 cursor-not-allowed',
+                      )}
+                    >
+                      <Sparkles className="h-3.5 w-3.5 text-accent" />
+                      <span className="hidden xl:inline">{t('chat.modelPicker.thinkingSection')}</span>
+                      <span>{t(getThinkingLevelNameKey(effectiveThinkingLevel))}</span>
+                      <ChevronDown className="h-3 w-3 opacity-50" />
+                    </button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {t('chat.modelPicker.thinkingSection')}: {t(getThinkingLevelNameKey(effectiveThinkingLevel))}
+                </TooltipContent>
+              </Tooltip>
+              <StyledDropdownMenuContent side="top" align="end" sideOffset={8} className="min-w-[236px]">
+                <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground select-none">
+                  {t('chat.modelPicker.thinkingSection')}
+                </div>
+                {availableThinkingLevels.map(({ id, nameKey, descriptionKey }) => {
+                  const isSelected = effectiveThinkingLevel === id
+                  return (
+                    <StyledDropdownMenuItem
+                      key={id}
+                      onSelect={() => onThinkingLevelChange(id)}
+                      className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
+                    >
+                      <div className="text-left">
+                        <div className="font-medium text-sm">{t(nameKey)}</div>
+                        <div className="text-xs text-muted-foreground">{t(descriptionKey)}</div>
+                      </div>
+                      {isSelected && <Check className="h-3 w-3 text-foreground shrink-0 ml-3" />}
+                    </StyledDropdownMenuItem>
+                  )
+                })}
+              </StyledDropdownMenuContent>
+            </DropdownMenu>
+          )}
           {/* 5. Model/Connection Selector - Hidden in compact mode (EditPopover embedding) */}
           {!compactMode && (
           <DropdownMenu open={modelDropdownOpen} onOpenChange={setModelDropdownOpen}>
@@ -2342,10 +2549,21 @@ export function FreeFormInput({
                 </DropdownMenuTrigger>
               </TooltipTrigger>
               <TooltipContent side="top">
-                {t('common.model')}
+                <div>{t('common.model')}: {currentModelDisplayName}</div>
+                {isOmpSession && <code className="text-[11px] text-muted-foreground">{currentModel}</code>}
               </TooltipContent>
             </Tooltip>
             <StyledDropdownMenuContent side="top" align="end" sideOffset={8} className="min-w-[260px]">
+              {isOmpSession && !connectionUnavailable && (
+                <>
+                  <div className="px-2 py-1.5 text-xs select-none">
+                    <div className="text-muted-foreground">{t('common.model')}</div>
+                    <div className="font-medium text-foreground">{currentModelDisplayName}</div>
+                    <code className="text-[11px] text-muted-foreground">{currentModel}</code>
+                  </div>
+                  <StyledDropdownMenuSeparator className="my-1" />
+                </>
+              )}
               {/* Connection unavailable message */}
               {pickerMode === 'unavailable' ? (
                 <div className="flex flex-col items-center justify-center py-6 px-4 text-center">
@@ -2617,13 +2835,13 @@ export function FreeFormInput({
                   <DropdownMenuSub>
                     <StyledDropdownMenuSubTrigger disabled={thinkingDisabled} className={cn("flex items-center justify-between px-2 py-2 rounded-lg", thinkingDisabled && "opacity-50 cursor-not-allowed")}>
                       <div className="text-left flex-1">
-                        <div className="font-medium text-sm">{t(getThinkingLevelNameKey(thinkingLevel))}</div>
+                        <div className="font-medium text-sm">{t(getThinkingLevelNameKey(effectiveThinkingLevel))}</div>
                         <div className="text-xs text-muted-foreground">{thinkingDisabled ? t('thinking.notSupported') : t('thinking.extendedDesc')}</div>
                       </div>
                     </StyledDropdownMenuSubTrigger>
                     <StyledDropdownMenuSubContent className="min-w-[220px]">
                       {availableThinkingLevels.map(({ id, nameKey, descriptionKey }) => {
-                        const isSelected = thinkingLevel === id
+                        const isSelected = effectiveThinkingLevel === id
                         return (
                           <StyledDropdownMenuItem
                             key={id}
@@ -2745,10 +2963,34 @@ export function FreeFormInput({
           </div>
         </div>
       </div>
+      {sessionId && (
+        <GuidedGoalModal
+          open={guidedGoalOpen}
+          onOpenChange={setGuidedGoalOpen}
+          sessionId={sessionId}
+        />
+      )}
+      {sessionId && (
+        <PromptHistoryPicker
+          open={promptHistory.isOpen}
+          onClose={promptHistory.close}
+          onSelect={(prompt) => {
+            if (richInputRef.current) {
+              // Clear current input and set the selected prompt
+              setInput(prompt)
+              onInputChange?.(prompt)
+              // Focus the input
+              richInputRef.current.focus()
+            }
+          }}
+          sessionId={sessionId}
+          workspaceId={workspaceId}
+          currentInput={input}
+        />
+      )}
     </form>
   )
 }
-
 /**
  * Format path for display, with home directory shortened
  */

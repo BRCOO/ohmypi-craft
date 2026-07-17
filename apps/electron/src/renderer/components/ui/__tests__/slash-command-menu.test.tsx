@@ -3,7 +3,7 @@ import * as React from 'react'
 import * as ReactDOMServer from 'react-dom/server'
 import { initReactI18next } from 'react-i18next'
 import { i18n, setupI18n } from '@craft-agent/shared/i18n'
-import type { OmpFeatureCenterStateDto } from '../../../../shared/types'
+import type { OmpFeatureCenterStateDto, OmpFeatureUnavailableCommandDto, OmpGoalControlStateDto, OmpLoopControlStateDto } from '../../../../shared/types'
 import type { SlashCommand, SlashSection } from '../slash-command-menu'
 
 mock.module('pdfjs-dist/build/pdf.worker.min.mjs?url', () => ({ default: '' }))
@@ -13,6 +13,7 @@ setupI18n([initReactI18next])
 let buildOmpCuratedSections: typeof import('../slash-command-menu').buildOmpCuratedSections
 let filterAvailableOmpCommands: typeof import('../slash-command-menu').filterAvailableOmpCommands
 let filterSlashSectionsForInput: typeof import('../slash-command-menu').filterSlashSectionsForInput
+let matchInlineSlashCommand: typeof import('../slash-command-menu').matchInlineSlashCommand
 let InlineSlashCommand: typeof import('../slash-command-menu').InlineSlashCommand
 let slashCommandIdKey: typeof import('../slash-command-menu').slashCommandIdKey
 let useInlineSlashCommand: typeof import('../slash-command-menu').useInlineSlashCommand
@@ -91,6 +92,7 @@ beforeAll(async () => {
   buildOmpCuratedSections = mod.buildOmpCuratedSections
   filterAvailableOmpCommands = mod.filterAvailableOmpCommands
   filterSlashSectionsForInput = mod.filterSlashSectionsForInput
+  matchInlineSlashCommand = mod.matchInlineSlashCommand
   InlineSlashCommand = mod.InlineSlashCommand
   slashCommandIdKey = mod.slashCommandIdKey
   useInlineSlashCommand = mod.useInlineSlashCommand
@@ -102,7 +104,12 @@ describe('OMP curated slash menu', () => {
     const sections = buildOmpCuratedSections(state, i18n.t, 4)
 
     expect(sections.map(s => s.id)).toEqual(['omp-controls', 'omp-tools'])
-    expect(sections[0].items.map(item => commandKey(item))).toEqual(['omp-curated:plan', 'omp-curated:advisor'])
+    expect(sections[0].items.map(item => commandKey(item))).toEqual([
+      'omp-curated:plan',
+      'omp-curated:goal',
+      'omp-curated:loop',
+      'omp-curated:advisor',
+    ])
     expect(sections[1].items.map(item => commandKey(item))).toEqual([
       'omp-curated:mcp',
       'omp-curated:skills',
@@ -136,6 +143,35 @@ describe('OMP curated slash menu', () => {
 
     expect(plan?.disabled).toBe(false)
     expect(plan?.meta).toBe('Off')
+  })
+
+  it('reflects native Goal and Loop lifecycle state', () => {
+    const goal: OmpGoalControlStateDto = {
+      supported: true,
+      state: {
+        enabled: false,
+        paused: true,
+        goal: {
+          id: 'goal-1',
+          objective: 'Finish parity',
+          status: 'paused',
+          tokensUsed: 120,
+          timeUsedSeconds: 8,
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      },
+      updatedAt: 2,
+    }
+    const loop: OmpLoopControlStateDto = {
+      supported: true,
+      state: { enabled: true, status: 'waiting_for_prompt' },
+      updatedAt: 2,
+    }
+    const sections = buildOmpCuratedSections(buildMockState(), i18n.t, 4, undefined, goal, loop)
+
+    expect(getCommand(sections, 'omp-curated:goal')).toMatchObject({ disabled: false, meta: 'Paused', checked: false })
+    expect(getCommand(sections, 'omp-curated:loop')).toMatchObject({ disabled: false, meta: 'On', checked: true })
   })
 
   it('shows Advisor metadata from the effective value', () => {
@@ -249,7 +285,7 @@ describe('useInlineSlashCommand OMP runtime filtering', () => {
     expect(sectionIds).toContain('omp-tools')
   })
 
-  it('shows discovered skills in the zero-query menu while keeping other runtime commands searchable', () => {
+  it('shows the complete live OMP command catalog in the zero-query menu', () => {
     const hook = renderHook({
       inputRef: { current: null },
       onSelectCommand: () => {},
@@ -257,11 +293,34 @@ describe('useInlineSlashCommand OMP runtime filtering', () => {
       isOmpSession: true,
       ompFeatureCenterState: buildMockState(),
       ompModelCount: 4,
-      ompCommands: [{ name: 'skill:test-skill', source: 'skill', description: 'Test skill' }],
+      ompCommands: [
+        { name: 'context', source: 'builtin', description: 'Show context usage' },
+        { name: 'mcp', source: 'builtin', description: 'Manage MCP servers' },
+        { name: 'skill:test-skill', source: 'skill', description: 'Test skill' },
+      ],
     })
     const sectionIds = hook.sections.map(s => s.id)
 
+    expect(sectionIds).toContain('omp-commands')
+    expect(sectionIds).toContain('omp-mcp')
     expect(sectionIds).toContain('omp-skills')
+    expect(getCommand(hook.sections, 'omp:context')).toBeDefined()
+  })
+
+  it('does not duplicate compact after OMP advertises its runtime command', () => {
+    const hook = renderHook({
+      inputRef: { current: null },
+      onSelectCommand: () => {},
+      onSelectFolder: () => {},
+      isOmpSession: true,
+      ompFeatureCenterState: buildMockState(),
+      ompCommands: [{ name: 'compact', source: 'builtin', description: 'Compact context' }],
+    })
+
+    expect(hook.sections.flatMap(section => section.items).filter(item => (
+      commandKey(item) === 'compact' || commandKey(item) === 'omp:compact'
+    ))).toHaveLength(1)
+    expect(getCommand(hook.sections, 'omp:compact')).toBeDefined()
   })
 
   it('falls back to Feature Center skill inventory when the Craft skill loader is empty', () => {
@@ -302,6 +361,53 @@ describe('useInlineSlashCommand OMP runtime filtering', () => {
     expect(available.map(c => c.name)).not.toContain('hidden-cmd')
   })
 
+  it('filters only an unavailable subcommand while preserving working siblings', () => {
+    const available = filterAvailableOmpCommands(
+      [{
+        name: 'advisor',
+        source: 'builtin',
+        description: 'Advisor command',
+        subcommands: [
+          { name: 'on', description: 'Enable advisor' },
+          { name: 'off', description: 'Disable advisor' },
+          { name: 'configure', description: 'Open TUI editor' },
+        ],
+      }],
+      [{
+        command: '/advisor configure',
+        label: 'Advisor Configure',
+        status: 'desktop-equivalent',
+        reason: 'Use the desktop Feature Center editor.',
+      }],
+    )
+
+    expect(available).toHaveLength(1)
+    expect(available[0]?.subcommands?.map(command => command.name)).toEqual(['on', 'off'])
+  })
+
+  it('filters legacy OMP TUI-only todo and MCP subcommands', () => {
+    const unavailable: OmpFeatureUnavailableCommandDto[] = [
+      { command: '/todo edit', label: 'Todo Editor', status: 'hidden', reason: 'TUI only' },
+      { command: '/mcp reauth', label: 'MCP Reauthorize', status: 'hidden', reason: 'TUI only' },
+      { command: '/mcp notifications', label: 'MCP Notifications', status: 'hidden', reason: 'TUI only' },
+    ]
+    const available = filterAvailableOmpCommands([
+      {
+        name: 'todo',
+        source: 'builtin',
+        subcommands: [{ name: 'edit' }, { name: 'export' }],
+      },
+      {
+        name: 'mcp',
+        source: 'builtin',
+        subcommands: [{ name: 'reauth' }, { name: 'notifications' }, { name: 'list' }],
+      },
+    ], unavailable)
+
+    expect(available.find(command => command.name === 'todo')?.subcommands?.map(command => command.name)).toEqual(['export'])
+    expect(available.find(command => command.name === 'mcp')?.subcommands?.map(command => command.name)).toEqual(['list'])
+  })
+
   it('keeps runtime OMP commands hidden until unavailable-command metadata is loaded', () => {
     const available = filterAvailableOmpCommands(
       [{ name: 'plan', source: 'builtin', description: 'Plan command' }],
@@ -332,6 +438,17 @@ describe('useInlineSlashCommand OMP runtime filtering', () => {
     const filtered = filterSlashSectionsForInput(baseSections, runtimeSections, 'q')
 
     expect(filtered.flatMap(section => section.items).map(item => commandKey(item))).toContain('omp:query-runtime')
+  })
+
+  it('keeps OMP namespaced skill commands searchable after the colon', () => {
+    expect(matchInlineSlashCommand('/skill:test-skill')).toEqual({
+      filter: 'skill:test-skill',
+      start: 0,
+    })
+    expect(matchInlineSlashCommand('Use /force:')).toEqual({
+      filter: 'force:',
+      start: 4,
+    })
   })
 
   it('shows matching runtime OMP commands when the inline filter is set', () => {

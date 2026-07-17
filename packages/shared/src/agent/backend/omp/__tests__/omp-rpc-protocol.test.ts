@@ -25,6 +25,8 @@ import {
   parseOmpLoginProvider,
   parseOmpLoginProvidersResponseData,
   parseOmpLoginResult,
+  parseOmpGoalModeStateUpdate,
+  parseOmpLoopModeStateUpdate,
   parseOmpMessagesResponseData,
   parseOmpPlanModeState,
   parseOmpPlanModeStateUpdate,
@@ -33,6 +35,7 @@ import {
   parseOmpPromptResult,
   parseOmpQueueControlState,
   parseOmpRpcResponse,
+  parseOmpRuntimeResources,
   parseOmpRuntimeEvent,
   parseOmpSetHostToolsResponseData,
   parseOmpSetHostUriSchemesResponseData,
@@ -74,22 +77,42 @@ const validState = {
 };
 
 describe('OMP RPC protocol parsers', () => {
-  it('defines metadata for all 42 standard OMP RPC commands', () => {
+  it('defines metadata for all 109 standard OMP RPC commands', () => {
     const commandNames = Object.keys(OMP_RPC_COMMAND_DEFINITIONS);
-    expect(commandNames).toHaveLength(42);
+    expect(commandNames).toHaveLength(109);
     expect(commandNames).toEqual(expect.arrayContaining([
       'prompt',
       'set_host_tools',
       'set_host_uri_schemes',
       'get_plan_mode_state',
       'set_plan_mode',
+      'reopen_plan_review',
       'plan_review_result',
+      'get_goal_state',
+      'guided_goal_turn',
+      'get_loop_state',
+      'set_loop',
       'get_available_models',
+      'get_runtime_resources',
       'cycle_thinking_level',
       'bash',
       'abort_bash',
       'get_login_providers',
       'login',
+      'logout',
+      'get_capabilities',
+      'mcp_reauth',
+      'start_collab',
+      'fork_session',
+      'get_extensions',
+      'search_marketplace',
+      'get_agent_definitions',
+      'ask_side_question',
+      'run_debug_tool',
+      'transcribe_audio',
+      'retry_last_turn',
+      'set_temporary_model',
+      'get_settings_schema',
     ]));
 
     expect(OMP_RPC_COMMAND_DEFINITIONS.get_state).toMatchObject({
@@ -109,11 +132,25 @@ describe('OMP RPC protocol parsers', () => {
     expect(getOmpRpcCommandTimeout('future_extension_command', 1234, 9999)).toBe(1234);
   });
 
+  it('strictly parses OMP runtime resource snapshots', () => {
+    expect(parseOmpRuntimeResources({
+      skills: [{ name: 'review', source: 'user', path: 'C:/Users/User/.codex/skills/review/SKILL.md' }],
+      mcp: [{ name: 'github', source: 'native', status: 'connected', toolCount: 4 }],
+      agents: [{ name: 'explore', source: 'bundled' }],
+    })).toEqual({
+      skills: [{ name: 'review', source: 'user', path: 'C:/Users/User/.codex/skills/review/SKILL.md' }],
+      mcp: [{ name: 'github', source: 'native', status: 'connected', toolCount: 4 }],
+      agents: [{ name: 'explore', source: 'bundled' }],
+    });
+    expect(parseOmpRuntimeResources({ skills: [], mcp: [], agents: [{ name: '' }] })).toBeNull();
+  });
+
   it('maps Craft and OMP thinking levels without overstating max support', () => {
     expect(craftThinkingLevelToOmp('off')).toBe('off');
+    expect(craftThinkingLevelToOmp('minimal')).toBe('minimal');
     expect(craftThinkingLevelToOmp('medium')).toBe('medium');
     expect(craftThinkingLevelToOmp('max')).toBe('xhigh');
-    expect(ompThinkingLevelToCraft('minimal')).toBe('low');
+    expect(ompThinkingLevelToCraft('minimal')).toBe('minimal');
     expect(ompThinkingLevelToCraft('xhigh')).toBe('xhigh');
     expect(ompThinkingLevelToCraft('unknown')).toBeUndefined();
   });
@@ -324,6 +361,49 @@ describe('OMP RPC protocol parsers', () => {
       planFilePath: 'local://ship-plan.md',
       planMarkdown: '# Ship Plan',
       options: ['approve', 'execute'],
+    })).toBeNull();
+  });
+
+  it('parses native Goal and Loop lifecycle frames strictly', () => {
+    expect(parseOmpGoalModeStateUpdate({
+      type: 'goal_mode_state_update',
+      state: {
+        enabled: true,
+        paused: false,
+        goal: {
+          id: 'goal-1',
+          objective: 'Ship RPC parity',
+          status: 'active',
+          tokensUsed: 120,
+          timeUsedSeconds: 5,
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      },
+    })).toMatchObject({
+      state: { enabled: true, goal: { objective: 'Ship RPC parity' } },
+    });
+    expect(parseOmpGoalModeStateUpdate({
+      type: 'goal_mode_state_update',
+      state: { enabled: true, paused: false, goal: { id: 'broken' } },
+    })).toBeNull();
+
+    expect(parseOmpLoopModeStateUpdate({
+      type: 'loop_mode_state_update',
+      state: { enabled: true, prompt: 'check again', remaining: 2, status: 'running' },
+    })).toEqual({
+      type: 'loop_mode_state_update',
+      state: {
+        enabled: true,
+        prompt: 'check again',
+        limit: undefined,
+        remaining: 2,
+        status: 'running',
+      },
+    });
+    expect(parseOmpLoopModeStateUpdate({
+      type: 'loop_mode_state_update',
+      state: { enabled: true, status: 'unknown' },
     })).toBeNull();
   });
 

@@ -43,7 +43,10 @@ export type {
   OmpRpcHandoffResult,
   OmpRpcMessagesResponseData,
   OmpRpcResponseFrame,
+  OmpRpcRuntimeResourceItem,
+  OmpRpcRuntimeResources,
 } from './omp-rpc-protocol.ts';
+export { parseOmpRuntimeResources } from './omp-rpc-protocol.ts';
 export type { OmpTodoState, OmpTodoReminderState } from './omp-todo-state.ts';
 export type {
   OmpSubagentState,

@@ -15,15 +15,40 @@ import { cpSync, copyFileSync, rmSync } from 'fs';
 import { join, resolve } from 'path';
 
 // Copy all resources (icons, themes, docs, permissions, tool-icons, etc.)
-// The generated OMP executable is deliberately excluded: electron-builder copies
-// it directly to resources/omp via extraResources, where the runtime resolver
-// expects it. Keeping it out of dist/resources prevents a second 147 MB copy.
+// The generated OMP executable and the local OMP cache are deliberately
+// excluded: electron-builder copies the target runtime directly to
+// resources/omp via extraResources, where the runtime resolver expects it.
+// Keeping both out of dist/resources prevents duplicate 147 MB copies (and
+// avoids shipping a developer cache in every release).
 const generatedOmpRuntime = resolve('resources', 'omp');
+const generatedOmpCache = resolve('resources', '.omp-cache');
 const copiedOmpRuntime = resolve('dist', 'resources', 'omp');
+const copiedOmpCache = resolve('dist', 'resources', '.omp-cache');
+const generatedPlatformBins = [
+  resolve('resources', 'bin', 'darwin-arm64'),
+  resolve('resources', 'bin', 'darwin-x64'),
+  resolve('resources', 'bin', 'linux-x64'),
+  resolve('resources', 'bin', 'win32-x64'),
+];
+const copiedPlatformBins = generatedPlatformBins.map(platformDir =>
+  resolve('dist', 'resources', 'bin', platformDir.split(/[\\/]/).at(-1)!));
 rmSync(copiedOmpRuntime, { recursive: true, force: true });
+rmSync(copiedOmpCache, { recursive: true, force: true });
+for (const platformDir of copiedPlatformBins) {
+  rmSync(platformDir, { recursive: true, force: true });
+}
 cpSync('resources', 'dist/resources', {
   recursive: true,
-  filter: source => resolve(source) !== generatedOmpRuntime,
+  filter: source => {
+    const resolved = resolve(source);
+    return resolved !== generatedOmpRuntime
+      && resolved !== generatedOmpCache
+      && !resolved.startsWith(`${generatedOmpCache}/`)
+      && !resolved.startsWith(`${generatedOmpCache}\\`)
+      && !generatedPlatformBins.some(platformDir => resolved === platformDir
+        || resolved.startsWith(`${platformDir}/`)
+        || resolved.startsWith(`${platformDir}\\`));
+  },
 });
 
 console.log('✓ Copied resources/ → dist/resources/');

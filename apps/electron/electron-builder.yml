@@ -14,7 +14,12 @@ directories:
 
 files:
   - dist/**/*
+  # Never package previous unpacked builds. These directories can contain a
+  # complete Electron app and otherwise get recursively embedded into a new
+  # build, multiplying the output size on every local release.
+  - "!release*/**"
   - "!dist/renderer/src/**"
+  - "!dist/resources/.omp-cache/**/*"
   - "!**/*.map"
   - package.json
   # Include bundled MCP servers (bridge + session) for Codex sessions
@@ -53,8 +58,6 @@ files:
   - resources/bin/darwin-x64/**/*
   - resources/bin/win32-x64/**/*
   - resources/bin/linux-x64/**/*
-  # Include bundled Bun runtime (platform-specific, set by build script)
-  - vendor/bun/**/*
   # Exclude everything from node_modules (will use extraResources for SDK)
   - "!node_modules/**/*"
 
@@ -115,6 +118,8 @@ mac:
     # ripgrep (used by packages/server-core/src/services/search.ts).
     - from: node_modules/@vscode/ripgrep
       to: app/node_modules/@vscode/ripgrep
+    - from: vendor/bun
+      to: vendor/bun
     # Native OMP runtime; built from the pinned upstream source before packaging.
     - from: resources/omp
       to: omp
@@ -175,6 +180,7 @@ win:
   # wrapper, not the app binary.
   artifactName: "Oh-My-Pi-Setup-${version}-${arch}.${ext}"
   files:
+    - "!release*/**"
     # Exclude binaries for other platforms
     - "!**/resources/bin/darwin-*/**"
     - "!**/resources/bin/linux-*/**"
@@ -186,6 +192,7 @@ win:
     - "!vendor/bun/**/*"
     - "!**/resources/bin/win32-x64/**"
     - "!dist/resources/omp/**/*"
+    - "!dist/resources/.omp-cache/**/*"
     - "!**/resources/omp/**/*"
   # Copy executables as extraResources to avoid EBUSY file locking (see comment above)
   extraResources:
@@ -252,6 +259,8 @@ linux:
       to: app/node_modules/@anthropic-ai/claude-agent-sdk-binary
     - from: node_modules/@vscode/ripgrep
       to: app/node_modules/@vscode/ripgrep
+    - from: vendor/bun
+      to: vendor/bun
     - from: resources/omp
       to: omp
     # WhatsApp worker subprocess (self-contained; Baileys bundled in).

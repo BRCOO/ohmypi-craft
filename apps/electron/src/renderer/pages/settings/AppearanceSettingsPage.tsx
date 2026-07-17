@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { LANGUAGES, type LanguageCode } from '@craft-agent/shared/i18n'
 import type { ColumnDef } from '@tanstack/react-table'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
@@ -139,12 +140,24 @@ export default function AppearanceSettingsPage() {
   // Rich tool descriptions toggle (persisted in config.json, read by SDK subprocess)
   const [richToolDescriptions, setRichToolDescriptions] = useState(true)
   useEffect(() => {
-    window.electronAPI?.getRichToolDescriptions?.().then(setRichToolDescriptions)
+    const loadRichToolDescriptions = window.electronAPI?.getRichToolDescriptions
+    if (!loadRichToolDescriptions) return
+    loadRichToolDescriptions()
+      .then(setRichToolDescriptions)
+      .catch((error) => console.warn('[AppearanceSettings] Failed to load rich tool descriptions:', error))
   }, [])
   const handleRichToolDescriptionsChange = useCallback(async (checked: boolean) => {
+    const previous = richToolDescriptions
     setRichToolDescriptions(checked)
-    await window.electronAPI?.setRichToolDescriptions?.(checked)
-  }, [])
+    try {
+      await window.electronAPI?.setRichToolDescriptions?.(checked)
+    } catch (error) {
+      setRichToolDescriptions(previous)
+      toast.error(t('toast.failedToSaveSetting', { setting: t('settings.appearance.richToolDescriptions') }), {
+        description: error instanceof Error ? error.message : undefined,
+      })
+    }
+  }, [richToolDescriptions, t])
 
   // Load preset themes on mount
   useEffect(() => {
@@ -204,20 +217,26 @@ export default function AppearanceSettingsPage() {
       const themeId = value === 'default' ? null : value
 
       // If changing the current workspace, use context for immediate update
-      if (workspaceId === activeWorkspaceId) {
-        setWorkspaceColorTheme(themeId)
-      } else {
-        // For other workspaces, just persist via IPC
-        await window.electronAPI?.setWorkspaceColorTheme?.(workspaceId, themeId)
-      }
+      try {
+        if (workspaceId === activeWorkspaceId) {
+          await setWorkspaceColorTheme(themeId)
+        } else {
+          // For other workspaces, just persist via IPC
+          await window.electronAPI?.setWorkspaceColorTheme?.(workspaceId, themeId)
+        }
 
-      // Update local state for UI
-      setWorkspaceThemes(prev => ({
-        ...prev,
-        [workspaceId]: themeId ?? undefined
-      }))
+        // Update local state only after persistence succeeds.
+        setWorkspaceThemes(prev => ({
+          ...prev,
+          [workspaceId]: themeId ?? undefined
+        }))
+      } catch (error) {
+        toast.error(t('toast.failedToSaveSetting', { setting: t('settings.appearance.workspaceThemes') }), {
+          description: error instanceof Error ? error.message : undefined,
+        })
+      }
     },
-    [activeWorkspaceId, setWorkspaceColorTheme]
+    [activeWorkspaceId, setWorkspaceColorTheme, t]
   )
 
   // Theme options for dropdowns

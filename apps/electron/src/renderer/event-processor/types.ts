@@ -357,6 +357,13 @@ export interface SessionModelChangedEvent {
   model: string | null
 }
 
+/** Session thinking level changed after backend capability validation. */
+export interface SessionThinkingLevelChangedEvent {
+  type: 'session_thinking_level_changed'
+  sessionId: string
+  thinkingLevel: import('@craft-agent/shared/agent/thinking-levels').ThinkingLevel
+}
+
 /**
  * LLM connection changed event - syncs session.llmConnection to renderer
  */
@@ -571,6 +578,7 @@ export type AgentEvent =
   | WorkingDirectoryErrorEvent
   | PermissionModeChangedEvent
   | SessionModelChangedEvent
+  | SessionThinkingLevelChangedEvent
   | LLMConnectionChangedEvent
   | TaskBackgroundedEvent
   | ShellBackgroundedEvent

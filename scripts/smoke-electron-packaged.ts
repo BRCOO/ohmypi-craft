@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 
 import { CliRpcClient } from '../apps/cli/src/client.ts'
 import { type CliArgs, setupLlmConnection } from '../apps/cli/src/index.ts'
+import type { OmpFeatureCenterStateDto } from '../packages/shared/src/protocol/dto.ts'
 
 const ROOT_DIR = join(import.meta.dir, '..')
 const DEFAULT_TIMEOUT_MS = 120_000
@@ -166,6 +167,8 @@ async function waitForSendEvents(
     }
     const hasMeaningfulOutput = textDeltaCount > 0
       || seen.has('info')
+      || seen.has('status')
+      || seen.has('extension_ui_request')
       || seen.has('tool_start')
       || seen.has('tool_result')
     if (!hasMeaningfulOutput) {
@@ -298,6 +301,13 @@ async function main(): Promise<void> {
     const workspace = await client.invoke('workspaces:create', workspaceDir, 'packaged-e2e-workspace') as Workspace
     await client.invoke('window:switchWorkspace', workspace.id).catch(() => {})
 
+    const featureCenter = await client.invoke('omp:getFeatureCenterState', workspace.id) as OmpFeatureCenterStateDto
+    const resourceSummary = {
+      skills: featureCenter.skills.count,
+      mcp: featureCenter.mcp.count,
+      agents: featureCenter.agents.count,
+    }
+
     const connection = await setupLlmConnection(client, cliSetupArgs())
     const selectedModel = args.model
 
@@ -327,6 +337,7 @@ async function main(): Promise<void> {
       workspaceId: workspace.id,
       connectionSlug: connection.connectionSlug,
       model: selectedModel ?? null,
+      resourceSummary,
       sentMessage: !args.skipSend,
       sendSummary,
       artifacts: runRoot,

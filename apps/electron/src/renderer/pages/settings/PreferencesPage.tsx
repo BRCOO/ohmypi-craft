@@ -11,6 +11,7 @@
 import * as React from 'react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { HeaderMenu } from '@/components/ui/HeaderMenu'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -139,9 +140,15 @@ export default function PreferencesPage() {
           lastSavedRef.current = json
         } else {
           console.error('Failed to save preferences:', result.error)
+          toast.error(t('toast.failedToSaveSetting', { setting: t('settings.preferences.title') }), {
+            description: result.error,
+          })
         }
       } catch (err) {
         console.error('Failed to save preferences:', err)
+        toast.error(t('toast.failedToSaveSetting', { setting: t('settings.preferences.title') }), {
+          description: err instanceof Error ? err.message : undefined,
+        })
       }
     }, 500)
 
@@ -150,7 +157,7 @@ export default function PreferencesPage() {
         clearTimeout(saveTimeoutRef.current)
       }
     }
-  }, [formState, isLoading])
+  }, [formState, isLoading, t])
 
   // Force save on unmount if there are unsaved changes
   useEffect(() => {

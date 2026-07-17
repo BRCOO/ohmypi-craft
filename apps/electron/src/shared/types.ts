@@ -2,7 +2,7 @@
 // Protocol re-exports (channels, DTOs, events, wire types)
 // =============================================================================
 export * from '@craft-agent/shared/protocol'
-import type { OmpDiagnosticsSummary, OmpFeatureCenterStateDto, OmpLoginProvidersResult, OmpLoginSessionResult, OmpResourceCreateInput, OmpResourceMcpTestResult, OmpResourceOperationResult, OmpResourceRemoveInput, OmpResourceSetEnabledInput, OmpResourceSnapshot, OmpResourceSnapshotInput, OmpResourceTestMcpInput, OmpResourceUpdateInput, OmpRuntimeStatus, OpenOmpFeatureCenterPathInput, SaveOmpFeatureCenterConfigInput, SaveOmpFeatureCenterConfigResult, SetOmpCommandPathResult } from '@craft-agent/shared/protocol'
+import type { MessagingPlatformRuntimeInfo, OmpDiagnosticsSummary, OmpFeatureCenterStateDto, OmpLoginProvidersResult, OmpLoginSessionResult, OmpResourceCreateInput, OmpResourceMcpTestResult, OmpResourceOperationResult, OmpResourceRemoveInput, OmpResourceSetEnabledInput, OmpResourceSnapshot, OmpResourceSnapshotInput, OmpResourceTestMcpInput, OmpResourceUpdateInput, OmpRuntimeStatus, OpenOmpFeatureCenterPathInput, SaveOmpFeatureCenterConfigInput, SaveOmpFeatureCenterConfigResult, SetOmpCommandPathResult, WhatsAppUiEvent } from '@craft-agent/shared/protocol'
 
 // =============================================================================
 // Package re-exports (convenience for renderer imports)
@@ -435,6 +435,7 @@ export interface ElectronAPI {
   clearOmpCommandPath(): Promise<SetOmpCommandPathResult>
   getOmpLoginProviders(): Promise<OmpLoginProvidersResult>
   loginOmpProvider(providerId: string): Promise<OmpLoginSessionResult>
+  logoutOmpProvider(providerId: string): Promise<OmpLoginSessionResult>
   getOmpDiagnosticsSummary(): Promise<OmpDiagnosticsSummary>
   getOmpFeatureCenterState(workspaceId?: string | null): Promise<OmpFeatureCenterStateDto>
   openOmpFeatureCenterPath(input: OpenOmpFeatureCenterPathInput): Promise<void>
@@ -730,16 +731,8 @@ export interface ElectronAPI {
   ): Promise<{ owners: MessagingPlatformOwnerInfo[]; bindingId?: string }>
   setMessagingBindingAccess(bindingId: string, access: { mode: MessagingBindingAccessMode; allowedSenderIds?: string[] }): Promise<{ success: boolean }>
   onMessagingPendingChanged(callback: (workspaceId: string) => void): () => void
-}
-
-export interface MessagingPlatformRuntimeInfo {
-  platform: string
-  configured: boolean
-  connected: boolean
-  state: 'disconnected' | 'connecting' | 'connected' | 'reconnect_required' | 'error'
-  identity?: string
-  lastError?: string
-  updatedAt: number
+  // Audio/Speech-to-text
+  transcribeAudio(sessionId: string, audioData: string, mimeType: string, maxDurationSeconds?: number): Promise<{ text: string }>
 }
 
 /**
@@ -773,15 +766,6 @@ export interface MessagingPendingSenderInfo {
   channelId?: string
   threadId?: number
 }
-
-/** Event payloads broadcast from the WhatsApp subprocess to the UI. */
-export type WhatsAppUiEvent =
-  | { type: 'qr'; qr: string }
-  | { type: 'pairing_code'; code: string }
-  | { type: 'connected'; jid?: string; name?: string }
-  | { type: 'disconnected'; loggedOut: boolean; reason?: string }
-  | { type: 'unavailable'; reason: string; message: string }
-  | { type: 'error'; message: string }
 
 // =============================================================================
 // Navigation types (renderer-only)

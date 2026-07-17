@@ -224,6 +224,12 @@ export interface CoreBackendConfig {
   /** Callback when an OMP-native session link is captured/updated. */
   onOmpSessionLinkUpdate?: (link: OmpSessionLink) => void;
 
+  /** Callback when the OMP runtime changes the active model from inside the session. */
+  onModelUpdate?: (model: string) => void;
+
+  /** Callback when the OMP runtime changes the active thinking level from inside the session. */
+  onThinkingLevelUpdate?: (level: ThinkingLevel) => void;
+
   /** Callback when SDK session ID is cleared (e.g., after failed resume) */
   onSdkSessionIdCleared?: () => void;
 

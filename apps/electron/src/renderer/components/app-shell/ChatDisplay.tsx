@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next"
 import { useEffect, useState, useMemo, useCallback } from "react"
 import {
   AlertTriangle,
+  Bug,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -88,6 +89,8 @@ import {
 import { OmpTodoCard, shouldShowOmpTodoCard } from "./OmpTodoCard"
 import { OmpSubagentBar } from "./OmpSubagentBar"
 import { OmpSubagentDetail } from "./OmpSubagentDetail"
+import { OmpDebugTools } from "./OmpDebugTools"
+import { OmpCapabilityGate } from "./OmpCapabilityGate"
 import type { FreeFormSubmitOptions } from "./input/FreeFormInput"
 import type { RichTextInputHandle } from "@/components/ui/rich-text-input"
 import { useBackgroundTasks } from "@/hooks/useBackgroundTasks"
@@ -100,6 +103,9 @@ import { CHAT_LAYOUT } from "@/config/layout"
 import { collectFileChangesFromActivities, getFirstFileChangeIdForActivity } from "@/lib/file-changes"
 import { resolveBranchNewPanelOption } from "./branching"
 import { handleErrorMessageAction } from "./error-message-actions"
+import { useOmpCapabilities } from '@/hooks/useOmpCapabilities'
+import { useOmpSessionCommand } from '@/hooks/useOmpSessionCommand'
+import { CopyPicker } from "@/components/chat/CopyPicker"
 
 // ============================================================================
 // CSS Custom Highlight API helper
@@ -573,15 +579,27 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     nonce: number
   } | null>(null)
   const [subagentDetailOpen, setSubagentDetailOpen] = React.useState(false)
+  const [debugToolsOpen, setDebugToolsOpen] = React.useState(false)
   const [subagentDetailInitialId, setSubagentDetailInitialId] = React.useState<string | undefined>(undefined)
   const followUpOpenNonceRef = React.useRef(0)
 
-  // Navigation for session branching
-  const { navigate } = useNavigation()
-
-  // Get isDark from useTheme hook for overlay theme
-  // This accounts for scenic themes (like Haze) that force dark mode
   const { isDark } = useTheme()
+
+  const { tasks: backgroundTasks, killTask } = useBackgroundTasks({ sessionId: session?.id ?? '' })
+
+  const openSubagentDetail = React.useCallback((subagentId?: string) => {
+    setSubagentDetailInitialId(subagentId)
+    setSubagentDetailOpen(true)
+  }, [])
+
+  const closeSubagentDetail = React.useCallback(() => {
+    setSubagentDetailOpen(false)
+    setSubagentDetailInitialId(undefined)
+  }, [])
+
+  const toggleDebugTools = React.useCallback(() => {
+    setDebugToolsOpen(prev => !prev)
+  }, [])
 
   // Register as focus zone - when zone gains focus, focus the textarea
   // Guard with isFocusedPanelRef so only the focused panel responds in multi-panel layouts
@@ -595,21 +613,6 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     },
   })
 
-  // Background tasks management
-  const { tasks: backgroundTasks, killTask } = useBackgroundTasks({
-    sessionId: session?.id ?? ''
-  })
-
-  // OMP subagent detail
-  const openSubagentDetail = React.useCallback((subagentId?: string) => {
-    setSubagentDetailInitialId(subagentId)
-    setSubagentDetailOpen(true)
-  }, [])
-  const closeSubagentDetail = React.useCallback(() => {
-    setSubagentDetailOpen(false)
-    setSubagentDetailInitialId(undefined)
-  }, [])
-
   // TurnCard expansion state — persisted to localStorage across session switches
   const {
     expandedTurns,
@@ -617,6 +620,10 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     expandedActivityGroups,
     setExpandedActivityGroups,
   } = useTurnCardExpansion(session?.id)
+
+  // Copy Picker capability — show format choice overlay when OMP supports it
+  const { isFeatureSupported: isOmpFeatureSupported } = useOmpCapabilities(session?.id)
+  const copyPickerSupported = isOmpFeatureSupported('copy.picker')
 
 
   // ============================================================================
@@ -1953,6 +1960,11 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                             })
                           }
                         }}
+                        customCopyAction={
+                          copyPickerSupported && turn.response?.text
+                            ? <CopyPicker text={turn.response.text} />
+                            : undefined
+                        }
                       />
                       </div>
                     )
@@ -2034,12 +2046,35 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
             />
           )}
 
+          {!compactMode && session && (
+            <OmpCapabilityGate sessionId={session.id} feature="tools.debug" command="get_debug_tools">
+              <div className="px-3 pb-2">
+                <button
+                  type="button"
+                  onClick={toggleDebugTools}
+                  className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors bg-foreground/5 hover:bg-foreground/10 rounded-lg px-2.5 py-1.5"
+                >
+                  <Bug className="h-3.5 w-3.5" />
+                  {t('omp.debug.tools', { defaultValue: 'Debug Tools' })}
+                </button>
+              </div>
+            </OmpCapabilityGate>
+          )}
+
           {subagentDetailOpen && session.ompSubagentState && (
             <OmpSubagentDetail
               sessionId={session.id}
               state={session.ompSubagentState}
               initialSubagentId={subagentDetailInitialId}
               onClose={closeSubagentDetail}
+            />
+          )}
+
+          {debugToolsOpen && session.id && (
+            <OmpDebugTools
+              sessionId={session.id}
+              open={debugToolsOpen}
+              onClose={() => setDebugToolsOpen(false)}
             />
           )}
 
@@ -2286,6 +2321,25 @@ function ErrorMessage({ message, onOpenUrl, sessionId, onRetry }: { message: Mes
     return true
   })
 
+  // Exact Retry via OMP backend
+  const { isFeatureSupported } = useOmpCapabilities(sessionId)
+  const { execute: executeCommand, loading: commandLoading } = useOmpSessionCommand(sessionId)
+  const exactRetrySupported = isFeatureSupported('retry.exact')
+  const [exactRetrying, setExactRetrying] = React.useState(false)
+
+  const handleExactRetry = React.useCallback(async () => {
+    if (commandLoading || exactRetrying) return
+    setExactRetrying(true)
+    try {
+      await executeCommand({ type: 'retryLastTurn' })
+      toast.success(t('chat.exactRetryQueued', { defaultValue: 'Exact retry sent to runtime' }))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      setExactRetrying(false)
+    }
+  }, [commandLoading, exactRetrying, executeCommand, t])
+
   return (
     <div className="flex justify-start mt-4">
       {/* Subtle bg (3% opacity) + tinted shadow for softer error appearance */}
@@ -2302,9 +2356,9 @@ function ErrorMessage({ message, onOpenUrl, sessionId, onRetry }: { message: Mes
         <p className="text-sm text-destructive">{message.content}</p>
 
         {/* Action buttons */}
-        {actions && actions.length > 0 && (
+        {((actions && actions.length > 0) || exactRetrySupported) && (
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {actions.map((action) => (
+            {actions?.map((action) => (
               <button
                 key={action.key}
                 onClick={() => {
@@ -2319,6 +2373,19 @@ function ErrorMessage({ message, onOpenUrl, sessionId, onRetry }: { message: Mes
                 {action.label}{action.action === 'open_url' ? ' ↗' : ''}
               </button>
             ))}
+            {/* Exact Retry — only when OMP runtime supports retry.exact */}
+            {exactRetrySupported && (
+              <button
+                type="button"
+                onClick={handleExactRetry}
+                disabled={commandLoading || exactRetrying}
+                className="text-xs px-2 py-0.5 rounded border border-amber-500/30 text-amber-600/80 hover:text-amber-600 hover:border-amber-500/50 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {commandLoading || exactRetrying
+                  ? t('chat.exactRetrying', { defaultValue: 'Exact Retry…' })
+                  : t('chat.exactRetry', { defaultValue: 'Exact Retry' })}
+              </button>
+            )}
           </div>
         )}
 

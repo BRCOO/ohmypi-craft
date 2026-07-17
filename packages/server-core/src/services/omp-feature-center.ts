@@ -64,35 +64,60 @@ const BUILT_IN_MODEL_ROLES: Array<{ role: string; label: string }> = [
 
 const UNAVAILABLE_TUI_COMMANDS: OmpFeatureUnavailableCommandDto[] = [
   {
-    command: '/plan-review',
-    label: 'Reopen Plan Review',
-    status: 'needs-upstream-rpc',
-    reason: 'Plan review reopening is currently TUI/ACP-only in upstream OMP.',
-  },
-  {
-    command: '/goal',
-    label: 'Goal Mode',
-    status: 'needs-upstream-rpc',
-    reason: 'Goal runtime state and set/pause/resume/drop commands are not present in OMP RPC.',
-  },
-  {
-    command: '/guided-goal',
-    label: 'Guided Goal',
-    status: 'needs-upstream-rpc',
-    reason: 'Guided goal interview state is not exposed through OMP RPC.',
-  },
-  {
-    command: '/loop',
-    label: 'Loop Mode',
-    status: 'needs-upstream-rpc',
-    reason: 'Loop repeat controls and stop state are not exposed through OMP RPC.',
-  },
-  {
     command: '/advisor configure',
     label: 'Advisor Configure',
     status: 'desktop-equivalent',
     reason: 'Interactive TUI configuration is replaced by this Feature Center WATCHDOG.yml editor.',
     alternative: 'Edit the global WATCHDOG.yml roster in Settings > OMP.',
+  },
+  {
+    command: '/todo edit',
+    label: 'Todo Editor',
+    status: 'hidden',
+    reason: 'This command opens an external terminal editor and cannot run inside the desktop composer.',
+    alternative: 'Use /todo export and /todo import for Markdown round-trips.',
+  },
+  {
+    command: '/mcp reauth',
+    label: 'MCP Reauthorize',
+    status: 'hidden',
+    reason: 'This OAuth flow requires the interactive OMP terminal.',
+    alternative: 'Manage the MCP server from Settings > OMP or the OMP terminal.',
+  },
+  {
+    command: '/mcp unauth',
+    label: 'MCP Remove Authorization',
+    status: 'hidden',
+    reason: 'This OAuth flow requires the interactive OMP terminal.',
+    alternative: 'Manage the MCP server from Settings > OMP or the OMP terminal.',
+  },
+  {
+    command: '/mcp smithery-login',
+    label: 'Smithery Login',
+    status: 'hidden',
+    reason: 'Smithery login requires the interactive OMP terminal.',
+    alternative: 'Complete Smithery login in the OMP terminal.',
+  },
+  {
+    command: '/mcp smithery-logout',
+    label: 'Smithery Logout',
+    status: 'hidden',
+    reason: 'Smithery logout requires the interactive OMP terminal.',
+    alternative: 'Complete Smithery logout in the OMP terminal.',
+  },
+  {
+    command: '/mcp reconnect',
+    label: 'MCP Reconnect',
+    status: 'hidden',
+    reason: 'This command requires OMP terminal access to the live MCP manager.',
+    alternative: 'Use /mcp reload or test the server from Settings > OMP.',
+  },
+  {
+    command: '/mcp notifications',
+    label: 'MCP Notifications',
+    status: 'hidden',
+    reason: 'Live MCP notification subscriptions are only exposed by the interactive OMP terminal.',
+    alternative: 'Use /mcp list to inspect server status.',
   },
 ]
 
@@ -482,6 +507,50 @@ async function scanAgents(options: OmpFeatureCenterOptions, agentDir: string): P
   }
 }
 
+type RuntimeResourceItem = NonNullable<OmpDiagnosticsSummary['runtimeResources']>['skills'][number]
+
+function runtimeResourceLevel(item: RuntimeResourceItem, existing?: OmpFeatureCapabilityItemDto): OmpFeaturePathLevel {
+  if (item.source === 'project') return 'project'
+  if (item.source === 'bundled') return 'bundled'
+  if (item.source === 'native' || item.source === 'runtime') return 'bundled'
+  return existing?.level ?? 'user'
+}
+
+function mergeRuntimeCapability(
+  scanned: OmpFeatureCapabilityDto,
+  runtimeItems: RuntimeResourceItem[] | undefined,
+  runtimeError: string | undefined,
+): OmpFeatureCapabilityDto {
+  if (!runtimeItems) return { ...scanned, error: scanned.error ?? runtimeError }
+  const merged = new Map<string, OmpFeatureCapabilityItemDto>()
+  for (const item of scanned.items) merged.set(item.name.toLowerCase(), item)
+  for (const runtimeItem of runtimeItems) {
+    const key = runtimeItem.name.toLowerCase()
+    const existing = merged.get(key)
+    merged.set(key, {
+      name: runtimeItem.name,
+      path: runtimeItem.path ?? existing?.path,
+      level: runtimeResourceLevel(runtimeItem, existing),
+      description: runtimeItem.description ?? existing?.description,
+      provider: runtimeItem.provider,
+      status: runtimeItem.status,
+      toolCount: runtimeItem.toolCount,
+      runtimeLoaded: true,
+    })
+  }
+  const sourcePaths = [...scanned.sourcePaths]
+  const knownPaths = new Set(sourcePaths.map(item => resolve(item.path).toLowerCase()))
+  for (const item of runtimeItems) {
+    if (!item.path) continue
+    const normalized = resolve(item.path).toLowerCase()
+    if (knownPaths.has(normalized)) continue
+    knownPaths.add(normalized)
+    sourcePaths.push({ path: item.path, exists: true })
+  }
+  const items = [...merged.values()].sort((a, b) => a.name.localeCompare(b.name))
+  return { ...scanned, count: items.length, sourcePaths, items, error: scanned.error }
+}
+
 function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'advisor'
 }
@@ -624,12 +693,17 @@ export async function getOmpFeatureCenterState(options: OmpFeatureCenterOptions)
   const modelRoles = buildModelRoles(globalConfig.parseError ? {} : globalConfig.data, projectData)
   const commonPlan = modelRoles.common.find(role => role.role === 'plan')
 
-  const [skills, mcp, agents, roster] = await Promise.all([
+  const [scannedSkills, scannedMcp, scannedAgents, roster] = await Promise.all([
     scanSkills(options, agentDir),
     scanMcp(options, agentDir),
     scanAgents(options, agentDir),
     scanAdvisorRoster(options, agentDir),
   ])
+  const runtimeResources = options.diagnostics.runtimeResources
+  const runtimeResourcesError = options.diagnostics.runtimeResourcesError
+  const skills = mergeRuntimeCapability(scannedSkills, runtimeResources?.skills, runtimeResourcesError)
+  const mcp = mergeRuntimeCapability(scannedMcp, runtimeResources?.mcp, runtimeResourcesError)
+  const agents = mergeRuntimeCapability(scannedAgents, runtimeResources?.agents, runtimeResourcesError)
 
   return {
     runtime: runtimeDto(runtime, globalPath, projectPath, projectConfig?.exists, options),
@@ -652,8 +726,23 @@ export async function getOmpFeatureCenterState(options: OmpFeatureCenterOptions)
       supportStatus: 'rpc-command-available',
       toggleAvailable: true,
       approvalUi: 'extension-ui-if-emitted',
-      rpcCommands: ['get_plan_mode_state', 'set_plan_mode', 'plan_review_result'],
-      message: 'OMP native Plan Mode is controlled from the session command menu. Each session negotiates support with its active OMP runtime before enabling the toggle.',
+      rpcCommands: [
+        'get_plan_mode_state',
+        'set_plan_mode',
+        'reopen_plan_review',
+        'plan_review_result',
+        'get_goal_state',
+        'set_goal',
+        'replace_goal',
+        'pause_goal',
+        'resume_goal',
+        'drop_goal',
+        'set_goal_budget',
+        'guided_goal_turn',
+        'get_loop_state',
+        'set_loop',
+      ],
+      message: 'OMP native Plan, Goal, Guided Goal, and Loop controls are exposed by the bundled RPC runtime and available from the session command menu.',
     },
     unavailableCommands: UNAVAILABLE_TUI_COMMANDS.map(command => ({ ...command })),
     lastRefreshedAt: now(),
@@ -820,6 +909,7 @@ function levelToScope(level: OmpFeaturePathLevel): OmpResourceScope {
 }
 
 function levelToSource(level: OmpFeaturePathLevel): OmpResourceSource {
+  if (level === 'bundled') return 'bundled'
   return level === 'user' ? 'user' : 'project'
 }
 
@@ -947,17 +1037,30 @@ async function buildResourceCategory(
   const mcpDefinitionsByPath = new Map<string, Record<string, McpServerDefinition>>()
 
   for (const item of capability.items) {
-    const scope = levelToScope(item.level)
+    const runtimeOnly = item.runtimeLoaded === true && !item.path
+    if (!item.path && !runtimeOnly) continue
+    if (item.level === 'bundled' && !item.runtimeLoaded) continue
+    const scope: OmpResourceScope = item.level === 'bundled' ? 'user' : levelToScope(item.level)
     const source = levelToSource(item.level)
     const id = resourceId(type, item.name)
     const disabledList = disabledLists.get(scope) ?? []
-    const enabled = isResourceEnabled(id, disabledList)
+    const enabled = runtimeOnly
+      ? item.status !== 'disconnected'
+      : isResourceEnabled(id, disabledList)
 
     let revision: string
     let description = item.description
-    let toolCount: number | undefined
+    const toolCount = item.toolCount
 
-    if (type === 'mcp') {
+    if (runtimeOnly) {
+      revision = computeObjectRevision({
+        runtime: true,
+        name: item.name,
+        provider: item.provider,
+        status: item.status,
+        toolCount: item.toolCount,
+      })
+    } else if (type === 'mcp' && item.path) {
       let definitions = mcpDefinitionsByPath.get(item.path)
       if (!definitions) {
         const parsed = await readMcpJson(item.path)
@@ -967,10 +1070,10 @@ async function buildResourceCategory(
       const definition = definitions[item.name]
       revision = definition ? computeObjectRevision(definition) : (await computeFileRevision(item.path) ?? `${now}`)
     } else {
-      if (type === 'agent') {
+      if (type === 'agent' && item.path) {
         description = (await readResourceDescription(item.path)) ?? item.description
       }
-      revision = await computeFileRevision(item.path) ?? `${now}`
+      revision = item.path ? await computeFileRevision(item.path) ?? `${now}` : `${now}`
     }
 
     entries.push({
@@ -984,6 +1087,9 @@ async function buildResourceCategory(
       path: item.path,
       description,
       toolCount,
+      provider: item.provider,
+      status: item.status,
+      readOnly: item.runtimeLoaded === true || source === 'bundled',
       diagnostics: [],
       revision,
       lastRefreshedAt: now,
@@ -1005,11 +1111,16 @@ export async function getOmpResourceSnapshot(
   const agentDir = resolveAgentDir(options)
   const projectRoot = resolveProjectRoot(options)
 
-  const [skillsCapability, mcpCapability, agentsCapability] = await Promise.all([
+  const [scannedSkills, scannedMcp, scannedAgents] = await Promise.all([
     scanSkills(options, agentDir),
     scanMcp(options, agentDir),
     scanAgents(options, agentDir),
   ])
+  const runtimeResources = options.diagnostics.runtimeResources
+  const runtimeResourcesError = options.diagnostics.runtimeResourcesError
+  const skillsCapability = mergeRuntimeCapability(scannedSkills, runtimeResources?.skills, runtimeResourcesError)
+  const mcpCapability = mergeRuntimeCapability(scannedMcp, runtimeResources?.mcp, runtimeResourcesError)
+  const agentsCapability = mergeRuntimeCapability(scannedAgents, runtimeResources?.agents, runtimeResourcesError)
 
   const globalConfig = await readYamlConfig(resolveGlobalConfigPath(options))
   const projectConfigPath = resolveProjectConfigPath(options)
@@ -1046,6 +1157,14 @@ export async function getOmpResourceSnapshot(
     mcp,
     skills,
     agents,
+    runtimeCounts: options.diagnostics.runtimeResources
+      ? {
+          skills: options.diagnostics.runtimeResources.skills.length,
+          mcp: options.diagnostics.runtimeResources.mcp.length,
+          agents: options.diagnostics.runtimeResources.agents.length,
+        }
+      : undefined,
+    runtimeResourcesError: options.diagnostics.runtimeResourcesError,
     diagnostics,
     refreshedAt: now,
   }

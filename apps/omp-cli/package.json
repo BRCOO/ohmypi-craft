@@ -1,0 +1,21 @@
+{
+  "name": "@craft-agent/omp-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local OMP CLI launcher and RPC doctor for Oh My Pi Desktop",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "omp-cli": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test src/"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.2"
+  }
+}

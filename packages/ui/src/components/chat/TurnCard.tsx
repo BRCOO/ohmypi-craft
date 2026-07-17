@@ -373,6 +373,9 @@ export interface TurnCardProps {
   ompSubagentState?: OmpSubagentStateDto
   /** Callback to open the detail panel for a linked OMP subagent */
   onOpenSubagent?: (subagentId: string) => void
+  /** Optional custom copy action that replaces the default Copy button in the footer.
+   *  Receives the turn text content so it can offer format choices. */
+  customCopyAction?: React.ReactNode
 }
 
 // ============================================================================
@@ -1484,6 +1487,8 @@ export interface ResponseCardProps {
   sendMessageKey?: 'enter' | 'cmd-enter'
   /** Callback when follow-up is saved via "Save & Send" action */
   onSaveAndSendFollowUp?: (target: { messageId: string; annotationId: string; note: string; selectedText: string }) => void
+  /** Optional custom copy action that replaces the default Copy button in the footer */
+  customCopyAction?: React.ReactNode
   /** Whether there are active pending follow-up annotations in the session */
   hasActiveFollowUpAnnotations?: boolean
   /** External request to open a specific annotation in this response */
@@ -1730,6 +1735,7 @@ export function ResponseCard({
   hasActiveFollowUpAnnotations = false,
   openAnnotationRequest,
   annotationInteractionMode = 'interactive',
+  customCopyAction,
 }: ResponseCardProps) {
   const { t } = useTranslation()
   // Throttled content for display - updates every CONTENT_THROTTLE_MS during streaming
@@ -2575,26 +2581,28 @@ export function ResponseCard({
             )}>
               {/* Left side - Copy, View as Markdown, Annotation hint */}
               <div className="flex items-center gap-3">
-                <button
-                  onClick={handleCopy}
-                  className={cn(
-                    "turn-action-btn flex items-center gap-1.5 transition-colors select-none",
-                    copied ? "text-success" : "text-muted-foreground hover:text-foreground",
-                    "focus:outline-none focus-visible:underline"
-                  )}
-                >
-                  {copied ? (
-                    <>
-                      <Check className={SIZE_CONFIG.iconSize} />
-                      <span>{t("common.copied")}</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className={SIZE_CONFIG.iconSize} />
-                      <span>{t("common.copy")}</span>
-                    </>
-                  )}
-                </button>
+                {customCopyAction ?? (
+                  <button
+                    onClick={handleCopy}
+                    className={cn(
+                      "turn-action-btn flex items-center gap-1.5 transition-colors select-none",
+                      copied ? "text-success" : "text-muted-foreground hover:text-foreground",
+                      "focus:outline-none focus-visible:underline"
+                    )}
+                  >
+                    {copied ? (
+                      <>
+                        <Check className={SIZE_CONFIG.iconSize} />
+                        <span>{t("common.copied")}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className={SIZE_CONFIG.iconSize} />
+                        <span>{t("common.copy")}</span>
+                      </>
+                    )}
+                  </button>
+                )}
                 {onPopOut && (
                   <button
                     onClick={onPopOut}
@@ -2858,6 +2866,7 @@ export const TurnCard = React.memo(function TurnCard({
   annotationInteractionMode = 'interactive',
   ompSubagentState,
   onOpenSubagent,
+  customCopyAction,
 }: TurnCardProps) {
   // Derive the turn phase from props using the state machine.
   // This provides a single source of truth for lifecycle state,
@@ -3222,6 +3231,7 @@ export const TurnCard = React.memo(function TurnCard({
             hasActiveFollowUpAnnotations={hasActiveFollowUpAnnotations}
             openAnnotationRequest={openAnnotationRequest}
             annotationInteractionMode={annotationInteractionMode}
+            customCopyAction={customCopyAction}
           />
         </div>
       ))}
@@ -3261,6 +3271,7 @@ export const TurnCard = React.memo(function TurnCard({
                 hasActiveFollowUpAnnotations={hasActiveFollowUpAnnotations}
                 openAnnotationRequest={openAnnotationRequest}
                 annotationInteractionMode={annotationInteractionMode}
+                customCopyAction={customCopyAction}
               />
             </motion.div>
           )}
@@ -3293,6 +3304,7 @@ export const TurnCard = React.memo(function TurnCard({
             hasActiveFollowUpAnnotations={hasActiveFollowUpAnnotations}
             openAnnotationRequest={openAnnotationRequest}
             annotationInteractionMode={annotationInteractionMode}
+            customCopyAction={customCopyAction}
           />
         </div>
       )}

@@ -1,11 +1,16 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
+import { useAtomValue } from 'jotai'
 import { toast } from 'sonner'
-import { AlertCircle, Copy, Pencil, Plus, RefreshCw, ServerCog, Trash2 } from 'lucide-react'
+import { AlertCircle, BellRing, Copy, KeyRound, LogOut, Pencil, Plus, RefreshCw, RotateCcw, ServerCog, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipTrigger, TooltipContent } from '@craft-agent/ui'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
+import { activeSessionIdAtom } from '@/atoms/sessions'
+import { useOmpCapabilities } from '@/hooks/useOmpCapabilities'
+import { useOmpSessionCommand } from '@/hooks/useOmpSessionCommand'
 import type { OmpResourceEntry, OmpResourceMcpTestResult, OmpResourceSnapshot, OmpResourceType } from '../../../../shared/types'
 
 export interface OmpResourceDirectoryProps {
@@ -35,8 +40,8 @@ export function canTestOmpResource(type: OmpResourceType): boolean {
   return type === 'mcp'
 }
 
-export function canManageOmpResource(entry: Pick<OmpResourceEntry, 'source'>): boolean {
-  return entry.source !== 'bundled'
+export function canManageOmpResource(entry: Pick<OmpResourceEntry, 'source' | 'readOnly'>): boolean {
+  return entry.source !== 'bundled' && !entry.readOnly
 }
 
 function ScopeBadge({ scope }: { scope: string }) {
@@ -92,6 +97,91 @@ export function OmpResourceDirectory({
     delete next[key]
     return next
   })
+  const activeSessionId = useAtomValue(activeSessionIdAtom)
+  const capabilities = useOmpCapabilities(activeSessionId ?? undefined)
+  const sessionCommand = useOmpSessionCommand(activeSessionId ?? undefined)
+  const isMcpOauthSupported = type === 'mcp' && capabilities.isFeatureSupported('mcp.oauth')
+  const mcpOauthUnsupportedReason = type === 'mcp' ? capabilities.getFeatureReason('mcp.oauth') : undefined
+  const [mcpNotificationsOn, setMcpNotificationsOn] = React.useState(false)
+  const [mcpNotificationsLoaded, setMcpNotificationsLoaded] = React.useState(false)
+
+  React.useEffect(() => {
+    if (type !== 'mcp' || !activeSessionId || mcpNotificationsLoaded) return
+    sessionCommand.execute({ type: 'getMcpNotifications' }).then(result => {
+      const state = (result as { enabled?: boolean } | undefined)?.enabled
+      if (state !== undefined) {
+        setMcpNotificationsOn(state)
+        setMcpNotificationsLoaded(true)
+      }
+    }).catch(() => {
+      // Notifications unavailable — leave default off state
+    })
+  }, [type, activeSessionId, sessionCommand, mcpNotificationsLoaded])
+
+  const handleMcpReauth = async (entry: OmpResourceEntry) => {
+    if (!activeSessionId) return
+    const key = `reauth-${entry.id}`
+    startPending(key)
+    try {
+      await sessionCommand.execute({ type: 'mcpReauth', serverName: entry.name })
+      toast.success(t('omp.featureCenter.mcpReauthSuccess', { defaultValue: 'Reauthorization initiated' }))
+      onChange()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      stopPending(key)
+    }
+  }
+
+  const handleMcpUnauth = async (entry: OmpResourceEntry) => {
+    if (!activeSessionId) return
+    const key = `unauth-${entry.id}`
+    startPending(key)
+    try {
+      await sessionCommand.execute({ type: 'mcpUnauth', serverName: entry.name })
+      toast.success(t('omp.featureCenter.mcpUnauthSuccess', { defaultValue: 'Authorization removed' }))
+      onChange()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      stopPending(key)
+    }
+  }
+
+  const handleMcpReconnect = async (entry: OmpResourceEntry) => {
+    if (!activeSessionId) return
+    const key = `reconnect-${entry.id}`
+    startPending(key)
+    try {
+      await sessionCommand.execute({ type: 'mcpReconnect', serverName: entry.name })
+      toast.success(t('omp.featureCenter.mcpReconnectSuccess', { defaultValue: 'Reconnecting...' }))
+      onChange()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      stopPending(key)
+    }
+  }
+
+  const handleMcpToggleNotifications = async () => {
+    if (!activeSessionId) return
+    const key = 'mcp-notifications'
+    startPending(key)
+    const nextState = !mcpNotificationsOn
+    try {
+      await sessionCommand.execute({ type: 'setMcpNotifications', enabled: nextState })
+      setMcpNotificationsOn(nextState)
+      toast.success(
+        nextState
+          ? t('omp.featureCenter.mcpNotificationsOn', { defaultValue: 'MCP notifications enabled' })
+          : t('omp.featureCenter.mcpNotificationsOff', { defaultValue: 'MCP notifications disabled' }),
+      )
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      stopPending(key)
+    }
+  }
   const isPending = (key: string) => pending[key] ?? false
 
   const handleToggle = async (entry: OmpResourceEntry, enabled: boolean) => {
@@ -317,6 +407,23 @@ export function OmpResourceDirectory({
           >
             <RefreshCw className={cn('size-3.5', isPending('refresh') && 'animate-spin')} />
           </Button>
+          {type === 'mcp' && isMcpOauthSupported && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              disabled={isPending('mcp-notifications')}
+              onClick={() => void handleMcpToggleNotifications()}
+              title={
+                mcpNotificationsOn
+                  ? t('omp.featureCenter.mcpNotificationsOn', { defaultValue: 'MCP notifications on' })
+                  : t('omp.featureCenter.mcpNotificationsOff', { defaultValue: 'MCP notifications off' })
+              }
+            >
+              <BellRing className={cn('size-3.5', mcpNotificationsOn && 'text-blue-500')} />
+            </Button>
+          )}
           <Button
             type="button"
             variant="ghost"
@@ -410,6 +517,18 @@ export function OmpResourceDirectory({
                     <span className="text-xs font-medium">{entry.name}</span>
                     <SourceBadgeInline source={entry.source} />
                     <ScopeBadge scope={entry.scope} />
+                    {entry.status && (
+                      <span className={cn(
+                        'inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium',
+                        entry.status === 'connected'
+                          ? 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-200'
+                          : entry.status === 'connecting'
+                            ? 'bg-amber-500/12 text-amber-700 dark:text-amber-200'
+                            : 'bg-muted text-muted-foreground',
+                      )}>
+                        {entry.status}
+                      </span>
+                    )}
                     {entry.diagnostics.length > 0 && (
                       <span
                         className="inline-flex items-center gap-0.5 rounded-full bg-amber-500/12 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-200"
@@ -425,15 +544,21 @@ export function OmpResourceDirectory({
                       {entry.description}
                     </div>
                   )}
-                  <button
-                    type="button"
-                    className="mt-1 flex max-w-full items-center gap-1 truncate text-left text-[10px] text-muted-foreground hover:text-foreground"
-                    onClick={() => void copyPath(entry.path)}
-                    title={entry.path}
-                  >
-                    <Copy className="size-3 shrink-0" />
-                    <span className="truncate">{entry.path}</span>
-                  </button>
+                  {entry.path ? (
+                    <button
+                      type="button"
+                      className="mt-1 flex max-w-full items-center gap-1 truncate text-left text-[10px] text-muted-foreground hover:text-foreground"
+                      onClick={() => void copyPath(entry.path!)}
+                      title={entry.path}
+                    >
+                      <Copy className="size-3 shrink-0" />
+                      <span className="truncate">{entry.path}</span>
+                    </button>
+                  ) : (
+                    <div className="mt-1 truncate text-[10px] text-muted-foreground">
+                      {entry.provider ? `OMP runtime · ${entry.provider}` : 'OMP runtime'}
+                    </div>
+                  )}
                   {testResult && (
                     <div className="mt-1">
                       {testResult.success && testResult.connected ? (
@@ -452,7 +577,7 @@ export function OmpResourceDirectory({
                   )}
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
-                  {canTestOmpResource(type) && (
+                  {canTestOmpResource(type) && !entry.readOnly && (
                     <Button
                       type="button"
                       variant="ghost"
@@ -468,9 +593,78 @@ export function OmpResourceDirectory({
                         : t('omp.featureCenter.test', { defaultValue: 'Test' })}
                     </Button>
                   )}
+                  {type === 'mcp' && !entry.readOnly && isMcpOauthSupported && (
+                    <>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-7 text-muted-foreground"
+                            disabled={isPending(`reauth-${entry.id}`)}
+                            onClick={() => void handleMcpReauth(entry)}
+                          >
+                            <KeyRound className="size-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {t('omp.featureCenter.mcpReauth', { name: entry.name, defaultValue: 'Reauthorize' })}
+                        </TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-7 text-muted-foreground"
+                            disabled={isPending(`unauth-${entry.id}`)}
+                            onClick={() => void handleMcpUnauth(entry)}
+                          >
+                            <LogOut className="size-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {t('omp.featureCenter.mcpUnauth', { name: entry.name, defaultValue: 'Remove authorization' })}
+                        </TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-7 text-muted-foreground"
+                            disabled={isPending(`reconnect-${entry.id}`)}
+                            onClick={() => void handleMcpReconnect(entry)}
+                          >
+                            <RotateCcw className="size-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {t('omp.featureCenter.mcpReconnect', { name: entry.name, defaultValue: 'Reconnect' })}
+                        </TooltipContent>
+                      </Tooltip>
+                    </>
+                  )}
+                  {type === 'mcp' && !entry.readOnly && !isMcpOauthSupported && mcpOauthUnsupportedReason && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex cursor-not-allowed items-center gap-1 rounded px-1 py-0.5 text-[10px] text-muted-foreground opacity-50">
+                          <KeyRound className="size-3" />
+                          <LogOut className="size-3" />
+                          <RotateCcw className="size-3" />
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        {mcpOauthUnsupportedReason}
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
                   <Switch
                     checked={entry.enabled}
-                    disabled={isPending(`toggle-${entry.id}`)}
+                    disabled={entry.readOnly || isPending(`toggle-${entry.id}`)}
                     onCheckedChange={checked => void handleToggle(entry, checked)}
                     aria-label={t('omp.featureCenter.enableResource', {
                       name: entry.name,

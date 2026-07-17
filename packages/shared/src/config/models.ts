@@ -92,6 +92,13 @@ export function normalizeDeprecatedModelId(modelId: string): string {
 export type ModelProvider = 'anthropic' | 'pi' | 'omp';
 
 /**
+ * Reasoning levels that a model can explicitly advertise to the picker.
+ * `max` remains a Craft-only label that is mapped to the provider's highest
+ * available effort where applicable.
+ */
+export type ModelThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+/**
  * Full model definition with capabilities and costs.
  * Used throughout the application for model selection and display.
  */
@@ -113,6 +120,8 @@ export interface ModelDefinition {
   contextWindow: number;
   /** Whether this model supports thinking/reasoning effort. Defaults to true when undefined. */
   supportsThinking?: boolean;
+  /** Optional provider-advertised subset of reasoning levels supported by this model. */
+  supportedThinkingLevels?: ModelThinkingLevel[];
   /** Explicit per-model image input capability hint, primarily for custom endpoints. */
   supportsImages?: boolean;
 }
@@ -182,6 +191,7 @@ export const MODEL_REGISTRY: ModelDefinition[] = [
     descriptionKey: 'model.fableDesc',
     provider: 'anthropic',
     contextWindow: 1_000_000,
+    supportedThinkingLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
   },
 
   // ----------------------------------------

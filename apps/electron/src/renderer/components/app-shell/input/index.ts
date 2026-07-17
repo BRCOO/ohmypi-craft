@@ -12,6 +12,15 @@ export { ExtensionUiRequest } from './structured/ExtensionUiRequest'
 export { useAutoGrow } from './useAutoGrow'
 
 // Types
+export { PromptHistoryPicker, usePromptHistory } from './PromptHistoryPicker'
+export {
+  addPrompt,
+  removePrompt,
+  clearPromptHistory,
+  getPromptHistory,
+  setPromptHistoryEnabled,
+  type PromptHistoryData,
+} from './prompt-history'
 export type {
   InputMode,
   StructuredInputType,

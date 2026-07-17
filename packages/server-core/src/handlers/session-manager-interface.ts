@@ -26,6 +26,7 @@ import type {
   UnreadSummary,
   ShareResult,
 } from '@craft-agent/shared/protocol'
+import type { OmpCapabilityManifest, OmpRpcCommand } from '@craft-agent/shared/agent/backend/omp/omp-rpc-protocol'
 import type { SessionBundle, DispatchMode } from '@craft-agent/shared/sessions'
 import type { EventSink } from '../transport'
 
@@ -75,6 +76,12 @@ export interface ISessionManager {
   setOmpFollowUpMode(sessionId: string, mode: OmpQueueMode): Promise<void>
   setOmpInterruptMode(sessionId: string, mode: OmpInterruptMode): Promise<void>
   setOmpPlanMode(sessionId: string, enabled: boolean): Promise<void>
+  setOmpGoal(sessionId: string, objective: string, tokenBudget?: number, replace?: boolean): Promise<void>
+  pauseOmpGoal(sessionId: string): Promise<void>
+  resumeOmpGoal(sessionId: string): Promise<void>
+  dropOmpGoal(sessionId: string): Promise<void>
+  setOmpGoalBudget(sessionId: string, tokenBudget?: number): Promise<void>
+  setOmpLoop(sessionId: string, enabled: boolean, prompt?: string, limit?: string): Promise<void>
   refreshOmpRuntime(sessionId: string): Promise<void>
   compactOmpRuntime(sessionId: string): Promise<void>
   setOmpAutoCompaction(sessionId: string, enabled: boolean): Promise<void>
@@ -100,6 +107,11 @@ export interface ISessionManager {
     providerId: string,
     onOpenUrl?: (payload: { url?: string; launchUrl?: string; instructions?: string }) => void,
   ): Promise<import('@craft-agent/shared/protocol').OmpLoginSessionResult>
+  logoutOmpProvider(sessionId: string, providerId: string): Promise<{ success: boolean; error?: string }>
+  getOmpCapabilities(sessionId: string): Promise<{ success: boolean; manifest?: OmpCapabilityManifest; error?: string }>
+  sendRawOmpCommand(sessionId: string, command: OmpRpcCommand): Promise<{ success: boolean; data?: unknown; error?: string }>
+  getPromptHistory(sessionId: string): Promise<{ prompts: string[]; enabled: boolean }>
+  setPromptHistory(sessionId: string, prompts: string[], enabled: boolean): Promise<void>
   updateWorkingDirectory(sessionId: string, path: string): void
   setSessionSources(sessionId: string, sourceSlugs: string[]): Promise<void>
   setSessionLabels(sessionId: string, labels: string[]): void

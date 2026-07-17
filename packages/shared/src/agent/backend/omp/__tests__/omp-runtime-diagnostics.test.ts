@@ -145,6 +145,18 @@ describe('getOmpDiagnosticsSummary', () => {
             },
           });
         }
+        if (command.id === 'omp-runtime-resources') {
+          writeFrame(child, {
+            id: command.id,
+            type: 'response',
+            success: true,
+            data: {
+              skills: [{ name: 'review', source: 'user' }],
+              mcp: [{ name: 'github', source: 'native', status: 'connected', toolCount: 4 }],
+              agents: [{ name: 'explore', source: 'bundled' }],
+            },
+          });
+        }
       });
       queueMicrotask(() => writeFrame(child, { type: 'ready' }));
       return child;
@@ -183,5 +195,9 @@ describe('getOmpDiagnosticsSummary', () => {
     expect(summary.versionCompatibility?.compatible).toBe(true);
     expect(summary.versionCompatibility?.ompVersion).toBe('16.3.0');
     expect(summary.providers?.total).toBe(1);
+    expect(summary.runtimeResources?.skills.map(skill => skill.name)).toEqual(['review']);
+    expect(summary.runtimeResources?.mcp[0]?.toolCount).toBe(4);
+    expect(summary.runtimeResources?.agents.map(agent => agent.name)).toEqual(['explore']);
+    expect(summary.runtimeResourcesError).toBeUndefined();
   });
 });

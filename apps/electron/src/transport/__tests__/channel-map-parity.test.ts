@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'bun:test'
 import type { ElectronAPI } from '../../shared/types'
+import type { BroadcastEventMap } from '@craft-agent/shared/protocol'
 import { CHANNEL_MAP } from '../channel-map'
 
 type AnyFn = (...args: any[]) => any
@@ -30,15 +31,29 @@ type ApiToChannelMapKeys = Exclude<
   | 'getFilePath' // renderer-local — webUtils.getPathForFile, no IPC round-trip
 > | BrowserPaneKeys
 type ChannelMapKeys = keyof typeof CHANNEL_MAP & string
+type ChannelMapEntry = (typeof CHANNEL_MAP)[keyof typeof CHANNEL_MAP]
+// The reconnect notification is a preload-local transport event, not a
+// server BroadcastEventMap channel.
+type ListenerChannels = Exclude<
+  Extract<ChannelMapEntry, { type: 'listener' }>['channel'],
+  '__transport:reconnected'
+>
 
 type AssertNever<T extends never> = true
 
 // Compile-time guardrails: if these fail, CHANNEL_MAP and ElectronAPI drifted.
 const _missingFromMap: AssertNever<Exclude<ApiToChannelMapKeys, ChannelMapKeys>> = true
 const _extraInMap: AssertNever<Exclude<ChannelMapKeys, ApiToChannelMapKeys>> = true
+// Every renderer listener must have a canonical server-push payload tuple.
+// This catches channels that exist at runtime but drift out of the shared
+// frontend/backend event contract.
+const _listenersMissingEventContract: AssertNever<
+  Exclude<ListenerChannels, keyof BroadcastEventMap & string>
+> = true
 
 void _missingFromMap
 void _extraInMap
+void _listenersMissingEventContract
 
 describe('CHANNEL_MAP runtime contract', () => {
   it('has valid entry kinds and channels', () => {

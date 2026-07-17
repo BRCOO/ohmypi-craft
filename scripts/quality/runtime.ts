@@ -13,7 +13,10 @@ import { join, resolve } from 'node:path'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import readline from 'node:readline'
 
-import { parseOmpPlanModeState } from '../../packages/shared/src/agent/backend/omp/omp-rpc-protocol.ts'
+import {
+  parseOmpCapabilityManifest,
+  parseOmpPlanModeState,
+} from '../../packages/shared/src/agent/backend/omp/omp-rpc-protocol.ts'
 import type { QualityStepResult } from './report'
 import { resolvePackagePaths } from './package'
 
@@ -33,7 +36,7 @@ interface RpcFrame {
   id?: string
   success?: boolean
   error?: string
-  data?: Record<string, unknown>
+  data?: unknown
 }
 
 function send(child: ChildProcessWithoutNullStreams, frame: Record<string, unknown>): Promise<void> {
@@ -49,6 +52,19 @@ function hasPlanModeCapability(data: Record<string, unknown> | undefined): boole
   const capabilities = data?.capabilities
   if (typeof capabilities !== 'object' || capabilities === null) return false
   return (capabilities as Record<string, unknown>).planMode === true
+}
+
+function isDebugToolList(value: unknown): value is Array<{ id: string; name: string; description: string; parameters: unknown[] }> {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.every((tool) => {
+      if (!tool || typeof tool !== 'object') return false
+      const candidate = tool as Record<string, unknown>
+      return typeof candidate.id === 'string'
+        && typeof candidate.name === 'string'
+        && typeof candidate.description === 'string'
+        && Array.isArray(candidate.parameters)
+    })
 }
 
 /**
@@ -226,6 +242,8 @@ export async function validateRuntimeCapability(
 
   return new Promise<QualityStepResult>((resolvePromise) => {
     let settled = false
+    let manifestRequested = false
+    let debugToolsRequested = false
     let stateRequested = false
     let planModeRequested = false
     let capabilities: string[] = []
@@ -269,12 +287,12 @@ export async function validateRuntimeCapability(
         return
       }
 
-      if (frame.type === 'ready' && !stateRequested) {
-        stateRequested = true
+      if (frame.type === 'ready' && !manifestRequested) {
+        manifestRequested = true
         try {
-          await send(child, { id: 'omp-state', type: 'get_state' })
+          await send(child, { id: 'omp-capabilities', type: 'get_capabilities' })
         } catch (error) {
-          resolvePromise(fail(`Failed to send get_state: ${error instanceof Error ? error.message : String(error)}`))
+          resolvePromise(fail(`Failed to send get_capabilities: ${error instanceof Error ? error.message : String(error)}`))
         }
         return
       }
@@ -286,13 +304,58 @@ export async function validateRuntimeCapability(
       }
 
       const data = frame.data ?? {}
+      const objectData = typeof data === 'object' && data !== null && !Array.isArray(data)
+        ? data as Record<string, unknown>
+        : {}
+
+      if (frame.id === 'omp-capabilities') {
+        const manifest = parseOmpCapabilityManifest(data)
+        if (!manifest) {
+          resolvePromise(fail('OMP get_capabilities returned an invalid capability manifest'))
+          return
+        }
+        if (!manifest.commands.includes('get_debug_tools') || !manifest.commands.includes('get_queue_state')) {
+          resolvePromise(fail('OMP capability manifest is missing required desktop RPC commands'))
+          return
+        }
+        if (!manifest.features['tools.debug']?.supported || !manifest.features['queue.dequeue']?.supported) {
+          resolvePromise(fail('OMP capability manifest does not enable required desktop features'))
+          return
+        }
+        capabilities = Object.entries(manifest.features)
+          .filter(([, feature]) => feature?.supported)
+          .map(([feature]) => feature)
+
+        debugToolsRequested = true
+        try {
+          await send(child, { id: 'omp-debug-tools', type: 'get_debug_tools' })
+        } catch (error) {
+          resolvePromise(fail(`Failed to send get_debug_tools: ${error instanceof Error ? error.message : String(error)}`))
+        }
+        return
+      }
+
+      if (frame.id === 'omp-debug-tools') {
+        if (!debugToolsRequested || !isDebugToolList(data) || !data.some((tool) => tool.id === 'runtime_state')) {
+          resolvePromise(fail('OMP get_debug_tools returned an invalid desktop debug-tool list'))
+          return
+        }
+
+        stateRequested = true
+        try {
+          await send(child, { id: 'omp-state', type: 'get_state' })
+        } catch (error) {
+          resolvePromise(fail(`Failed to send get_state: ${error instanceof Error ? error.message : String(error)}`))
+        }
+        return
+      }
 
       if (frame.id === 'omp-state') {
-        if (!hasPlanModeCapability(data)) {
+        if (!stateRequested || !hasPlanModeCapability(objectData)) {
           resolvePromise(fail('OMP runtime does not advertise capabilities.planMode'))
           return
         }
-        capabilities = ['planMode']
+        if (!capabilities.includes('planMode')) capabilities.push('planMode')
 
         if (!planModeRequested) {
           planModeRequested = true

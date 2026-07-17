@@ -58,6 +58,18 @@ describe('OmpAiDiagnosticsPanel helpers', () => {
     expect(tiles[2]?.count).toBe(0)
   })
 
+  it('prefers live OMP runtime counts over editable-directory entries', () => {
+    const tiles = buildOmpFeatureCountTiles({
+      ...sampleSnapshot(),
+      runtimeCounts: { skills: 44, mcp: 1, agents: 8 },
+    }, {
+      mcp: 'MCP',
+      skills: 'Skills',
+      agents: 'Agents',
+    })
+    expect(tiles.map(tile => tile.count)).toEqual([1, 44, 8])
+  })
+
   it('formats loading, error, and count statuses', () => {
     expect(featureCountStatusText({
       unavailable: true,

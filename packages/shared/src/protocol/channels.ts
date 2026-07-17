@@ -225,6 +225,7 @@ export const RPC_CHANNELS = {
     CLEAR_COMMAND_PATH: 'omp:clearCommandPath',
     GET_LOGIN_PROVIDERS: 'omp:getLoginProviders',
     LOGIN_PROVIDER: 'omp:loginProvider',
+    LOGOUT_PROVIDER: 'omp:logoutProvider',
     GET_DIAGNOSTICS_SUMMARY: 'omp:getDiagnosticsSummary',
     GET_FEATURE_CENTER_STATE: 'omp:getFeatureCenterState',
     OPEN_FEATURE_CENTER_PATH: 'omp:openFeatureCenterPath',
@@ -449,6 +450,9 @@ export const RPC_CHANNELS = {
     DISMISS_PENDING_SENDER: 'messaging:access:dismissPending',
     ALLOW_PENDING_SENDER: 'messaging:access:allowPending',
     SET_BINDING_ACCESS: 'messaging:access:setBindingAccess',
+  },
+  audio: {
+    TRANSCRIBE: 'audio:transcribe',
   },
 } as const
 

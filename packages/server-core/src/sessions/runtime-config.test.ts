@@ -88,4 +88,18 @@ describe('filterAttachmentsForModelInput', () => {
     expect(result.omittedImages).toEqual([imageAttachment])
     expect(result.attachments).toBeUndefined()
   })
+
+  it('filters images for a standard Pi model with explicit text-only metadata', () => {
+    const result = filterAttachmentsForModelInput(
+      [imageAttachment],
+      {
+        slug: 'pi', name: 'Pi', providerType: 'pi', authType: 'api_key', createdAt: 1,
+        models: [{ id: 'text-only', supportsImages: false } as never],
+      },
+      'text-only',
+    )
+
+    expect(result.omittedImages).toEqual([imageAttachment])
+    expect(result.attachments).toBeUndefined()
+  })
 })

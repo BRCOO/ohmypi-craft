@@ -10,13 +10,16 @@ import {
   Building2,
   Cpu,
   Keyboard,
+  ShoppingBag,
   MessageSquare,
   Palette,
+  Puzzle,
   Server,
   ShieldCheck,
   Sparkles,
   Tag,
   ToggleRight,
+  Settings2,
   UserCircle,
 } from 'lucide-react'
 import type { SettingsSubpage } from '../../../shared/types'
@@ -35,6 +38,9 @@ export const MessagingSettingsIcon = ({ className }: IconProps) => <MessageSquar
 export const ServerSettingsIcon = ({ className }: IconProps) => <Server className={className} />
 export const ShortcutsIcon = ({ className }: IconProps) => <Keyboard className={className} />
 export const PreferencesIcon = ({ className }: IconProps) => <UserCircle className={className} />
+export const ExtensionsIcon = ({ className }: IconProps) => <Puzzle className={className} />
+export const OmpAdvancedSettingsIcon = ({ className }: IconProps) => <Settings2 className={className} />
+export const MarketplaceIcon = ({ className }: IconProps) => <ShoppingBag className={className} />
 
 /**
  * Map of settings subpage IDs to their icon components.
@@ -44,6 +50,7 @@ export const SETTINGS_ICONS: Record<SettingsSubpage, React.ComponentType<IconPro
   app: AppSettingsIcon,
   ai: AiSettingsIcon,
   omp: OmpSettingsIcon,
+  'omp-advanced': OmpAdvancedSettingsIcon,
   appearance: AppearanceIcon,
   input: InputIcon,
   workspace: WorkspaceIcon,
@@ -51,6 +58,8 @@ export const SETTINGS_ICONS: Record<SettingsSubpage, React.ComponentType<IconPro
   labels: LabelsIcon,
   messaging: MessagingSettingsIcon,
   server: ServerSettingsIcon,
+  marketplace: MarketplaceIcon,
   shortcuts: ShortcutsIcon,
   preferences: PreferencesIcon,
+  extensions: ExtensionsIcon,
 }

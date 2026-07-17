@@ -42,6 +42,8 @@ export interface OmpAuthProbeOptions {
   timeoutMs?: number;
   /** When set, the probe also starts a login flow for this provider. */
   loginProviderId?: string;
+  /** When set, the probe logs out this provider and returns the updated provider list. */
+  logoutProviderId?: string;
   /** Called when OMP requests the host to open a URL during login. */
   onOpenUrl?: (payload: { url?: string; launchUrl?: string; instructions?: string }) => void;
 }
@@ -94,9 +96,12 @@ export async function probeOmpAuth(
   let settled = false;
   let requestedProviders = false;
   let sentLogin = false;
+  let sentLogout = false;
   let loginFinished = false;
+  let logoutFinished = false;
   let providersData: Record<string, unknown> | null = null;
   let loginResultData: unknown = null;
+  let logoutResultData: unknown = null;
   let openUrlPayload: { url?: string; launchUrl?: string; instructions?: string } | null = null;
 
   return new Promise<OmpAuthProbeResult>((resolve) => {
@@ -167,6 +172,14 @@ export async function probeOmpAuth(
         return;
       }
 
+      if (options.logoutProviderId) {
+        if (!sentLogout) {
+          sentLogout = true;
+          send({ id: 'omp-logout', type: 'logout', providerId: options.logoutProviderId });
+        }
+        return;
+      }
+
       if (provider.authenticated) {
         finish({
           success: true,
@@ -190,6 +203,16 @@ export async function probeOmpAuth(
         sentLogin = true;
         send({ id: 'omp-login', type: 'login', providerId: options.loginProviderId });
       }
+    };
+
+    const succeedWithLogout = () => {
+      const data = logoutResultData as Record<string, unknown> | undefined;
+      const providerId = typeof data?.providerId === 'string' ? data.providerId : options.logoutProviderId;
+      finish({
+        success: true,
+        providers: providersData ? parseOmpLoginProvidersResponseData(providersData)?.providers : undefined,
+        message: providerId ? `Logged out of ${providerId}.` : 'Logout completed.',
+      });
     };
 
     const succeedWithLogin = () => {
@@ -286,6 +309,13 @@ export async function probeOmpAuth(
           ? frame.data as Record<string, unknown>
           : {};
         succeedWithProviders();
+        return;
+      }
+
+      if (frame.id === 'omp-logout') {
+        logoutFinished = true;
+        logoutResultData = frame.data;
+        succeedWithLogout();
         return;
       }
 

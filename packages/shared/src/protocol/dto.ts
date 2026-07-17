@@ -22,6 +22,19 @@ import type { ThinkingLevel } from '../agent/thinking-levels'
 import type { CustomEndpointConfig } from '../config/llm-connections'
 import type { OmpSessionLink } from '../sessions/types'
 import type {
+  OmpAgentCreateSpec,
+  OmpAgentDefinitionState,
+  OmpAgentPatch,
+  OmpTangentialAgentOptions,
+  OmpCollabState,
+  OmpCollabParticipant,
+  OmpSessionTreeState,
+  OmpSessionTreeNode,
+  OmpModelState,
+  OmpDebugToolDefinition,
+  OmpDebugResult,
+} from '../agent/backend/omp/omp-rpc-protocol.ts'
+import type {
   AuthRequest as SharedAuthRequest,
   CredentialInputMode as SharedCredentialInputMode,
   CredentialAuthRequest as SharedCredentialAuthRequest,
@@ -154,6 +167,8 @@ export interface OmpControlStateDto {
   queue: OmpQueueControlStateDto
   runtime: OmpRuntimeStateDto
   plan: OmpPlanControlStateDto
+  goal: OmpGoalControlStateDto
+  loop: OmpLoopControlStateDto
   updatedAt: number
 }
 
@@ -166,6 +181,41 @@ export interface OmpPlanControlStateDto {
     phase: OmpPlanModePhaseDto
     planFilePath?: string
     planModel?: string
+  }
+  updatedAt: number
+  error?: string
+}
+
+export type OmpGoalStatusDto = 'active' | 'paused' | 'budget-limited' | 'complete' | 'dropped'
+
+export interface OmpGoalControlStateDto {
+  supported: boolean
+  state: {
+    enabled: boolean
+    paused: boolean
+    goal?: {
+      id: string
+      objective: string
+      status: OmpGoalStatusDto
+      tokenBudget?: number
+      tokensUsed: number
+      timeUsedSeconds: number
+      createdAt: number
+      updatedAt: number
+    }
+  }
+  updatedAt: number
+  error?: string
+}
+
+export interface OmpLoopControlStateDto {
+  supported: boolean
+  state: {
+    enabled: boolean
+    prompt?: string
+    limit?: string
+    remaining?: number
+    status: 'disabled' | 'waiting_for_prompt' | 'running'
   }
   updatedAt: number
   error?: string
@@ -370,6 +420,8 @@ export interface Session {
   ompTodoState?: OmpTodoStateDto
   /** Runtime-only OMP subagent state. Not persisted in Craft JSONL. */
   ompSubagentState?: OmpSubagentStateDto
+  /** Runtime-only OMP model state (temporary model override). Not persisted in Craft JSONL. */
+  ompModelState?: OmpModelState
   /** Persisted OMP-native session identity for provider transcript continuity. */
   ompSessionLink?: OmpSessionLink
 }
@@ -475,6 +527,7 @@ export type SessionEvent =
   | { type: 'session_unarchived'; sessionId: string }
   | { type: 'name_changed'; sessionId: string; name?: string }
   | { type: 'session_model_changed'; sessionId: string; model: string | null }
+  | { type: 'session_thinking_level_changed'; sessionId: string; thinkingLevel: ThinkingLevel }
   | { type: 'session_status_changed'; sessionId: string; sessionStatus: SessionStatus }
   | { type: 'session_deleted'; sessionId: string }
   | { type: 'session_created'; sessionId: string }
@@ -483,6 +536,11 @@ export type SessionEvent =
   | { type: 'auth_request'; sessionId: string; message: Message; request: SharedAuthRequest }
   | { type: 'auth_completed'; sessionId: string; requestId: string; success: boolean; cancelled?: boolean; error?: string }
   | { type: 'source_activated'; sessionId: string; sourceSlug: string; originalMessage: string }
+  // P1: Collab events
+  | { type: 'collab_state_update'; sessionId: string; state: OmpCollabState }
+  | { type: 'collab_participant_joined'; sessionId: string; participant: OmpCollabParticipant }
+  | { type: 'collab_participant_left'; sessionId: string; participantId: string }
+  | { type: 'collab_connection_update'; sessionId: string; connection: string; error?: string }
   | { type: 'usage_update'; sessionId: string; tokenUsage: { inputTokens: number; contextWindow?: number } }
   | { type: 'message_annotations_updated'; sessionId: string; messageId: string; annotations: AnnotationV1[] }
   | { type: 'working_directory_error'; sessionId: string; error: string }
@@ -515,6 +573,13 @@ export type SessionCommand =
   | { type: 'setOmpFollowUpMode'; mode: OmpQueueMode }
   | { type: 'setOmpInterruptMode'; mode: OmpInterruptMode }
   | { type: 'setOmpPlanMode'; enabled: boolean }
+  | { type: 'setOmpGoal'; objective: string; tokenBudget?: number; replace?: boolean }
+  | { type: 'setOmpGoalBudget'; tokenBudget?: number }
+  | { type: 'pauseOmpGoal' }
+  | { type: 'resumeOmpGoal' }
+  | { type: 'dropOmpGoal' }
+  | { type: 'guidedGoalTurn'; messages: Array<{ role: 'user' | 'assistant'; content: string }> }
+  | { type: 'setOmpLoop'; enabled: boolean; prompt?: string; limit?: string }
   | { type: 'refreshOmpRuntime' }
   | { type: 'compactOmpRuntime' }
   | { type: 'setOmpAutoCompaction'; enabled: boolean }
@@ -541,6 +606,70 @@ export type SessionCommand =
   | { type: 'exportOmpSessionHtml'; outputPath?: string }
   | { type: 'getOmpLoginProviders' }
   | { type: 'loginOmpProvider'; providerId: string }
+  | { type: 'logoutOmpProvider'; providerId: string }
+  | { type: 'getOmpCapabilities' }
+  // P1: MCP OAuth / Smithery
+  | { type: 'getMcpState' }
+  | { type: 'mcpReauth'; serverName: string }
+  | { type: 'mcpUnauth'; serverName: string }
+  | { type: 'mcpReconnect'; serverName: string }
+  | { type: 'getMcpNotifications' }
+  | { type: 'setMcpNotifications'; enabled: boolean }
+  | { type: 'smitheryLogin' }
+  | { type: 'smitheryLogout' }
+  // P1: Collab
+  | { type: 'getCollabState' }
+  | { type: 'startCollab'; readOnly?: boolean }
+  | { type: 'joinCollab'; invite: string; readOnly?: boolean }
+  | { type: 'leaveCollab' }
+  | { type: 'stopCollab' }
+  | { type: 'setCollabPresence'; displayName?: string; status?: string }
+  // P2: Session tree / extensions / marketplace / agents
+  | { type: 'getSessionTree' }
+  | { type: 'forkSession'; entryId: string; name?: string }
+  | { type: 'switchSession'; ompSessionPath: string }
+  | { type: 'getExtensions' }
+  | { type: 'setExtensionEnabled'; id: string; enabled: boolean }
+  | { type: 'reloadExtensions' }
+  | { type: 'uninstallExtension'; id: string }
+  | { type: 'searchMarketplace'; query: string; page?: number }
+  | { type: 'getMarketplaceItem'; id: string }
+  | { type: 'installMarketplaceItem'; id: string; version?: string }
+  | { type: 'updateMarketplaceItem'; id: string; version?: string }
+  | { type: 'uninstallMarketplaceItem'; id: string }
+  | { type: 'getAgentDefinitions' }
+  | { type: 'setAgentEnabled'; id: string; enabled: boolean }
+  | { type: 'setAgentModelOverride'; id: string; model?: string }
+  | { type: 'createAgent'; spec: OmpAgentCreateSpec }
+  | { type: 'updateAgent'; id: string; patch: OmpAgentPatch }
+  | { type: 'reloadAgents' }
+  // P3: BTW / TAN / OMFG / Debug / STT
+  | { type: 'askSideQuestion'; message: string }
+  | { type: 'startTangentialAgent'; task: string; options?: OmpTangentialAgentOptions }
+  | { type: 'getTangentialAgents' }
+  | { type: 'cancelTangentialAgent'; id: string }
+  | { type: 'proposeTtsrRule'; description: string }
+  | { type: 'confirmTtsrRule'; ruleId: string }
+  | { type: 'listTtsrRules' }
+  | { type: 'deleteTtsrRule'; ruleId: string }
+  | { type: 'getDebugTools' }
+  | { type: 'runDebugTool'; toolId: string; args?: Record<string, unknown> }
+  | { type: 'transcribeAudio'; audioData: string; mimeType: string; maxDurationSeconds?: number }
+  // P4: Retry / queue / temporary model / settings
+  | { type: 'retryLastTurn' }
+  | { type: 'getRetryState' }
+  | { type: 'getQueueState' }
+  | { type: 'dequeueMessage'; messageId: string }
+  | { type: 'reorderQueue'; messageIds: string[] }
+  | { type: 'setTemporaryModel'; provider: string; modelId: string }
+  | { type: 'clearTemporaryModel' }
+  | { type: 'getSettingsSchema' }
+  // P4: Prompt history
+  | { type: 'getPromptHistory' }
+  | { type: 'setPromptHistory'; prompts: string[]; enabled: boolean }
+  | { type: 'getSettings'; scope?: 'global' | 'project' | 'effective' }
+  | { type: 'setSettings'; scope: 'global' | 'project'; patch: Record<string, unknown>; expectedRevision?: number }
+  | { type: 'openExternalEditor'; draft: string }
   | { type: 'setConnection'; connectionSlug: string }
   | { type: 'setPendingPlanExecution'; planPath: string; draftInputSnapshot?: string }
   | { type: 'markCompactionComplete' }
@@ -736,6 +865,22 @@ export interface SetOmpCommandPathResult {
   error?: string
 }
 
+export interface OmpRuntimeResourceItemDto {
+  name: string
+  description?: string
+  path?: string
+  source?: 'bundled' | 'user' | 'project' | 'native' | 'runtime'
+  provider?: string
+  status?: 'connected' | 'connecting' | 'disconnected'
+  toolCount?: number
+}
+
+export interface OmpRuntimeResourcesDto {
+  skills: OmpRuntimeResourceItemDto[]
+  mcp: OmpRuntimeResourceItemDto[]
+  agents: OmpRuntimeResourceItemDto[]
+}
+
 export interface OmpDiagnosticsSummary {
   runtime: OmpRuntimeStatus
   providers?: {
@@ -747,6 +892,8 @@ export interface OmpDiagnosticsSummary {
   agentDir?: string
   configFileExists?: boolean
   authDirExists?: boolean
+  runtimeResources?: OmpRuntimeResourcesDto
+  runtimeResourcesError?: string
   versionCompatibility?: {
     ompVersion?: string
     compatible: boolean
@@ -759,7 +906,7 @@ export interface OmpDiagnosticsSummary {
 // ---------------------------------------------------------------------------
 
 export type OmpFeatureValueSource = 'default' | 'global' | 'project'
-export type OmpFeaturePathLevel = 'user' | 'project'
+export type OmpFeaturePathLevel = 'bundled' | 'user' | 'project'
 
 export interface OmpFeatureConfigPathDto {
   path: string
@@ -834,9 +981,13 @@ export interface OmpFeatureAdvisorDto {
 
 export interface OmpFeatureCapabilityItemDto {
   name: string
-  path: string
+  path?: string
   level: OmpFeaturePathLevel
   description?: string
+  provider?: string
+  status?: 'connected' | 'connecting' | 'disconnected'
+  toolCount?: number
+  runtimeLoaded?: boolean
 }
 
 export interface OmpFeatureCapabilityDto {
@@ -1025,6 +1176,28 @@ export interface OmpExportHtmlResult {
   error?: string
 }
 
+export interface OmpSessionTreeResult {
+  success: boolean
+  tree?: OmpSessionTreeState
+  error?: string
+}
+
+export interface OmpSessionForkResult {
+  success: boolean
+  /** The new OMP session identifier for the forked session. */
+  ompSessionId?: string
+  /** The Craft session that was created from the fork. */
+  craftSessionId?: string
+  error?: string
+}
+
+export interface OmpSessionSwitchResult {
+  success: boolean
+  /** The Craft session ID that was navigated to after the switch. */
+  craftSessionId?: string
+  error?: string
+}
+
 export interface OmpTodoMarkdownExportResult {
   success: boolean
   markdown?: string
@@ -1062,9 +1235,14 @@ export type SessionCommandResult =
   | OmpBranchSessionResult
   | OmpHandoffSessionResult
   | OmpExportHtmlResult
+  | OmpSessionTreeResult
+  | OmpSessionForkResult
   | OmpTodoMarkdownExportResult
   | OmpLoginProvidersResult
   | OmpLoginSessionResult
+  | OmpDebugToolDefinition[]
+  | OmpDebugResult
+
 
 // ---------------------------------------------------------------------------
 // Plan types
@@ -1234,9 +1412,13 @@ export interface OmpResourceEntry {
   scope: OmpResourceScope
   enabled: boolean
   effectiveEnabled: boolean
-  path: string
+  path?: string
   description?: string
+  provider?: string
+  status?: 'connected' | 'connecting' | 'disconnected'
   toolCount?: number
+  /** Runtime-discovered entries may be inspected but are not editable here. */
+  readOnly?: boolean
   diagnostics: OmpResourceDiagnostic[]
   revision: string
   lastRefreshedAt: number
@@ -1248,10 +1430,20 @@ export interface OmpResourceCategory {
   error?: string
 }
 
+/** Counts reported by OMP's live discovery providers, including runtime-only resources. */
+export interface OmpResourceRuntimeCounts {
+  skills: number
+  mcp: number
+  agents: number
+}
+
 export interface OmpResourceSnapshot {
   mcp: OmpResourceCategory
   skills: OmpResourceCategory
   agents: OmpResourceCategory
+  /** Present when the OMP RPC runtime exposed its live resource inventory. */
+  runtimeCounts?: OmpResourceRuntimeCounts
+  runtimeResourcesError?: string
   diagnostics: OmpResourceDiagnostic[]
   refreshedAt: number
 }
@@ -1312,3 +1504,55 @@ export interface OmpResourceTestMcpInput {
   id: string
   scope: OmpResourceScope
 }
+
+// Re-export OMP capability types for renderer/server parity
+export type {
+  OmpModelState,
+  OmpModelSelectionSource,
+  OmpCapabilityManifest,
+  OmpSmitheryState,
+  OmpSmitheryAuthStatus,
+  OmpFeatureId,
+  OmpCapabilityFeatureInfo,
+  OmpCollabState,
+  OmpCollabParticipant,
+  OmpSessionTreeState,
+  OmpSessionTreeNode,
+  OmpDebugToolDefinition,
+  OmpDebugToolParameter,
+  OmpDebugResult,
+} from '../agent/backend/omp/omp-rpc-protocol.ts'
+export { parseOmpCapabilityManifest } from '../agent/backend/omp/omp-rpc-protocol.ts'
+// Re-export OMP extension types
+export type {
+  OmpExtensionState,
+  OmpExtensionCapability,
+  OmpExtensionSource,
+  OmpExtensionStatus,
+} from '../agent/backend/omp/omp-rpc-protocol.ts'
+// Re-export OMP agent types
+export type {
+  OmpAgentDefinitionState,
+  OmpAgentCreateSpec,
+  OmpAgentPatch,
+  OmpAgentSource,
+} from '../agent/backend/omp/omp-rpc-protocol.ts'
+export { parseOmpAgentDefinitionState } from '../agent/backend/omp/omp-rpc-protocol.ts'
+
+
+// Re-export OMP settings types
+export type {
+  OmpSettingsSchema,
+  OmpSettingsSchemaEntry,
+  OmpSettingsState,
+  OmpSettingsSetResult,
+  OmpSettingsScope,
+  OmpSettingsValueType,
+  OmpSettingsAppliesTo,
+} from '../agent/backend/omp/omp-rpc-protocol.ts'
+
+// Re-export OMP marketplace types
+export type {
+  OmpMarketplaceItem,
+  OmpMarketplaceSearchResult,
+} from '../agent/backend/omp/omp-rpc-protocol.ts'

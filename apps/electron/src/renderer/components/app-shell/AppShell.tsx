@@ -571,6 +571,11 @@ function AppShellContent({
       if (!latestVersion) return
       const lastSeen = storage.get(storage.KEYS.whatsNewLastSeenVersion, '')
       setHasUnseenReleaseNotes(lastSeen !== latestVersion)
+    }).catch((error) => {
+      // Release notes are optional metadata; a temporary RPC failure must not
+      // create an unhandled rejection or prevent the rest of the shell from
+      // loading.
+      console.warn('[AppShell] Failed to check release notes version:', error)
     })
   }, [])
 
@@ -1672,10 +1677,20 @@ function AppShellContent({
 
   // DnD handler: reorder statuses (flat list drag-and-drop)
   // Sets optimistic order immediately for instant UI feedback, then fires IPC.
-  const handleStatusReorder = useCallback((orderedIds: string[]) => {
+  const handleStatusReorder = useCallback(async (orderedIds: string[]) => {
     if (!activeWorkspaceId) return
+
+    // Keep the optimistic order only while the server accepts the write.  The
+    // previous implementation fired-and-forgot the RPC, so a rejected write
+    // left the sidebar displaying an order that did not exist in the backend
+    // until a full reload.
     setOptimisticStatusOrder(orderedIds)
-    window.electronAPI.reorderStatuses(activeWorkspaceId, orderedIds)
+    try {
+      await window.electronAPI.reorderStatuses(activeWorkspaceId, orderedIds)
+    } catch (error) {
+      setOptimisticStatusOrder(null)
+      console.error('[AppShell] Failed to persist status order:', error)
+    }
   }, [activeWorkspaceId])
 
   // Handler for sources view (all sources)
@@ -1726,16 +1741,23 @@ function AppShellContent({
 
   // Handler for What's New overlay
   const handleWhatsNewClick = useCallback(async () => {
-    const content = await window.electronAPI.getReleaseNotes()
-    setReleaseNotesContent(content)
-    setShowWhatsNew(true)
-    setHasUnseenReleaseNotes(false)
-    // Update last seen version
-    const latestVersion = await window.electronAPI.getLatestReleaseVersion()
-    if (latestVersion) {
-      storage.set(storage.KEYS.whatsNewLastSeenVersion, latestVersion)
+    try {
+      const content = await window.electronAPI.getReleaseNotes()
+      setReleaseNotesContent(content)
+      setShowWhatsNew(true)
+      setHasUnseenReleaseNotes(false)
+      // Update last seen version only after the content has loaded successfully.
+      const latestVersion = await window.electronAPI.getLatestReleaseVersion()
+      if (latestVersion) {
+        storage.set(storage.KEYS.whatsNewLastSeenVersion, latestVersion)
+      }
+    } catch (error) {
+      console.error('[AppShell] Failed to load release notes:', error)
+      toast.error(t('toast.unknownError'), {
+        description: error instanceof Error ? error.message : undefined,
+      })
     }
-  }, [])
+  }, [t])
 
   // ============================================================================
   // EDIT POPOVER STATE

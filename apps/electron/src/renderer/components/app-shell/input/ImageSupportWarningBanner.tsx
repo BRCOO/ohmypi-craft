@@ -6,17 +6,14 @@ export interface ImageSupportWarningBannerProps {
   /** Display name of the active model — interpolated into the message. */
   modelName: string
   /** Click-handler for the inline "Enable image support" action. */
-  onEnable: () => void
+  onEnable?: () => void
 }
 
 /**
  * Pre-flight banner shown above the chat input when the user has staged image
- * attachments while the active custom-endpoint model is configured as text-only.
- *
- * Rendering conditions live in the parent (`FreeFormInput`); this component just
- * draws the warning and the inline action. The action calls the same
- * `setModelSupportsImages` flow used by the model picker's per-row toggle, so the
- * two surfaces always agree on the connection's state.
+ * attachments while the active model is explicitly configured as text-only.
+ * Standard provider catalogs render the warning without an action; custom
+ * endpoints may provide the inline opt-in handler.
  */
 export function ImageSupportWarningBanner({
   modelName,
@@ -29,13 +26,15 @@ export function ImageSupportWarningBanner({
       <span className="flex-1 min-w-0">
         {t('chat.imageWarning.title', { modelName })}
       </span>
-      <button
-        type="button"
-        onClick={onEnable}
-        className="shrink-0 underline underline-offset-2 hover:text-foreground"
-      >
-        {t('chat.imageWarning.action')}
-      </button>
+      {onEnable && (
+        <button
+          type="button"
+          onClick={onEnable}
+          className="shrink-0 underline underline-offset-2 hover:text-foreground"
+        >
+          {t('chat.imageWarning.action')}
+        </button>
+      )}
     </div>
   )
 }

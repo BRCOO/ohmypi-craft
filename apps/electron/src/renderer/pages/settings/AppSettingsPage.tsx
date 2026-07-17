@@ -14,6 +14,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
@@ -150,19 +151,43 @@ export default function AppSettingsPage() {
   }, [])
 
   const handleNotificationsEnabledChange = useCallback(async (enabled: boolean) => {
+    const previous = notificationsEnabled
     setNotificationsEnabled(enabled)
-    await window.electronAPI.setNotificationsEnabled(enabled)
-  }, [])
+    try {
+      await window.electronAPI.setNotificationsEnabled(enabled)
+    } catch (error) {
+      setNotificationsEnabled(previous)
+      toast.error(t('toast.failedToSaveSetting', { setting: t('settings.notifications.title') }), {
+        description: error instanceof Error ? error.message : undefined,
+      })
+    }
+  }, [notificationsEnabled, t])
 
   const handleKeepAwakeEnabledChange = useCallback(async (enabled: boolean) => {
+    const previous = keepAwakeEnabled
     setKeepAwakeEnabled(enabled)
-    await window.electronAPI.setKeepAwakeWhileRunning(enabled)
-  }, [])
+    try {
+      await window.electronAPI.setKeepAwakeWhileRunning(enabled)
+    } catch (error) {
+      setKeepAwakeEnabled(previous)
+      toast.error(t('toast.failedToSaveSetting', { setting: t('settings.power.keepScreenAwake') }), {
+        description: error instanceof Error ? error.message : undefined,
+      })
+    }
+  }, [keepAwakeEnabled, t])
 
   const handleBrowserToolEnabledChange = useCallback(async (enabled: boolean) => {
+    const previous = browserToolEnabled
     setBrowserToolEnabled(enabled)
-    await window.electronAPI.setBrowserToolEnabled(enabled)
-  }, [])
+    try {
+      await window.electronAPI.setBrowserToolEnabled(enabled)
+    } catch (error) {
+      setBrowserToolEnabled(previous)
+      toast.error(t('toast.failedToSaveSetting', { setting: t('settings.tools.builtInBrowser') }), {
+        description: error instanceof Error ? error.message : undefined,
+      })
+    }
+  }, [browserToolEnabled, t])
 
   // Proxy handlers
   const isProxyDirty = useMemo(() => {

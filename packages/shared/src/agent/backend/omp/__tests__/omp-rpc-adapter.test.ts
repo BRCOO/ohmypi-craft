@@ -356,6 +356,35 @@ describe('OmpRpcEventAdapter', () => {
     });
   });
 
+  describe('native goal and loop control frames', () => {
+    it('renders negotiated goal and loop lifecycle updates', () => {
+      const adapter = new OmpRpcEventAdapter();
+      const goal = adapter.adaptFrame({
+        type: 'goal_mode_state_update',
+        state: {
+          enabled: true,
+          paused: false,
+          goal: {
+            id: 'goal-1',
+            objective: 'Ship RPC parity',
+            status: 'active',
+            tokensUsed: 0,
+            timeUsedSeconds: 0,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        },
+      });
+      expect(goal.events[0]).toMatchObject({ type: 'status', message: expect.stringContaining('Ship RPC parity') });
+
+      const loop = adapter.adaptFrame({
+        type: 'loop_mode_state_update',
+        state: { enabled: true, prompt: 'check again', remaining: 2, status: 'running' },
+      });
+      expect(loop.events[0]).toMatchObject({ type: 'status', message: 'OMP Loop active (2 remaining)' });
+    });
+  });
+
   describe('IRC frames', () => {
     it('renders irc_message custom content instead of treating it as unknown', () => {
       const adapter = new OmpRpcEventAdapter();
