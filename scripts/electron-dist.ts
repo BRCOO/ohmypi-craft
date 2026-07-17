@@ -89,6 +89,10 @@ function builderArgs(
   options: { dev: boolean; arch: Arch; unsignedMac?: boolean; winTarget?: WindowsTarget },
 ): string[] {
   const args = ['--config', 'electron-builder.yml']
+  // Publishing is handled once by the workflow's github-release job after all
+  // platform artifacts are assembled. Without this override, electron-builder
+  // sees a v* tag and each matrix job attempts to create the same Release.
+  args.push('--publish=never')
   if (platform !== 'current') {
     args.push(`--${platform}`)
   }
